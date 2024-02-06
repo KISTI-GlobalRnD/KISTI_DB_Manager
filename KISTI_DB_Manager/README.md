@@ -1,11 +1,12 @@
 # Summary
 
 Made by Young Jin Kim (kimyoungjin06@gmail.com)
-Birth: 2023.12.14
-Last Update: 2023.01.17, YJ Kim
+Birth: 2023.02.05
+Last Update: 2024.02.05, YJ Kim
 
-Disambiguate Organizations (or Companies, etc) and Authors.
-Start by analyzing the bibliography or patent.
+MariaDB/MySQL Handling for All type DB
+To preprocess, import, export and manage the DB
+
 
 # Introduction
 
