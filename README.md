@@ -1,10 +1,10 @@
 # Summary
 
 Made by Young Jin Kim (kimyoungjin06@gmail.com)
-Birth: 2023.02.05
-Last Update: 2024.02.06, YJ Kim
+- Birth: 2023.02.05
+- Last Update: 2024.02.06, YJ Kim
 
-MariaDB/MySQL Handling for All type DB
+MariaDB/MySQL Handling for All type DB.
 To preprocess, import, export and manage the DB
 
 ---
