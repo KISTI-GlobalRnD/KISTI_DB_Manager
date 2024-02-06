@@ -159,7 +159,7 @@ def get_MariaDB_Type(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100):
     return _res
 
 
-def get_Table_Description(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100, unique_ratio_th=.5, freq_ratio_th=1e-3):
+def get_Field_Description(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100, unique_ratio_th=.5, freq_ratio_th=1e-3):
     """
 
     Returns
@@ -222,3 +222,29 @@ def key_selection(_res, unique_ratio_th, freq_ratio_th):
     _msk3 = _res['freq'] < freq_ratio_th
     _msk = _msk1 & _msk2 & _msk3
     return _msk
+
+
+def update_data_config(f, data_config):
+    data_config['file_name'] = f
+    data_config['table_name'] = f[:-4]
+    return data_config
+
+
+def get_Table_Description(data_config, params):
+    PATH, f, SEP = data_config['PATH'], data_config['file_name'], data_config['SEP']
+    df = read_data_from_tabular(data_config)
+    df_desc = pd.DataFrame([])
+    for i, col in enumerate(df.columns):
+        _series = df[col]
+        res = get_Field_Description(_series, **params)
+        df_desc[col] = res
+    df_desc.T.to_csv(f"{PATH}Desc_{data_config['table_name']}.csv")
+    print(f"Generate the Description file for table `{data_config['table_name']}`")
+    return df_desc.T
+
+
+def read_data_from_tabular(data_config):
+    """Read the tabular Data File"""
+    PATH, f, SEP = data_config['PATH'], data_config['file_name'], data_config['SEP']
+    df = pd.read_csv(f'{PATH}{f}', sep=SEP)
+    return df
