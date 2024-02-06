@@ -1,8 +1,8 @@
 # Summary
 
 Made by Young Jin Kim (kimyoungjin06@gmail.com)
-Birth: 2023.02.06
-Last Update: 2024.02.05, YJ Kim
+Birth: 2023.02.05
+Last Update: 2024.02.06, YJ Kim
 
 MariaDB/MySQL Handling for All type DB
 To preprocess, import, export and manage the DB
@@ -88,7 +88,3 @@ We welcome contributions to `KISTI_DB_Manager`! Please read through our contribu
 ## Support
 
 For support, questions, or more information about `KISTI_DB_Manager`, please contact us at [contact_information].
-
----
-
-Remember to replace placeholders (like `[contact_information]`, `your_username`, `your_password`, etc.) with your actual information. This `README.md` provides a foundational structure that you can expand upon based on the specific functionalities and capabilities of your package.
