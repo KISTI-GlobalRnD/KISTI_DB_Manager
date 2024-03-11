@@ -2,7 +2,7 @@
 
 Made by Young Jin Kim (kimyoungjin06@gmail.com)
 - Birth: 2023.02.05
-- Last Update: 2024.02.06, YJ Kim
+- Last Update: 2024.03.11, YJ Kim
 
 MariaDB/MySQL Handling for All type DB.
 To preprocess, import, export and manage the DB
@@ -51,7 +51,8 @@ Here's how to get started with `KISTI_DB_Manager`:
        'SEP': '\t',
        'file_name': 'your_file_name.txt',
        'table_name': 'your_table_name',
-       'out_path': 'path_for_sql_output/'
+       'out_path': 'path_for_sql_output/',
+       'Conv_DATETIME': False,
    }
    ```
 
@@ -71,6 +72,8 @@ Here's how to get started with `KISTI_DB_Manager`:
        data_config = preview.update_data_config(f, data_config)
        manage.create_table(data_config, db_config)
        manage.fill_table_from_file(data_config, db_config)
+       manage.set_index(db_config, data_config)
+       manage.optimize_table(db_config, data_config)
    ```
 
 ## Advanced Usage
@@ -87,4 +90,4 @@ We welcome contributions to `KISTI_DB_Manager`! Please read through our contribu
 
 ## Support
 
-For support, questions, or more information about `KISTI_DB_Manager`, please contact us at [contact_information].
+For support, questions, or more information about `KISTI_DB_Manager`, please contact us at [kimyoungjin06@kisti.re.kr].
