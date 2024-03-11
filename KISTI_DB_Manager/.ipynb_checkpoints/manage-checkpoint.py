@@ -32,6 +32,7 @@ fill_table_from_file(f, table_name, db_config)
 import pymysql
 from pymysql.err import ProgrammingError
 import pandas as pd
+from . import preview
 
 def is_Null(_type, _null_ratio):
     """Return about Null part for SQL query """
@@ -85,13 +86,31 @@ def create_table(data_config, db_config):
         #     cursor.close()
         #     conn.close()
 
+def convert_datetime(df, data_config, FORMAT='%Y-%m-%d %H:%M:%S'):
+    # read df_desc
+    df_desc = read_Description(data_config)
+    # FORMAT = '%Y-%m-%d %H:%M:%S'
+    msk = df_desc.Type == 'DATETIME'
+    cols = df_desc[msk].index
+    for col in cols:
+        # 날짜 포맷을 MySQL이 인식할 수 있는 형식으로 변환
+        df[col] = pd.to_datetime(df[col]).dt.strftime(FORMAT)
+    return df
 
-def fill_table_from_file(data_config, db_config):
+def fill_table_from_file(data_config, db_config, sep='__'):
     from sqlalchemy import create_engine
+    PATH, f, table_name, TYPE = data_config['PATH'], data_config['file_name'], data_config['table_name'], data_config['file_type']
+    Conv_DATETIME = data_config['Conv_DATETIME']
     
-    PATH, f, table_name, SEP = data_config['PATH'], data_config['file_name'], data_config['table_name'], data_config['SEP']
     # Read the file into a DataFrame
-    df = pd.read_csv(f'{PATH}{f}', sep=SEP)
+    df = preview.read_data_from_tabular(data_config)
+    
+    # dot to underscore
+    df.columns = [x.replace('.', sep) for x in df.columns]
+    
+    # DateTime Convert
+    if Conv_DATETIME:
+        df = convert_datetime(df, data_config)
 
     # Create a SQLAlchemy engine for the database connection
     db_url = f"mysql+pymysql://{db_config['user']}:{db_config['password']}@{db_config['host']}/{db_config['database']}"
@@ -152,14 +171,16 @@ def drop_DB(database_name, db_config):
         # Execute the DROP DATABASE SQL statement
         cursor.execute(f"DROP DATABASE IF EXISTS `{database_name}`;")
         print(f"Database `{database_name}` dropped successfully.")
+        cursor.close()
+        conn.close()
 
     except pymysql.Error as e:
         print(f"Failed to drop database `{database_name}`. Error: {e}")
-    finally:
-        # Ensure the connection is closed
-        if conn:
-            cursor.close()
-            conn.close()
+    # finally:
+    #     # Ensure the connection is closed
+    #     if conn:
+    #         cursor.close()
+    #         conn.close()
 
 
 def create_DB(DB_name, CHARACTER_SET, COLLATE, db_config):
@@ -234,10 +255,10 @@ def set_index(db_config, data_config):
                 _sql = f'CREATE INDEX `IDX_{table_name.upper()}_{col.upper()}` ON `{table_name}` ({col});'
                 # Execute the CREATE INDEX SQL statement
                 cursor.execute(_sql)
-                print(f"Set Index the {col} on `{table_name}` successfully.")
+                print(f"Set Index the `{col}` on `{table_name}` successfully.")
 
     except pymysql.Error as e:
-        print(f"Failed to create index `{table_name}`. Error: {e}")
+        print(f"Failed to create index `{table_name}`. Error: {e} with {_sql}")
     finally:
         # Ensure the connection is closed
         if conn:
@@ -265,3 +286,8 @@ def optimize_table(db_config, data_config):
         if conn:
             cursor.close()
             conn.close()
+
+def init_MySQL():
+    """ Initializing"""
+    import os
+    os.system('service mysql start')

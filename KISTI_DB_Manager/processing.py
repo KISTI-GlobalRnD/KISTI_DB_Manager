@@ -203,7 +203,7 @@ def extract_nested_with_list(data):
     return result
 
 
-def flatten_json(nested_json, separator='.'):
+def flatten_json(nested_json, separator='__'):
     """
     Flattens a nested JSON object (Python dictionary) into a single-level dictionary
     with keys indicating the path through the original nested structure.
@@ -233,7 +233,7 @@ def flatten_json(nested_json, separator='.'):
     return out
 
 
-def flatten_json_separate_lists(nested_json, separator='.', parent=''):
+def flatten_json_separate_lists(nested_json, separator='__', parent=''):
     """
     Flattens a nested JSON object (Python dictionary) and separates the output into
     two dictionaries: one for keys with single (non-list) values, and another for keys
@@ -266,7 +266,7 @@ def flatten_json_separate_lists(nested_json, separator='.', parent=''):
     return single_values, multiple_values
 
 
-def multiples_to_dataframes(multiples, separation='.'):
+def multiples_to_dataframes(multiples, separation='__'):
     """
     Converts a dictionary containing keys mapped to list values into a dictionary
     of pandas DataFrames, where each list is converted into a DataFrame. Column names
