@@ -32,7 +32,6 @@ fill_table_from_file(f, table_name, db_config)
 import pymysql
 from pymysql.err import ProgrammingError
 import pandas as pd
-from . import preview
 
 def is_Null(_type, _null_ratio):
     """Return about Null part for SQL query """

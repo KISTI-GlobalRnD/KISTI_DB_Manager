@@ -13,3 +13,4 @@ __version__ = "0.3.0"
 
 from . import manage
 from . import preview
+from . import processing

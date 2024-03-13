@@ -3,13 +3,16 @@
 Note
 ----
 Made by Young Jin Kim (kimyoungjin06@gmail.com)
-Last Update: 2024.02.05, YJ Kim
+Last Update: 2024.03.17, YJ Kim
 
 MariaDB/MySQL Handling for All type DB
 To preprocess, import, export and manage the DB
 
-
-Now Contains ...
+# Updates
+## 2024.03.17
+- Add exception part for unstructured json branches
+    - related: flatten_json_separate_lists, ..., flatten_json_separate_lists
+    - except_keys: excepted part from unstructured json branches
 
 Example
 -------
