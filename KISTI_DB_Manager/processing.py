@@ -233,7 +233,7 @@ def flatten_json(nested_json, separator='__'):
     return out
 
 
-def flatten_json_separate_lists(nested_json, separator='__', parent=''):
+def flatten_json_separate_lists(nested_json, except_keys=[], separator='__', parent=''):
     """
     Flattens a nested JSON object (Python dictionary) and separates the output into
     two dictionaries: one for keys with single (non-list) values, and another for keys
@@ -251,19 +251,23 @@ def flatten_json_separate_lists(nested_json, separator='__', parent=''):
     """
     single_values = {}
     multiple_values = {}
+    excepted_values = {}
 
     def flatten(x, name=''):
         if isinstance(x, dict):
             for a in x:
-                flatten(x[a], name + a + separator)
+                if a in except_keys:
+                    excepted_values[a] = x[a]
+                else:
+                    flatten(x[a], name + a + separator)
         elif isinstance(x, list):
-            multiple_values[name[:-1]] = x
+            multiple_values[name[:-1*len(separator)]] = x
             # print(name)
         else:
-            single_values[name[:-1]] = x
+            single_values[name[:-1*len(separator)]] = x
 
     flatten(nested_json)
-    return single_values, multiple_values
+    return single_values, multiple_values, excepted_values
 
 
 def multiples_to_dataframes(multiples, separation='__'):
@@ -324,14 +328,14 @@ def add_index_column_to_dfs(dfs, index_column_name, index_value):
     return updated_dfs
 
 
-def flatten_nested_json_with_list(_json, index_key='id', index=0):
+def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[]):
 
-    single, multiples = flatten_json_separate_lists(_json)
+    single, multiples, excepted = flatten_json_separate_lists(_json, except_keys=except_keys)
     _df = pd.DataFrame(single, index=[index])
     _id = _df.loc[index, index_key]
     df_subs = multiples_to_dataframes(multiples)
     df_subs_add_idx = add_index_column_to_dfs(df_subs, index_key, _id)
-    return _df, df_subs_add_idx
+    return _df, df_subs_add_idx, excepted
 
 
 def read_dict_from_zip(zip_path, json_file_name):
@@ -366,7 +370,7 @@ def read_dict_from_zip(zip_path, json_file_name):
     return extracted_dict
 
 
-def extract_data_from_jsons(jsons):
+def extract_data_from_jsons(jsons, index_key='id', except_keys=[]):
     """
     Aggregates data from a list of JSON objects into a primary DataFrame and a set of subsidiary DataFrames.
     Each JSON object is flattened, with its nested structures and lists transformed into DataFrames.
@@ -393,20 +397,40 @@ def extract_data_from_jsons(jsons):
     - An index is added to each DataFrame derived from a JSON object to maintain order and reference
       back to the original JSON object in the list.
     """
-    for i, _json in enumerate(jsons):
-        # Process each JSON object to flatten it and extract data into DataFrames
-        _df, _df_subs = flatten_nested_json_with_list(_json, index=i)
-        try:
-            # Attempt to concatenate the new DataFrames with the aggregated ones
-            df_tot = pd.concat([df_tot, _df])
-            for key in df_subs_tot.keys():
-                df_subs_tot[key] = pd.concat([df_subs_tot[key], _df_subs[key]])
-        except NameError:
-            # If 'df' and 'df_subs' are not defined (first iteration), initialize them
-            df_tot = _df
-            df_subs_tot = _df_subs
+    from tqdm import tqdm
 
-    return df_tot, df_subs_tot
+    for i, _json in enumerate(tqdm(jsons)):
+        # Process each JSON object to flatten it and extract data into DataFrames
+        _df, _df_subs, excepted = flatten_nested_json_with_list(_json, index=i, index_key=index_key, except_keys=except_keys)
+        if i == 0:
+            df_tot = []
+            df_subs_tot = {}
+            excepted_tot = {}
+            for key in _df_subs.keys():
+                df_subs_tot[key] = []
+            for key in except_keys:
+                excepted_tot[key] = []
+        # Attempt to concatenate the new DataFrames with the aggregated ones
+        df_tot.append(_df)
+        for key in df_subs_tot.keys():
+            df_subs_tot[key].append(_df_subs[key])
+        for key in except_keys:
+            try:
+                excepted_tot[key].append(excepted[key])
+            except:
+                print('err log')
+                pass
+    df_tot = pd.concat(df_tot)
+    for key in df_subs_tot.keys():
+        df_subs_tot[key] = pd.concat(df_subs_tot[key])
+    for key in except_keys:
+        try:
+            excepted_tot[key].append(excepted[key])
+        except:
+            print('err log')
+            pass
+
+    return df_tot, df_subs_tot, excepted_tot
 
 
 def read_dict_from_gz(gz_path):
