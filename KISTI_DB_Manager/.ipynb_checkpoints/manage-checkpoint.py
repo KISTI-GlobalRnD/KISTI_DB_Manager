@@ -1,4 +1,4 @@
-# KISTI_DB_Manager/import.py
+# KISTI_DB_Manager/manage.py
 """
 Note
 ----
@@ -32,6 +32,9 @@ fill_table_from_file(f, table_name, db_config)
 import pymysql
 from pymysql.err import ProgrammingError
 import pandas as pd
+
+__all__ = ["is_Null", "init_MySQL"]
+
 
 def is_Null(_type, _null_ratio):
     """Return about Null part for SQL query """
@@ -98,11 +101,12 @@ def convert_datetime(df, data_config, FORMAT='%Y-%m-%d %H:%M:%S'):
 
 def fill_table_from_file(data_config, db_config, sep='__'):
     from sqlalchemy import create_engine
+    from .preview import read_data_from_tabular
     PATH, f, table_name, TYPE = data_config['PATH'], data_config['file_name'], data_config['table_name'], data_config['file_type']
     Conv_DATETIME = data_config['Conv_DATETIME']
     
     # Read the file into a DataFrame
-    df = preview.read_data_from_tabular(data_config)
+    df = read_data_from_tabular(data_config)
     
     # dot to underscore
     df.columns = [x.replace('.', sep) for x in df.columns]

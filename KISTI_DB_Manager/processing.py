@@ -17,9 +17,11 @@ To preprocess, import, export and manage the DB
 Example
 -------
 """
+import numpy as np
 import pandas as pd
 
-
+__all__ = ["flatten_dict", "read_a_xml", "flatten_nested_json_with_list", 
+           "read_dict_from_zip", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs"]
 def flatten_dict(d):
     """
     Recursively flattens a nested dictionary so that nested keys are concatenated into
@@ -154,87 +156,56 @@ def read_NSF_from_zip(zipf, path, key_on, ext_keys=[]):
     return _df[new_cols], df_subs, logs
 
 
-def find_keys_with_list(data, prefix=''):
-    """
-    Recursively finds and returns keys in a nested dictionary whose values are lists.
+# def find_keys_with_list(data, prefix=''):
+#     """
+#     Recursively finds and returns keys in a nested dictionary whose values are lists.
 
-    Parameters:
-    data (dict): The dictionary to search through.
-    prefix (str): The prefix for keys to maintain the path in nested dictionaries.
+#     Parameters:
+#     data (dict): The dictionary to search through.
+#     prefix (str): The prefix for keys to maintain the path in nested dictionaries.
 
-    Returns:
-    list: A list of keys that have list values, with paths indicated for nested dictionaries.
-    """
-    keys_with_list = []
+#     Returns:
+#     list: A list of keys that have list values, with paths indicated for nested dictionaries.
+#     """
+#     keys_with_list = []
 
-    for key, value in data.items():
-        # Construct full key path for nested dictionaries
-        full_key = f"{prefix}.{key}" if prefix else key
+#     for key, value in data.items():
+#         # Construct full key path for nested dictionaries
+#         full_key = f"{prefix}.{key}" if prefix else key
 
-        if isinstance(value, list):
-            keys_with_list.append(full_key)
-        elif isinstance(value, dict):
-            # Recursively search for list-containing keys in nested dictionaries
-            keys_with_list.extend(find_keys_with_list(value, full_key))
+#         if isinstance(value, list):
+#             keys_with_list.append(full_key)
+#         elif isinstance(value, dict):
+#             # Recursively search for list-containing keys in nested dictionaries
+#             keys_with_list.extend(find_keys_with_list(value, full_key))
 
-    return keys_with_list
-
-
-def extract_nested_with_list(data):
-    """
-    Recursively extracts and returns parts of a nested dictionary where at least one value is a list.
-
-    Parameters:
-    data (dict): The dictionary to search through.
-
-    Returns:
-    dict: A new dictionary including only the keys (and nested keys) where at least one value is a list.
-    """
-    result = {}
-
-    for key, value in data.items():
-        if isinstance(value, list):
-            # Directly include keys with list values
-            result[key] = value
-        elif isinstance(value, dict):
-            # Recursively process nested dictionaries
-            extracted = extract_nested_with_list(value)
-            if extracted:
-                # Only include nested dictionaries that have at least one list value
-                result[key] = extracted
-
-    return result
+#     return keys_with_list
 
 
-def flatten_json(nested_json, separator='__'):
-    """
-    Flattens a nested JSON object (Python dictionary) into a single-level dictionary
-    with keys indicating the path through the original nested structure.
+# def extract_nested_with_list(data):
+#     """
+#     Recursively extracts and returns parts of a nested dictionary where at least one value is a list.
 
-    Parameters:
-    nested_json (dict): The JSON object (dictionary) to flatten.
-    separator (str): The separator to use for concatenating nested keys. Default is '.'.
+#     Parameters:
+#     data (dict): The dictionary to search through.
 
-    Returns:
-    dict: A flattened version of the input JSON object.
-    """
-    out = {}
+#     Returns:
+#     dict: A new dictionary including only the keys (and nested keys) where at least one value is a list.
+#     """
+#     result = {}
 
-    def flatten(x, name=''):
-        if type(x) is dict:
-            for a in x:
-                flatten(x[a], name + a + separator)
-        elif type(x) is list:
-            i = 0
-            for a in x:
-                flatten(a, name + str(i) + separator)
-                i += 1
-        else:
-            out[name[:-1]] = x
+#     for key, value in data.items():
+#         if isinstance(value, list):
+#             # Directly include keys with list values
+#             result[key] = value
+#         elif isinstance(value, dict):
+#             # Recursively process nested dictionaries
+#             extracted = extract_nested_with_list(value)
+#             if extracted:
+#                 # Only include nested dictionaries that have at least one list value
+#                 result[key] = extracted
 
-    flatten(nested_json)
-    return out
-
+#     return result
 
 def flatten_json_separate_lists(nested_json, except_keys=[], separator='__', parent=''):
     """
@@ -338,6 +309,8 @@ def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[]
     _id = _df.loc[index, index_key]
     df_subs = multiples_to_dataframes(multiples)
     df_subs_add_idx = add_index_column_to_dfs(df_subs, index_key, _id)
+    for idx, key in enumerate(except_keys):
+        excepted[key][index_key] = _id
     return _df, df_subs_add_idx, excepted
 
 
@@ -461,3 +434,47 @@ def read_dict_from_gz(gz_path):
         df_data['json'] =  df_data['raw_str'].apply(json.loads)
 
     return df_data['json']
+
+
+def json_to_key_pairs(json_data, parent='origin', parent_type=None, result=None, sep='__'):
+    
+    _Types = {
+        'l': 'List',
+        'lv': 'List of Value',
+        'ld': 'List of Dict',
+        'vld': 'Value in List of Dict',
+        'd': 'Dict',
+        'v': 'Value',
+    }
+    if result is None:
+        result = [(_Types['d'], np.nan, parent)]
+    
+    if isinstance(json_data, dict):
+        for key, value in json_data.items():
+            child_type = _Types['d'] if isinstance(value, dict) else _Types['lv'] if isinstance(value, list) else _Types['v']
+            try:
+                if any(isinstance(i, dict) for i in value):
+                    child_type = _Types['ld']
+            except:
+                pass
+            result.append((child_type, parent, parent+sep+key))
+            json_to_key_pairs(value, parent+sep+key, child_type, result)
+    elif isinstance(json_data, list):
+        item_type = _Types['ld'] if any(isinstance(i, dict) for i in json_data) else _Types['lv']
+        # If the list contains dictionaries, treat each key in those dictionaries
+        if item_type == _Types['ld']:
+            for item in json_data:
+                if isinstance(item, dict):
+                    for key in item:
+                        if parent_type == _Types['ld']:
+                            item_type = _Types['vld']
+                        result.append((item_type, parent, parent+sep+key))
+                        json_to_key_pairs(item[key], parent+sep+key, item_type, result)
+        # For lists of primitives, skip adding them directly but mark the presence of a list
+        elif parent_type != _Types['lv']:
+            if parent is not None:
+                result.append((_Types['l'], parent, parent+sep+_Types['l']))
+
+    res_df = pd.DataFrame(list(set(result)), columns=['type', 'parent', 'branch']).sort_values(['type', 'parent', 'branch'])
+    # res_df['depth'] = res_df['branch'].apply(lambda x: len(x.split(sep)))
+    return res_df
