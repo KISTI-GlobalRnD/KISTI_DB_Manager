@@ -20,7 +20,8 @@ Example
 import pandas as pd
 import numpy as np
 
-__all__ = ["Cubic_Bezier", "draw_Bezier_edges", "get_position_grid", "init_vis_structure"]
+__all__ = ["Cubic_Bezier", "draw_Bezier_edges", "get_position_grid", "init_vis_structure", 
+          "plot_schema"]
 
 def Cubic_Bezier(p, o, ax, c=(0,0), r=0.1, color='black', lw=1.0, method='circular'):
     '''
@@ -212,6 +213,7 @@ def get_position_grid(types, origin, count_dict, depth=0, sep='__'):
     _res['depth'] = _depth
     
     _cnt = {unique_keys[0].split(sep)[0]:0}
+    
     for unique_key in unique_keys:
         accum_count(unique_key, _cnt, types[unique_key])
     _cnt = [_cnt[uk] for uk in unique_keys]
@@ -219,7 +221,7 @@ def get_position_grid(types, origin, count_dict, depth=0, sep='__'):
     return _res.groupby(cols).sum().dropna()
 
 
-def init_vis_structure(json_dict, G, origin, count_dict, xy_unit=(14,1), sep='__', except_keys=[]):
+def init_vis_structure(json_dict, G, origin, count_dict, forced={}, xy_unit=(14,1), sep='__', excepted=False):
     """
     Initializes the visualization structure for a given JSON dictionary by mapping it 
     onto a graph G, using positional information based on the hierarchical depth 
@@ -236,10 +238,16 @@ def init_vis_structure(json_dict, G, origin, count_dict, xy_unit=(14,1), sep='__
     Returns:
     - tuple: Returns a tuple containing the updated graph G, positions dictionary, labels dictionary, and types Series.
     """
-    from .processing import json_to_key_pairs
+    from .processing import json_to_key_pairs, key_pair_to_df, select_duplicated
 
-    key_pairs = json_to_key_pairs(json_dict, parent=origin, parent_type='Dict')
+    
+    key_pairs = json_to_key_pairs(json_dict, parent=origin, parent_type='Dict', sep=sep)
+    # When excepted, duplicated index exist
+    # So, only revise Multiples delete singles    
+    key_pairs = key_pair_to_df(key_pairs, excepted, forced=forced, sep=sep) # without unique_set, Multiple and Single is appear twice
+        
     types = key_pairs.set_index('branch')['type']
+    types = select_duplicated(types)
     
     df_pos = get_position_grid(types, origin, count_dict)
     msk = df_pos['type'].str.contains('List')
@@ -258,3 +266,68 @@ def init_vis_structure(json_dict, G, origin, count_dict, xy_unit=(14,1), sep='__
     labels = {x:x.split('__')[-1] for x in list(G.nodes())}
     return G, pos, labels, types
 
+
+def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={}, sep='__', 
+          legend_loc='center left', node_size=12, font_size=3, X_SIZE=6, Y_SIZE=5, DPI=300):
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
+    import networkx as nx
+    
+    count_dict = {
+            'Value':1, 'Value in List of Dict':1, 'List of Dict':0, 'Dict':0, 'List of Value':1
+        }
+    title = f'The structure of {data_name} XML'
+    
+    G = nx.Graph()
+    G, pos, labels, types = init_vis_structure(jsons, G, origin, count_dict, forced, sep=sep)
+    # G, pos, labels, types = init_vis_structure(json_ex, G, origin, count_dict, except_keys=except_keys)
+    
+    N_ROW = 1
+    N_COL = 1
+    plt.rcParams['font.family'] = ['NanumSquare', 'Helvetica']
+    # plt.rcParams['font.family'] = ['Helvetica', 'NanumSquare']
+    
+    fig=plt.figure(figsize = (X_SIZE*N_COL,Y_SIZE*N_ROW), dpi=DPI)
+    spec = gridspec.GridSpec(ncols=N_COL, nrows=N_ROW, figure=fig, )#, width_ratios=[1,1,.1], wspace=.3)
+    axes = []
+    axi=0
+    ax = fig.add_subplot(spec[axi//N_COL,axi%N_COL]) # row, col
+    
+    # Draw Edge with Bezier
+    draw_Bezier_edges(
+        G, pos, origin, ax, w=.2,
+        ratio=0.5, color='black', weight=False, method='horizontal')
+
+    # Draw Nodes
+    for i, key in enumerate(count_dict.keys()):
+        nodelist = types[types == key].index
+        if len(nodelist)> 0:
+            msk = np.array([np.isin(except_keys, nl.split(sep)).any() for nl in nodelist])
+            if origin != 'excepted':
+                nodelist_excepted = nodelist[msk]
+                collection_excepted = nx.draw_networkx_nodes(G, pos, nodelist=nodelist_excepted, node_size=node_size, label="__none",
+                                                    node_color='none', alpha=1., ax=ax, edgecolors=f'C{i}',)
+                collection_excepted.set_zorder(2.1)
+                collection_excepted.set_linewidth(.4)
+            nodelist_regularized = nodelist[~msk]
+            collection_regularized = nx.draw_networkx_nodes(G, pos, nodelist=nodelist_regularized, node_size=node_size, label=key,
+                                                node_color=f'C{i}', alpha=1., ax=ax, edgecolors='none')
+            collection_regularized.set_zorder(2.1) # patch: 1, line: 2, text: 3
+    if origin != 'excepted':
+        _ecpt = ax.scatter([],[], s=node_size, label="Excepted", c='none', alpha=1., edgecolors=f'black',)
+        _ecpt.set_zorder(2.1)
+        _ecpt.set_linewidth(.4)
+    _labels = nx.draw_networkx_labels(G, pos, labels=labels, 
+                                      horizontalalignment='left', verticalalignment='bottom', 
+                                      font_family='NanumSquare', 
+                                      font_size=font_size, ax=ax)
+    
+    legend = plt.legend(scatterpoints=1, fontsize=font_size*1.5, loc='center left', title='branch type', title_fontsize=font_size*2.)
+    for item in legend.legend_handles:
+        item._sizes = [node_size]
+    # plt.margins(x=.1)
+    # plt.subplots_adjust(right=1.)
+    plt.tight_layout()
+    plt.axis('off')
+    plt.title(title)
+    return fig

@@ -1,5 +1,7 @@
 # Summary
 
+![Logo](Image/KISTI_DB_Manager.svg)
+
 Made by Young Jin Kim (kimyoungjin06@gmail.com)
 - Birth: 2023.02.05
 - Last Update: 2024.03.11, YJ Kim
@@ -20,6 +22,13 @@ The `KISTI_DB_Manager` package is a comprehensive toolset designed to streamline
 - **Data Ingestion**: Facilitate the direct insertion of data from tabular files into the database, supporting large datasets.
 - **Index Management**: Automatically set indexes on tables to improve query performance.
 - **Custom Configuration**: Support for custom data and database configurations, allowing for flexible data management strategies.
+- **Raw XML Structure & Schema Visualization**: Support for visualization of raw XML and DB schema.
+
+## Outputs
+
+![Sample_Structure](Image/Structure_WoS_XML.svg)
+![Sample_Excepted Structure](Image/Structure_WoS_XML_Excepted.svg)
+![DB Schema](Image/DB_Schema.svg)
 
 ## Installation
 

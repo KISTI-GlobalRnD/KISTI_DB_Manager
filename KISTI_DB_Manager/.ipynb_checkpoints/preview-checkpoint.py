@@ -265,8 +265,8 @@ def get_Table_Description(data_config, params, verbose=False, sep='__'):
         df_desc[col] = res
 
     # dot to underscore
-    df_desc.columns = [x.replace('.', sep) for x in df_desc.columns]
-    df_desc.T.to_csv(f"{PATH}Desc_{data_config['table_name']}.csv")
+    df_desc.columns = [x.replace('.', sep) for x in df_desc.columns] # Will be deprecated
+    df_desc.T.to_csv(f"{PATH}{data_config['table_name']}_Desc.csv")
     print(f"Generate the Description file for table `{data_config['table_name']}`")
     return df_desc.T
 

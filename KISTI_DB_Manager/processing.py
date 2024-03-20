@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 __all__ = ["flatten_dict", "read_a_xml", "flatten_nested_json_with_list", 
-           "read_dict_from_zip", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs"]
+           "read_dict_from_zip", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs",
+          "key_pair_to_df", "excepted_regularization"]
 def flatten_dict(d):
     """
     Recursively flattens a nested dictionary so that nested keys are concatenated into
@@ -474,7 +475,130 @@ def json_to_key_pairs(json_data, parent='origin', parent_type=None, result=None,
         elif parent_type != _Types['lv']:
             if parent is not None:
                 result.append((_Types['l'], parent, parent+sep+_Types['l']))
+    return result
 
-    res_df = pd.DataFrame(list(set(result)), columns=['type', 'parent', 'branch']).sort_values(['type', 'parent', 'branch'])
-    # res_df['depth'] = res_df['branch'].apply(lambda x: len(x.split(sep)))
-    return res_df
+
+def key_pair_to_df(key_pairs, unique_set=True, forced={}, sep='__'):
+    from collections import Counter
+    
+    cols = ['type', 'parent', 'branch']
+    if unique_set==True:
+        res_df = pd.DataFrame(list(set(key_pairs)), columns=cols).sort_values(cols)
+    else:
+        cols.append('count')
+        key_pairs = [(type, parent, branch, count) for (type, parent, branch), count in Counter(key_pairs).most_common(100000000000)]
+        res_df = pd.DataFrame(key_pairs, columns=cols).sort_values(cols)
+
+    res_df = res_df.set_index('branch')
+    for idx in res_df.index:
+        if isinstance(res_df.loc[idx, 'type'], pd.Series):
+            msk = res_df.loc[idx, 'type'].str.contains('List')
+            v = res_df.loc[idx, 'type'][msk]
+            res_df.loc[idx, 'type'] = v
+    
+    # When excepted, duplicated index exist
+    # So, only revise Multiples delete singles
+    for k, v in forced.items():
+        res_df.loc[k, 'type'] = v
+    res_df = res_df.reset_index().drop_duplicates()[cols]
+    res_df['Rank'] = res_df.branch.apply(lambda x: len(x.split(sep)))
+    
+    return res_df.sort_values('Rank')
+
+
+def excepted_regularization(_jsons, types, base_key='', sep='__'):
+    def __init__():
+        _res = {}
+        for branch in types.index:
+            keys = branch.split(sep)[2:]
+            __type = types[branch]
+            __res = _res
+            for key in keys[:-1]:
+                if isinstance(__res, list):
+                    print(__res)
+                else:
+                    try:
+                        __res = __res[key]
+                    except:
+                        __res[key] = {}
+                        __res = __res[key]
+            if len(keys) > 0:
+                fkey = keys[-1]
+                if __type == 'Value':
+                    __res[fkey] = ''
+                elif __type == 'List of Value':
+                    __res[fkey] = []
+                elif __type == 'List of Dict': # Assume I: 'Values in List of Dict' is not empty
+                    __res[fkey] = []
+                    # __res[fkey] = [{}]
+                elif __type == 'Value in List of Dict':
+                    pass
+                    # __res[0][fkey] = ''
+                else:
+                    __res[fkey] = {}
+        return _res
+
+    
+    def insert_value(data, __res, full_key=''):
+        if isinstance(data, dict):
+            for k, v in data.items():
+                _full_key = full_key+sep+k
+                if types[_full_key] == 'Value':
+                    __res[k] += v
+                elif types[_full_key] == 'List of Dict': # 'Value in List of Dict' is included here with Assume I
+                    # __res[k] += [v]
+                    # print(__res[k], v)
+                    __res[k] += v
+                    # __res[k].append(v)
+                else:
+                    insert_value(v, __res[k], _full_key)
+        elif isinstance(data, list):
+            if types[full_key] == 'List of Value':
+                __res += data
+            elif types[full_key] == 'List of Dict': # 'Value in List of Dict' is included here with Assume I
+                # __res += data
+                __res.append(data)
+        else:
+            if types[full_key] == 'List of Value':
+                __res += [data]
+
+    result = []
+
+    for _json in _jsons:
+        _res = __init__()
+        insert_value(_json, _res, base_key)
+        result.append(_res)
+    return result
+
+
+def save_data(dfs, data_config):
+
+    df, df_subs, df_ex, df_ex_subs = dfs
+    PATH, KEY, SEP, table_name = data_config['PATH'], data_config['KEY'], data_config['SEP'], data_config['table_name']
+
+    idx = 1
+    suffix = 'MN'
+    fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+    df.to_feather(fname)
+    print(f"'{fname}' is successfully saved.")
+    idx += 1
+    
+    for key in df_subs.keys():
+        suffix = f"MN-SUB{SEP}{key}"
+        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+        df_subs[key].reset_index().to_feather(fname)
+        idx += 1
+        print(f"'{fname}' is successfully saved.")
+
+    suffix = 'EX'
+    fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+    df_ex.to_feather(fname)
+    print(f"'{fname}' is successfully saved.")
+    idx += 1
+    
+    for key in df_ex_subs.keys():
+        suffix = f"EX-SUB{SEP}{key}"
+        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+        df_ex_subs[key].reset_index().to_feather(fname)
+        idx += 1
+        print(f"'{fname}' is successfully saved.")
