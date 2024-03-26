@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 __all__ = ["conv_HTML_entities", "flatten_dict", "read_a_xml", "flatten_nested_json_with_list", 
            "read_dict_from_zip", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs",
-          "key_pair_to_df", "excepted_regularization"]
+          "key_pair_to_df", "excepted_regularization", "separate_excepted"]
 
 def conv_HTML_entities(content, replace_list=['p', 'sub', 'sup', 'i', 'b', ], 
                        rounds=[('<', '>'), ('</', '>')], 
@@ -332,8 +332,22 @@ def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[]
     df_subs_add_idx = add_index_column_to_dfs(df_subs, index_key, _id)
 
     for idx, key in enumerate(except_keys):
-        excepted[key][index_key] = _id
+        try:
+            excepted[key][index_key] = _id
+        except:
+            excepted = {key:{index_key:_id}}
     return _df, df_subs_add_idx, excepted
+
+def separate_excepted(jsons, except_keys, sep='__'):
+    _jsons = jsons.copy()
+    for key in except_keys:
+        __keys = key.split(sep)
+        for i, _json in enumerate(_jsons):
+            _temp = _jsons[i]
+            for _key in __keys[:-1]:
+                _temp = _temp[_key]
+            _temp.pop(__keys[-1], None)
+    return _jsons
 
 
 def read_dict_from_zip(zip_path, json_file_name):
@@ -544,6 +558,8 @@ def key_pair_to_df(key_pairs, sep='__'):
                 # _type = 'Value in List of Dict'
                 _type = 'List of Dict'
                 # print(idx)
+            elif (__note == 'List of Value;List of Dict') | (__note == 'List of Dict;List of Value'):
+                _type = 'List of Dict'
             elif (__note == 'Dict;Value in List of Dict') | (__note == 'Value in List of Dict;Dict'):
                 _type = 'Dict'
             elif (__note == 'Dict;Value') | (__note == 'Value;Dict'):
@@ -588,7 +604,7 @@ def key_pair_to_df(key_pairs, sep='__'):
 
     # print(res.reset_index().set_index('branch')['type']['static_data__fullrecord_metadata__references__reference__physicalSection'])
     # print(res.reset_index().set_index('branch')['type']['static_data__fullrecord_metadata__references__reference__physicalSection__@physicalLocation'])
-    return res.reset_index().iloc[1:]
+    return res.reset_index()#.iloc[1:]
 
 
 # def key_pair_to_df(key_pairs, unique_set=True, forced={}, sep='__'):
@@ -616,212 +632,7 @@ def key_pair_to_df(key_pairs, sep='__'):
 #     res_df = res_df.reset_index().drop_duplicates()[cols]
 #     res_df['Rank'] = res_df.branch.apply(lambda x: len(x.split(sep)))
     
-#     return res_df.sort_values('Rank')
-
-
-def excepted_regularization(_jsons, types, base_key='', sep='__'):
-    def __init():
-        _res = {}
-        for branch in types.index:
-            keys = branch.split(sep)[:]
-            __type = types[branch]
-            __res = _res
-            for key in keys[:-1]:
-                if isinstance(__res, list):
-                    __res = __res[0]
-                    # pass
-                # else:
-                try:
-                    __res = __res[key]
-                except:
-                    __res[key] = {}
-                    __res = __res[key]
-                # if len(keys) > 0:
-                #     fkey = keys[-1]
-                #     if fkey == '@orcid_id':
-                #         print(__type, keys)
-                #         print(key, __res)
-                #         try:
-                #             print(__res[key])
-                #         except:
-                #             print('~~~~')
-            if len(keys) > 0:
-                fkey = keys[-1]
-                if isinstance(__res, list):
-                    __res = __res[0]
-                
-                if __type == 'Value':
-                    __res[fkey] = ''
-                elif __type == 'List of Value':
-                    __res[fkey] = []
-                elif __type == 'List of Dict': # Assume I: 'Values in List of Dict' is not empty
-                    __res[fkey] = [{}]
-                    # if fkey == 'name':
-                    #     print(__type, keys)
-                    #     print(__res)
-                elif __type == 'Value in List of Dict':
-                    __res[fkey] = ''
-                    # if fkey == '@r_id':
-                    #     print(__type, keys)
-                    #     print(__res)
-                elif __type == 'Dict':
-                    __res[fkey] = {}
-                else: # List
-                    __res[fkey] = []
-                
-                if isinstance(__res, list):
-                    __res = __res[0]
-                
-        return _res
-
-    
-    def get_value(__data, keys):
-        if isinstance(keys, list) and len(keys) > 0:
-            if isinstance(__data, dict):
-                return get_value(__data[keys[0]], keys[1:])
-            elif isinstance(__data, list):
-                return get_value(__data[0], keys)
-        else:
-            # print(__data)  # For debugging; you might want to remove this in the final version
-            return __data if not isinstance(__data, dict) else __data.copy()
-
-    
-    def insert_value(data, __res, full_key=''):
-        if isinstance(data, dict):
-            for k, v in data.items():
-                if full_key != '':
-                    _full_key = full_key+sep+k
-                else:
-                    _full_key = k
-
-                if types[_full_key] == 'Value':
-                    # print('V*', k, v, _full_key)
-                    # print(__res.keys())
-                    __res[k] += v # Init is ''
-                elif types[_full_key] == 'Value in List of Dict':
-                    # _blanc = get_value(format, _full_key.split(sep))
-                    # print('VLD*', v, _blanc, _full_key)
-                    # __dummy = insert_value(v, _blanc, _full_key)
-                    # print('VLD**', __dummy)
-                    # __res[k] += __dummy # Init is ''
-                    __res += v # Init is ''
-                    # print(__dummy)
-                elif types[_full_key] == 'Dict':
-                    _blanc = get_value(__init().copy(), _full_key.split(sep))
-                    
-                    # if v == _blanc:
-                    #     __dummy = _blanc
-                    # else:
-                    #     __dummy = insert_value(v, _blanc, _full_key)
-                    __dummy = insert_value(v, _blanc, _full_key)
-                    print('\nD*', v,'\n', _blanc, __dummy,'\n', _full_key,'\n')
-                    # print(__dummy)
-                    # __res[k] = __dummy
-                    __res[k] = insert_value(v, __res, _full_key)
-                    # else:
-                    #     __res[k] = insert_value(v, __res[k], _full_key)
-                    # except:
-                    # __res[k] = insert_value(v, __res, _full_key)
-                elif types[_full_key] == 'List of Dict':
-                    _blanc = get_value(__init(), _full_key.split(sep))
-                    # print('LD*', v, '&&&', _blanc, _full_key)
-                    # __dummy = insert_value(v, _blanc, _full_key)
-                    # if __dummy != None:
-                    #     print('**', __dummy)
-                    #     # print('\n\n\n\n')
-                    #     # __res[k] = __dummy # Init is {}
-                    #     # print(v, _full_key)
-                    #     __res[k] = __dummy
-                    # else:
-                    __res[k] = v
-                else:
-                    _blanc = get_value(format, _full_key.split(sep))
-                    # print('EoD*', v, _blanc, _full_key)
-                    # __dummy = insert_value(v, _blanc, _full_key)
-                    # if __dummy != None:
-                    #     print(__dummy)
-                    #     __res[k].append(__dummy)
-                    # else:
-                    __res[k].append(v)
-                
-                # if types[_full_key] == 'Value':
-                #     __res[k] += v
-                # elif types[_full_key] == 'Value in List of Dict':
-                #     _blanc = get_value(format, _full_key.split(sep))
-                #     __dummy = insert_value(v, _blanc, _full_key)
-                #     # print(_full_key, __res)
-                #     try:
-                #         __res.append(__dummy)
-                #     except:
-                #         try:
-                #             __res[k].append(__dummy)
-                #         except:
-                #             __res[k] = __dummy
-                # elif types[_full_key] == 'List of Dict': # 'Value in List of Dict' is included here with Assume I
-                #     # print('\t&', __res, full_key)
-                #     # print(format)
-                    
-                #     _blanc = get_value(format, _full_key.split(sep))
-                #     __dummy = insert_value(v, _blanc, _full_key)
-                #     __res[k].append(__dummy)
-                # else: # the case of Dict
-                #     # print('****', v, '****', k)
-                #     try:
-                #         insert_value(v, __res[k], _full_key)
-                #     except:
-                #         insert_value(v, __res[0][k], _full_key)
-        elif isinstance(data, list):
-            for item in data:
-                if types[full_key] == 'Value':
-                    # print('VoL*', item, data, full_key)
-                    __res += item # Init is ''
-                elif types[full_key] == 'Value in List of Dict':
-                    # print('VLDoL*', item, data, full_key)
-                    __res += item # Init is ''
-                elif types[full_key] == 'Dict':
-                    # print('DoL*', item, data,full_key)
-                    __res = item # Init is {}
-                else:
-                    # print('EoL*', item, data,full_key)
-                    _blanc = get_value(format, full_key.split(sep))
-                    # __dummy = insert_value(item, _blanc, full_key)
-                    # print(types[full_key], '$$', item, '@', __res, '&', full_key, '*', __dummy)
-                    __res.append(item)
-                # _blanc = get_value(__init(), full_key.split(sep))
-                # __dummy = insert_value(item, _blanc[0], full_key)
-                # __res.append(__dummy)
-                # if types[full_key] == 'List of Value':
-                #     __res += data
-                # elif types[full_key] == 'List of Dict': # 'Value in List of Dict' is included here with Assume I
-                #     _blanc = get_value(__init(), full_key.split(sep))
-                #     __dummy = insert_value(item, _blanc[0], full_key)
-                #     __res.append(__dummy)
-                # else:
-                    
-                    # print('\t\t*', _blanc)
-                    # __res += data
-                    # if __res[0] == {}:
-                    #     __res[0] == data
-                    # else:
-                    #     __res.append(data)
-        else:
-            if types[full_key] == 'List of Value':
-                print('LV*', data, __res, full_key)
-                __res += [data]
-            else:
-                print('E*', data, __res, full_key)
-
-    result = []
-
-    format = __init().copy()
-    # print(format)
-    for _json in _jsons:
-        # _res = format.copy()
-        _res = __init().copy()
-        insert_value(_json, _res, base_key)
-        result.append(_res)
-    return result
-
+#     return res_df.sort_values('
 
 def excepted_regularization(_jsons, types, base_key='', sep='__'):
     def __init():
@@ -842,7 +653,7 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
                 fkey = keys[-1]
                 if isinstance(__res, list):
                     __res = __res[0]
-                
+                    
                 if __type == 'Value':
                     __res[fkey] = ''
                 elif __type == 'List of Value':
@@ -913,6 +724,8 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
                             
                             # __res[k].append(v)
                 elif types[_full_key] == 'List of Value':
+                    if type(v) != list: # '0'번째에 채워넣기
+                        v = [v]
                     # for _v in v:
                     __res[k] = v
                         # insert_value(_v, __res[k], _full_key)
@@ -962,6 +775,7 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
                 print('E*', types[full_key], data, __res, full_key)
 
     result = []
+    types = types.iloc[1:]
     for _json in _jsons:
         _res = __init().copy()
         insert_value(_json, _res, base_key)
@@ -972,7 +786,7 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
 
 def save_data(dfs, data_config):
 
-    df, df_subs, df_ex, df_ex_subs = dfs
+    df, df_subs = dfs
     PATH, KEY, SEP, table_name = data_config['PATH'], data_config['KEY'], data_config['SEP'], data_config['table_name']
 
     idx = 1
@@ -985,19 +799,9 @@ def save_data(dfs, data_config):
     for key in df_subs.keys():
         suffix = f"MN-SUB{SEP}{key}"
         fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
-        df_subs[key].reset_index().to_feather(fname)
-        idx += 1
-        print(f"'{fname}' is successfully saved.")
-
-    suffix = 'EX'
-    fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
-    df_ex.to_feather(fname)
-    print(f"'{fname}' is successfully saved.")
-    idx += 1
-    
-    for key in df_ex_subs.keys():
-        suffix = f"EX-SUB{SEP}{key}"
-        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
-        df_ex_subs[key].reset_index().to_feather(fname)
-        idx += 1
-        print(f"'{fname}' is successfully saved.")
+        try:
+            df_subs[key].reset_index().to_feather(fname)
+            idx += 1
+            print(f"'{fname}' is successfully saved.")
+        except:
+            print(f'Fail to save the {fname}')

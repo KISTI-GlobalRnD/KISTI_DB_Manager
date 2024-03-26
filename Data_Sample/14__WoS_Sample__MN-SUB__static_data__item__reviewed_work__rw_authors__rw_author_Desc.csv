@@ -1,0 +1,4 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,2,0.375,0.7440238091428449,,3,0.75,1.061278124459133,False,254,0.375,0.01,False
+UID,,VARCHAR(32),WOS:001024617400016,1.0,19,19,,,WOS:001084467000001,6,0.375,2.4056390622295662,False,28,0.75,0.01,False
+static_data__item__reviewed_work__rw_authors__rw_author,,VARCHAR(32),"Hemming, D",1.0,7,13,,,"Hemming, D",8,0.125,3.0,False,19,1.0,0.01,False

@@ -1,0 +1,4 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,2,0.14381591562799617,0.36710677273395637,,3,0.8619367209971237,0.6136437227717289,False,254,0.0028763183125599234,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:000922483200001,899,0.0028763183125599234,9.746054291021224,False,28,0.8619367209971237,0.01,False
+static_data__fullrecord_metadata__category_info__subheadings__subheading,,VARCHAR(64),Life Sciences & Biomedicine,1.0,10,27,,,Life Sciences & Biomedicine,3,0.5071907957813998,1.4907152668281214,False,40,0.0028763183125599234,0.01,False

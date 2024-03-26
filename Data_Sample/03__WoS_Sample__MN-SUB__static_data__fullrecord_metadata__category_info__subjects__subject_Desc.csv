@@ -1,5 +1,0 @@
-,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
-index,,TINYINT UNSIGNED,0,1.0,0,7,0.8188958345702678,1.0243563214916516,,8,0.43398162834290366,1.671813867013281,False,254,6.785468918311436e-05,0.01,False
-UID,,VARCHAR(32),WOS:000203024800008,1.0,19,19,,,WOS:A1945YD12200001,51166,6.785468918311436e-05,15.564038181666309,False,28,0.43398162834290366,0.01,False
-static_data__fullrecord_metadata__category_info__subjects__subject__@ascatype,,VARCHAR(16),traditional,1.0,8,11,,,traditional,2,0.5047455873247441,0.9999350183112077,False,16,1.696367229577859e-05,0.01,False
-static_data__fullrecord_metadata__category_info__subjects__subject__#text,,TEXT,Information Science & Library Science,1.0,3,45,,,"Medicine, General & Internal",166,0.10734611828768692,6.056853613982503,False,67,0.001407984800549623,0.01,False

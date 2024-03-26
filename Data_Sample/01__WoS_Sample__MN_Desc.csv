@@ -1,126 +1,86 @@
 ,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
-@r_id_disclaimer,,TEXT,ResearcherID data provided by Clarivate Analytics,1.0,49,49,,,ResearcherID data provided by Clarivate Analytics,1,1.0,-0.0,False,73,1.954422858929758e-05,0.01,False
-UID,,VARCHAR(32),WOS:000203024800008,1.0,19,19,,,WOS:000203024800008,51166,1.954422858929758e-05,15.64289783185913,False,28,1.0,0.01,True
-static_data__summary__EWUID__WUID__@coll_id,,VARCHAR(4),WOS,1.0,3,3,,,WOS,1,1.0,-0.0,False,4,1.954422858929758e-05,0.01,False
-static_data__summary__EWUID__edition__@value,,VARCHAR(16),WOS.SSCI,0.9502990266974163,7,8,,,WOS.SCI,3,0.7510651604581167,0.7738923027037561,False,12,5.863268576789274e-05,0.01,False
-static_data__summary__pub_info__@sortdate,,VARCHAR(64),1945-07-01,1.0,1945-01-01 00:00:00,1945-12-29 00:00:00,,,1945-01-01,79,0.8013524606183794,1.504380023695037,False,-,0.0015439940585545088,0.01,False
-static_data__summary__pub_info__@pubyear,,YEAR,1945,1.0,1945,1945,,,1945,1,1.0,-0.0,False,2100,1.954422858929758e-05,0.01,False
-static_data__summary__pub_info__@has_abstract,,VARCHAR(1),N,1.0,1,1,,,N,1,1.0,-0.0,False,1,1.954422858929758e-05,0.01,False
-static_data__summary__pub_info__@coverdate,,VARCHAR(32),JUL 1945,1.0,4,12,,,1945,109,0.7821991166008677,1.7881566508698703,False,18,0.002130320916233436,0.01,False
-static_data__summary__pub_info__@pubmonth,,VARCHAR(16),JUL,0.21780088339913223,3,7,,,APR,109,0.7821991166008677,1.510951394357085,False,10,0.002130320916233436,0.01,False
-static_data__summary__pub_info__@vol,,VARCHAR(8),8,0.9832701403275613,1,5,,,53,150,0.07360356486729469,6.314040422478102,False,7,0.002931634288394637,0.01,False
-static_data__summary__pub_info__@issue,,VARCHAR(16),3,0.9599929640777078,1,6,,,1,448,0.12119376148223429,5.416262164022016,False,9,0.008755814408005316,0.01,False
-static_data__summary__pub_info__@pubtype,,VARCHAR(16),Journal,1.0,7,7,,,Journal,1,1.0,-0.0,False,10,1.954422858929758e-05,0.01,False
-static_data__summary__pub_info__page__@begin,,VARCHAR(8),212,0.9996091154282141,1,4,,,1,2405,0.010612516123988586,9.995058433366012,False,6,0.04700386975726068,0.01,False
-static_data__summary__pub_info__page__@end,,VARCHAR(8),213,0.9996091154282141,1,4,,,&,2322,0.009048977836844779,9.999187417941194,False,6,0.04538169878434898,0.01,False
-static_data__summary__pub_info__page__@page_count,,SMALLINT UNSIGNED,2,1.0,0,462,,,1,124,0.2671891490442872,3.6819478729533186,False,65534,0.0024234843450729,0.01,False
-static_data__summary__pub_info__page__#text,,VARCHAR(16),212-213,0.9996091154282141,3,9,,,411-411,15594,0.0010944768010006645,13.095958581182083,False,13,0.30477270062150646,0.01,False
-static_data__summary__titles__@count,,TINYINT UNSIGNED,6,1.0,5,6,,,6,2,0.7989094320447172,0.7241038760462883,False,254,3.908845717859516e-05,0.01,False
-static_data__summary__names__@count,,TINYINT UNSIGNED,1,1.0,1,31,,,1,24,0.7032208888715162,1.3077916995775256,False,254,0.0004690614861431419,0.01,False
-static_data__summary__names__name__@seq_no,,TINYINT UNSIGNED,1,0.7032208888715162,1,1,,,1,2,0.7032208888715162,0.3572011694444015,False,254,3.908845717859516e-05,0.01,False
-static_data__summary__names__name__@role,,VARCHAR(16),author,0.7032208888715162,4,6,,,author,4,0.5978774967752023,0.7877589237901674,False,9,7.817691435719032e-05,0.01,False
-static_data__summary__names__name__@r_id,,VARCHAR(32),ELG-3487-2022,0.5974084352890592,11,13,,,DHW-2226-2022,21423,0.4025915647109409,8.886717121371488,False,19,0.41869600906852206,0.01,False
-static_data__summary__names__name__@claim_status,,VARCHAR(8),false,0.5974084352890592,4,5,,,false,3,0.5933041472853067,0.47939218584846455,False,7,5.863268576789274e-05,0.01,False
-static_data__summary__names__name__display_name,,VARCHAR(64),"Alldredge, Everett O.",0.7032208888715162,2,40,,,[Anonymous],21569,0.29677911112848376,9.245936052116075,False,60,0.42154946644255953,0.01,False
-static_data__summary__names__name__full_name,,VARCHAR(64),"Alldredge, Everett O.",0.7032208888715162,2,40,,,[Anonymous],21569,0.29677911112848376,9.245936052116075,False,60,0.42154946644255953,0.01,False
-static_data__summary__names__name__wos_standard,,VARCHAR(64),"Alldredge, EO",0.7032208888715162,2,40,,,[Anonymous],21415,0.29677911112848376,9.237038269400763,False,60,0.4185396552398077,0.01,False
-static_data__summary__names__name__first_name,,VARCHAR(32),Everett O.,0.5768869952702966,1,19,,,A,4814,0.4231130047297033,6.133649173066768,False,28,0.09408591642887855,0.01,False
-static_data__summary__names__name__last_name,,VARCHAR(64),Alldredge,0.5841183598483368,2,23,,,SMITH,13929,0.41588164015166323,8.10751626669791,False,34,0.272231560020326,0.01,False
-static_data__summary__doctypes__@count,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,1.954422858929758e-05,0.01,False
-static_data__summary__doctypes__doctype,,VARCHAR(64),Book Review,1.0,4,24,,,Article,13,0.5716295977797756,2.0722041580094848,False,36,0.00025407497166086854,0.01,False
-static_data__summary__publishers__publisher__address_spec__@addr_no,,TINYINT UNSIGNED,1,0.9953289293671579,1,1,,,1,2,0.9953289293671579,0.006723166864206623,False,254,3.908845717859516e-05,0.01,False
-static_data__summary__publishers__publisher__address_spec__full_address,,TEXT,"527 S WELLS ST, 5TH FLOOR, CHICAGO, IL 60607 USA",0.9953289293671579,29,107,,,"120 BLVD SAINT-GERMAIN, 75280 PARIS 06, FRANCE",404,0.06334284485791346,7.025428090427242,False,160,0.007895868350076222,0.01,False
-static_data__summary__publishers__publisher__address_spec__city,,VARCHAR(32),CHICAGO,0.9953289293671579,4,21,,,LONDON,156,0.13366297932220617,5.153645596719328,False,31,0.0030488996599304227,0.01,False
-static_data__summary__publishers__publisher__names__@count,,TINYINT UNSIGNED,1,0.9953289293671579,1,1,,,1,2,0.9953289293671579,0.006723166864206623,False,254,3.908845717859516e-05,0.01,False
-static_data__summary__publishers__publisher__names__name__@role,,VARCHAR(16),publisher,0.9953289293671579,9,9,,,publisher,2,0.9953289293671579,0.006723166864206623,False,13,3.908845717859516e-05,0.01,False
-static_data__summary__publishers__publisher__names__name__@seq_no,,TINYINT UNSIGNED,1,0.9953289293671579,1,1,,,1,2,0.9953289293671579,0.006723166864206623,False,254,3.908845717859516e-05,0.01,False
-static_data__summary__publishers__publisher__names__name__@addr_no,,TINYINT UNSIGNED,1,0.9953289293671579,1,1,,,1,2,0.9953289293671579,0.006723166864206623,False,254,3.908845717859516e-05,0.01,False
-static_data__summary__publishers__publisher__names__name__display_name,,TEXT,SOC AMER ARCHIVISTS,0.9953289293671579,3,59,,,MASSON EDITEUR,338,0.08015088144470937,6.853441093294377,False,88,0.006605949263182582,0.01,False
-static_data__summary__publishers__publisher__names__name__full_name,,TEXT,SOC AMER ARCHIVISTS,0.9953289293671579,3,59,,,MASSON EDITEUR,338,0.08015088144470937,6.853441093294377,False,88,0.006605949263182582,0.01,False
-static_data__summary__publishers__publisher__names__name__unified_name,,TEXT,Soc Amer Archivists,0.8029355431341125,4,59,,,Elsevier,235,0.1970644568658875,5.067417387476524,False,88,0.004592893718484931,0.01,False
-static_data__fullrecord_metadata__languages__@count,,TINYINT UNSIGNED,1,1.0,1,2,,,1,2,0.9999804557714107,0.0003339244571487969,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__languages__language__@type,,VARCHAR(16),primary,0.9999804557714107,7,7,,,primary,2,0.9999804557714107,2.819608612391457e-05,False,10,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__languages__language__#text,,VARCHAR(16),English,0.9999804557714107,6,10,,,English,10,0.9860845092444201,0.13344291345923862,False,15,0.00019544228589297581,0.01,False
-static_data__fullrecord_metadata__normalized_languages__@count,,TINYINT UNSIGNED,1,1.0,1,2,,,1,2,0.9999804557714107,0.0003339244571487969,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__normalized_languages__language__@type,,VARCHAR(16),primary,0.9999804557714107,7,7,,,primary,2,0.9999804557714107,2.819608612391457e-05,False,10,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__normalized_languages__language__#text,,VARCHAR(16),English,0.9999804557714107,6,10,,,English,10,0.9860845092444201,0.13344291345923862,False,15,0.00019544228589297581,0.01,False
-static_data__fullrecord_metadata__normalized_doctypes__@count,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,1.954422858929758e-05,0.01,False
-static_data__fullrecord_metadata__normalized_doctypes__doctype,,VARCHAR(32),Review,1.0,6,18,,,Article,8,0.6121643278739788,1.769412249305999,False,27,0.00015635382871438065,0.01,False
-static_data__fullrecord_metadata__references__@count,,SMALLINT UNSIGNED,1,1.0,0,6349,,,0,274,0.35773756009850294,3.876009618376635,False,65534,0.005355118633467537,0.01,False
-static_data__fullrecord_metadata__references__reference__@occurenceOrder,,TINYINT UNSIGNED,1,0.16858851581128093,1,2,,,1,3,0.831411484188719,0.4332901497614554,False,254,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__references__reference__uid,,VARCHAR(64),WOS:000203024800008.1,0.16858851581128093,15,24,,,WOS:000201327900015,8586,0.831411484188719,2.635502617414152,False,36,0.16780674666770903,0.01,False
-static_data__fullrecord_metadata__references__reference__year,,VARCHAR(32),1943,0.14750029316342883,4,14,,,1944,77,0.8524997068365712,0.7931613216395789,False,21,0.0015049056013759137,0.01,False
-static_data__fullrecord_metadata__references__reference__citedWork,,TEXT,13 ANN REPORT HIST C,0.16851033889692374,2,110,,,NATURE,5373,0.8314896611030763,2.418625826645707,False,165,0.1050111402102959,0.01,False
-static_data__fullrecord_metadata__addresses__@count,,TINYINT UNSIGNED,0,1.0,0,5,,,0,6,0.9694523707149278,0.20673744002502617,False,254,0.00011726537153578548,0.01,False
-static_data__fullrecord_metadata__category_info__headings__@count,,TINYINT UNSIGNED,1,1.0,1,2,,,1,2,0.9786772466090763,0.14880437129899574,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__category_info__headings__heading,,VARCHAR(32),Science & Technology,0.9786772466090763,15,20,,,Science & Technology,3,0.8093851385685807,0.680741172366645,False,30,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__category_info__subheadings__@count,,TINYINT UNSIGNED,1,0.7628698745260525,1,2,,,1,3,0.7535668217175469,0.37037818162033564,False,254,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__category_info__subheadings__subheading,,VARCHAR(64),Technology,0.7535668217175469,10,27,,,Life Sciences & Biomedicine,4,0.5925810108275026,1.0135376425122682,False,40,7.817691435719032e-05,0.01,False
-static_data__fullrecord_metadata__category_info__subjects__@count,,TINYINT UNSIGNED,2,1.0,2,8,,,2,7,0.8684282531368487,0.7507920242856198,False,254,0.00013680960012508306,0.01,False
-static_data__fullrecord_metadata__fund_ack,,BOOLEAN,,0.0,0,1,,,,1,1.0,-0.0,False,1,1.954422858929758e-05,0.01,False
-static_data__item__@xmlns:xsi,,VARCHAR(64),http://www.w3.org/2001/XMLSchema-instance,1.0,41,41,,,http://www.w3.org/2001/XMLSchema-instance,1,1.0,-0.0,False,61,1.954422858929758e-05,0.01,False
-static_data__item__@xsi:type,,VARCHAR(32),itemType_wos,1.0,12,12,,,itemType_wos,1,1.0,-0.0,False,18,1.954422858929758e-05,0.01,False
-static_data__item__ids__@avail,,VARCHAR(1),Y,1.0,1,1,,,Y,2,0.8948129617324004,0.48522569983835795,False,1,3.908845717859516e-05,0.01,False
-static_data__item__ids__#text,,VARCHAR(8),V44TK,1.0,5,5,,,UX493,3453,0.010690693038345777,11.203728626713252,False,7,0.06748622131884455,0.01,False
-static_data__item__bib_id,,VARCHAR(64),8 (3): 212-213 JUL 1945,1.0,11,33,,,53 (30): 411-411 1945,43640,0.0007231364578040105,15.163587038618177,False,49,0.8529101356369464,0.01,True
-static_data__item__bib_pagecount__@type,,VARCHAR(16),Journal,0.33866239299534845,7,7,,,Journal,2,0.6613376070046515,0.5290178538884782,False,10,3.908845717859516e-05,0.01,False
-static_data__item__bib_pagecount__#text,,SMALLINT UNSIGNED,62,0.33866239299534845,0,647,,,0,156,0.6613376070046515,2.3334186322516217,False,65534,0.0030488996599304227,0.01,False
-static_data__item__reviewed_work__languages__@count,,TINYINT UNSIGNED,1,0.10110229449243638,1,1,,,1,2,0.8988977055075636,0.3342555450065521,False,254,3.908845717859516e-05,0.01,False
-static_data__item__reviewed_work__languages__language,,VARCHAR(16),English,0.10110229449243638,5,10,,,English,11,0.8988977055075636,0.36385609052558626,False,15,0.0002149865144822734,0.01,False
-static_data__item__reviewed_work__rw_year,,SMALLINT UNSIGNED,1943,0.08689364030801704,1812,1954,,,1944,16,0.913106359691983,0.45105557941574753,False,65534,0.0003127076574287613,0.01,False
-static_data__fullrecord_metadata__references__reference__citedAuthor,,VARCHAR(64),"Borst, LB",0.14656217019114257,2,26,,,GLUECK S,5481,0.8534378298088574,2.1866045532486336,False,39,0.10712191689794004,0.01,False
-static_data__fullrecord_metadata__references__reference__page,,VARCHAR(32),659,0.0541375131923543,1,12,,,1,976,0.9458624868076457,0.7442405141349565,False,18,0.019075167103154437,0.01,False
-static_data__fullrecord_metadata__references__reference__volume,,VARCHAR(8),57,0.05097134816088809,1,4,,,1,235,0.9490286518391119,0.5647385914394832,False,6,0.004592893718484931,0.01,False
-static_data__fullrecord_metadata__references__reference__citedTitle,,TEXT,Search for a neutron-deuteron reaction,0.020540984247351755,10,260,,,SHALL WE NATIONALIZE MEDICINE,1005,0.9794590157526483,0.3193051285190396,False,390,0.01964194973224407,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__@addr_no,,TINYINT UNSIGNED,1,0.0290818121408748,1,1,,,1,2,0.9709181878591252,0.14842597941753571,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__full_address,,TEXT,"Natl Univ Chekiang, Dept Phys, Meitan, Kweichow, PEOPLES R CHINA",0.0290818121408748,21,105,,,"Univ Calif, Berkeley, CA USA",1137,0.9709181878591252,0.43601435706678776,False,157,0.02222178790603135,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__organizations__@count,,TINYINT UNSIGNED,1,0.0290818121408748,1,7,,,1,8,0.9709181878591252,0.19483343575703166,False,254,0.00015635382871438065,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__organizations__organization,,VARCHAR(64),Natl Univ Chekiang,0.017023023101278192,3,41,,,WLA Union Catalog,653,0.9829769768987218,0.25469784724993394,False,61,0.01276238126881132,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__suborganizations__@count,,TINYINT UNSIGNED,1,0.008540827893523043,1,3,,,1,4,0.9914591721064769,0.06465924895390981,False,254,7.817691435719032e-05,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__suborganizations__suborganization,,TEXT,Dept Phys,0.0072509088066294025,4,49,,,Dept Psychol,234,0.9927490911933706,0.1025879205386831,False,73,0.004573349489895634,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__city,,VARCHAR(64),Meitan,0.0290818121408748,4,23,,,Washington,426,0.9709181878591252,0.36128110783790934,False,34,0.00832584137904077,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__state,,VARCHAR(16),Kweichow,0.028163233397177814,2,10,,,NY,63,0.9718367666028221,0.2729206936434103,False,15,0.0012312864011257475,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__country,,VARCHAR(32),PEOPLES R CHINA,0.0290818121408748,3,15,,,USA,24,0.9709181878591252,0.162332227188314,False,22,0.0004690614861431419,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__@count,,TINYINT UNSIGNED,1,0.00011726537153578548,1,1,,,1,2,0.9998827346284642,0.0015312436380961543,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__@addr_no,,TINYINT UNSIGNED,1,0.00011726537153578548,1,1,,,1,2,0.9998827346284642,0.0015312436380961543,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__full_address,,TEXT,"Natl Univ Chekiang, Dept Phys, Meitan, Kweichow, PEOPLES R CHINA",0.00011726537153578548,53,74,,,"Natl Univ Chekiang, Dept Phys, Meitan, Kweichow, PEOPLES R CHINA",6,0.9998827346284642,0.0017952817689706989,False,111,0.00011726537153578548,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__organizations__@count,,TINYINT UNSIGNED,1,0.00011726537153578548,1,2,,,1,3,0.9998827346284642,0.0016074687588773396,False,254,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__organizations__organization,,VARCHAR(64),Natl Univ Chekiang,9.772114294648791e-05,18,34,,,Natl Univ Chekiang,3,0.9999022788570535,0.001372288026410031,False,51,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__suborganizations__@count,,TINYINT UNSIGNED,1,9.772114294648791e-05,1,2,,,1,3,0.9999022788570535,0.001372288026410031,False,254,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__suborganizations__suborganization,,VARCHAR(32),Dept Phys,7.817691435719032e-05,9,14,,,Dept Phys,4,0.9999218230856428,0.0011838250269209341,False,21,7.817691435719032e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__city,,VARCHAR(16),Meitan,0.00011726537153578548,6,9,,,Meitan,5,0.9998827346284642,0.001741439617890617,False,13,9.772114294648791e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__state,,VARCHAR(16),Kweichow,0.00011726537153578548,3,10,,,Kweichow,5,0.9998827346284642,0.001741439617890617,False,15,9.772114294648791e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__address_spec__country,,VARCHAR(32),PEOPLES R CHINA,0.00011726537153578548,7,15,,,PEOPLES R CHINA,4,0.9998827346284642,0.0016780163974349134,False,22,7.817691435719032e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__@count,,TINYINT UNSIGNED,1,0.00011726537153578548,1,1,,,1,2,0.9998827346284642,0.0015312436380961543,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__name__@seq_no,,TINYINT UNSIGNED,1,0.00011726537153578548,1,1,,,1,2,0.9998827346284642,0.0015312436380961543,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__name__@role,,VARCHAR(16),author,0.00011726537153578548,6,6,,,author,2,0.9998827346284642,0.0015312436380961543,False,9,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__name__@addr_no,,TINYINT UNSIGNED,1,0.00011726537153578548,1,1,,,1,2,0.9998827346284642,0.0015312436380961543,False,254,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__name__display_name,,VARCHAR(32),"WANG, KC",0.00011726537153578548,6,12,,,"WANG, KC",6,0.9998827346284642,0.0017952817689706989,False,18,0.00011726537153578548,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__name__full_name,,VARCHAR(32),"WANG, KC",0.00011726537153578548,6,12,,,"WANG, KC",6,0.9998827346284642,0.0017952817689706989,False,18,0.00011726537153578548,0.01,False
-static_data__fullrecord_metadata__reprint_addresses__address_name__names__name__wos_standard,,VARCHAR(32),"WANG, KC",0.00011726537153578548,6,12,,,"WANG, KC",6,0.9998827346284642,0.0017952817689706989,False,18,0.00011726537153578548,0.01,False
-static_data__summary__names__name__@orcid_id,,VARCHAR(32),0000-0001-9640-1172,0.02486025876558652,19,19,,,0000-0001-7065-0779,904,0.9751397412344135,0.3699272520844932,False,28,0.01766798264472501,0.01,False
-static_data__item__reviewed_work__rw_authors__@count,,TINYINT UNSIGNED,1,0.09404682797169996,1,12,,,1,11,0.9059531720283001,0.3872097246442545,False,254,0.0002149865144822734,0.01,False
-static_data__item__reviewed_work__rw_authors__rw_author,,VARCHAR(64),"Moon, P",0.08159715436031739,5,37,,,"Linton, R",2576,0.9184028456396826,1.1910064871335035,False,55,0.05034593284603057,0.01,False
-static_data__summary__names__name__suffix,,VARCHAR(4),SR,0.009107610522612672,1,3,,,I,10,0.9908923894773873,0.08344432302434895,False,4,0.00019544228589297581,0.01,False
-static_data__contributors__@count,,TINYINT UNSIGNED,1,0.005785091662432084,1,3,,,1,4,0.9942149083375679,0.04525048583304471,False,254,7.817691435719032e-05,0.01,False
-static_data__contributors__contributor__name__@seq_no,,TINYINT UNSIGNED,1,0.005394207090646132,1,1,,,1,2,0.9946057929093539,0.040641970283437134,False,254,3.908845717859516e-05,0.01,False
-static_data__contributors__contributor__name__@role,,VARCHAR(32),researcher_id,0.005394207090646132,13,13,,,researcher_id,2,0.9946057929093539,0.040641970283437134,False,19,3.908845717859516e-05,0.01,False
-static_data__contributors__contributor__name__@r_id,,VARCHAR(32),AGH-9427-2022,0.005218309033342454,11,13,,,GZG-5663-2022,185,0.9947816909666576,0.07749347178287885,False,19,0.0036156822890200525,0.01,False
-static_data__contributors__contributor__name__@orcid_id,,VARCHAR(32),0000-0002-5554-6946,0.002052144001876246,19,19,,,0000-0002-1502-8431,73,0.9979478559981237,0.030549978391118206,False,28,0.0014267286870187233,0.01,False
-static_data__contributors__contributor__name__display_name,,VARCHAR(64),"Berk, Michael",0.005394207090646132,5,27,,,"Miller, John J",193,0.9946057929093539,0.0802059386649242,False,40,0.003772036117734433,0.01,False
-static_data__contributors__contributor__name__full_name,,VARCHAR(64),"Berk, Michael",0.005394207090646132,5,27,,,"Miller, John J",193,0.9946057929093539,0.0802059386649242,False,40,0.003772036117734433,0.01,False
-static_data__contributors__contributor__name__first_name,,VARCHAR(32),Michael,0.005394207090646132,1,18,,,Michael,173,0.9946057929093539,0.07898625426597633,False,27,0.0033811515459484815,0.01,False
-static_data__contributors__contributor__name__last_name,,VARCHAR(32),Berk,0.005394207090646132,1,16,,,Parodi,177,0.9946057929093539,0.07941704510325043,False,24,0.003459328460305672,0.01,False
-static_data__fullrecord_metadata__references__reference__doi,,VARCHAR(64),10.7326/0003-4819-20-3-453,0.00017589805730367823,25,27,,,10.7326/0003-4819-11-9-1662,9,0.9998241019426963,0.002712466882045346,False,40,0.00017589805730367823,0.01,False
-static_data__summary__pub_info__@part_no,,VARCHAR(4),1,0.0035179611460735643,1,3,,,1,9,0.9964820388539264,0.03661698722692452,False,4,0.00017589805730367823,0.01,False
-static_data__summary__pub_info__@supplement,,VARCHAR(1),S,0.0003322518860180589,1,1,,,S,2,0.999667748113982,0.0038393150693888404,False,1,3.908845717859516e-05,0.01,False
-static_data__item__keywords_plus__@count,,TINYINT UNSIGNED,10,0.0010944768010006645,1,10,,,1,10,0.9989055231989994,0.013598529670082075,False,254,0.00019544228589297581,0.01,False
-static_data__item__keywords_plus__keyword,,VARCHAR(32),HISTOPLASMOSIS,0.00035179611460735646,3,20,,,HISTOPLASMOSIS,19,0.9996482038853927,0.005503110678447882,False,30,0.00037134034319665404,0.01,False
-static_data__fullrecord_metadata__references__reference__citedTitle__i,,VARCHAR(32),Euphorbia dendroides,3.908845717859516e-05,8,20,,,Euphorbia dendroides,3,0.9999609115428214,0.0006114567420497646,False,30,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__references__reference__citedTitle__#text,,TEXT,"Insecticidal value of 
-.",3.908845717859516e-05,24,108,,,"Insecticidal value of 
-.",3,0.9999609115428214,0.0006114567420497646,False,162,5.863268576789274e-05,0.01,False
-static_data__fullrecord_metadata__references__reference__assignee,,VARCHAR(32),BALDWIN,5.863268576789274e-05,7,14,,,BALDWIN,4,0.9999413673142321,0.0009171851130746469,False,21,7.817691435719032e-05,0.01,False
-static_data__fullrecord_metadata__references__reference__patent_no,,VARCHAR(16),GB 567501,7.817691435719032e-05,9,10,,,GB 567501,5,0.9999218230856428,0.0012229134840995293,False,15,9.772114294648791e-05,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__zip__@location,,VARCHAR(4),AC,1.954422858929758e-05,2,2,,,AC,2,0.9999804557714107,0.0003057283710248823,False,3,3.908845717859516e-05,0.01,False
-static_data__fullrecord_metadata__addresses__address_name__address_spec__zip__#text,,TINYINT UNSIGNED,1,1.954422858929758e-05,1,1,,,1,2,0.9999804557714107,0.0003057283710248823,False,254,3.908845717859516e-05,0.01,False
+@r_id_disclaimer,,TEXT,ResearcherID data provided by Clarivate Analytics,1.0,49,49,,,ResearcherID data provided by Clarivate Analytics,1,1.0,-0.0,False,73,0.001001001001001001,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:001018722200015,999,0.001001001001001001,9.96434086779242,False,28,1.0,0.01,False
+dynamic_data__ic_related__oases__@count,,VARCHAR(1),,1.0,0,1,,,,7,0.5375375375375375,1.7294107462660024,False,1,0.007007007007007007,0.01,False
+dynamic_data__ic_related__oases__@is_OA,,VARCHAR(4),,1.0,0,3,,,,2,0.5375375375375375,0.995930464977218,False,4,0.002002002002002002,0.01,False
+static_data__contributors__@count,,VARCHAR(4),1,1.0,0,2,,,,20,0.41541541541541543,2.417268607384016,False,3,0.02002002002002002,0.01,False
+static_data__fullrecord_metadata__abstracts__@count,,VARCHAR(1),1,1.0,0,1,,,1,2,0.8248248248248248,0.669407555510507,False,1,0.002002002002002002,0.01,False
+static_data__fullrecord_metadata__abstracts__abstract__abstract_text__#text,,TEXT,"%_lt_;p%_lt_;When extended distally due to higher loading in the posterior region, implant-supported bar-retained overdentures with cantilever bar extension exhibit greater bending moments on the implants closest to the cantilever bar and increased stresses in the overdenture components. In this study, a new abutment-bar structure connection was introduced to minimize undesired bending moments and reduce the resulting stresses by increasing the rotational mobility of the bar structure on the abutments. Copings of the bar structure were modified to have 2 spherical surfaces, sharing the same center, located at the centroid of the top surface of the coping screw head. The new connection design was applied to a 4 implant-supported mandibular overdenture to create a modified overdenture. Both the classical and modified models had bar structures with cantilever extensions in the first and second molar areas and were analyzed for deformation and stress distribution using finite element analysis, which was also conducted for both the overdenture models without cantilever bar extensions. Real-scale prototypes of both models with cantilever extensions were manufactured, assembled on implants embedded in polyurethane blocks, and subjected to fatigue testing. Both models' implants were subjected to pullout testing. The new connection design increased the rotational mobility of the bar structure, minimized the bending moment effects, and reduced the stress levels in the peri-implant bone and overdenture components, whether cantilevered or not. Our results verify the effects of rotational mobility of the bar structure on the abutments and validate the importance of the abutment-bar connection geometry as a design parameter.%_lt_;/p%_lt_;/",1.0,0,3543,,,,825,0.17517517517517517,8.65907365600998,False,5314,0.8258258258258259,0.01,False
+static_data__fullrecord_metadata__abstracts__abstract__abstract_text__@count,,VARCHAR(1),1,1.0,0,1,,,1,10,0.7787787787787788,1.0220923913959252,False,1,0.01001001001001001,0.01,False
+static_data__fullrecord_metadata__addresses__@count,,TINYINT UNSIGNED,2,1.0,0,37,,,2,24,0.22722722722722724,3.1000155116061467,False,254,0.024024024024024024,0.01,False
+static_data__fullrecord_metadata__category_info__headings__@count,,TINYINT UNSIGNED,1,1.0,1,2,,,1,2,0.9719719719719719,0.1844040047697471,False,254,0.002002002002002002,0.01,False
+static_data__fullrecord_metadata__category_info__subheadings__@count,,VARCHAR(1),1,1.0,0,1,,,1,4,0.7617617617617618,1.0615789264077202,False,1,0.004004004004004004,0.01,False
+static_data__fullrecord_metadata__category_info__subjects__@count,,TINYINT UNSIGNED,2,1.0,2,10,,,2,9,0.5375375375375375,1.975256665419452,False,254,0.009009009009009009,0.01,False
+static_data__fullrecord_metadata__fund_ack__fund_text,,TEXT,"%_lt_;p%_lt_;The authors would like to thank Associate Professor Hakki Cenker Kkesxmen of Sleyman Demirel University Faculty of Dentistry for his valuable suggestions regarding clinical practice, Professor Hikmet Orhan of Sleyman Demirel Univer-sity Faculty of Medicine for his contribution to the statistical analysis of the data, and Editage ( www.editage.com ) for English language editing. This study was supported by the Scientific Research Fund of Suleyman Demirel University under project No. 028-DOAP2-T17.%_lt_;/p%_lt_;/",1.0,0,3580,,,,565,0.43043043043043044,6.185229190317039,False,5370,0.5655655655655656,0.01,False
+static_data__fullrecord_metadata__fund_ack__grants__@count,,VARCHAR(4),1,1.0,0,2,,,,16,0.43043043043043044,2.4287194577344753,False,3,0.016016016016016016,0.01,False
+static_data__fullrecord_metadata__keywords__@count,,VARCHAR(4),5,1.0,0,2,,,,17,0.2802802802802803,2.674790869579847,False,3,0.01701701701701702,0.01,False
+static_data__fullrecord_metadata__languages__@count,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,0.001001001001001001,0.01,False
+static_data__fullrecord_metadata__languages__language__#text,,VARCHAR(16),English,1.0,5,9,,,English,8,0.988988988988989,0.11599592303767509,False,13,0.008008008008008008,0.01,False
+static_data__fullrecord_metadata__languages__language__@type,,VARCHAR(16),primary,1.0,7,7,,,primary,1,1.0,-0.0,False,10,0.001001001001001001,0.01,False
+static_data__fullrecord_metadata__normalized_doctypes__@count,,TINYINT UNSIGNED,1,1.0,1,2,,,1,2,0.8688688688688688,0.5605321761375495,False,254,0.002002002002002002,0.01,False
+static_data__fullrecord_metadata__normalized_languages__@count,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,0.001001001001001001,0.01,False
+static_data__fullrecord_metadata__normalized_languages__language__#text,,VARCHAR(16),English,1.0,5,9,,,English,8,0.988988988988989,0.11599592303767509,False,13,0.008008008008008008,0.01,False
+static_data__fullrecord_metadata__normalized_languages__language__@type,,VARCHAR(16),primary,1.0,7,7,,,primary,1,1.0,-0.0,False,10,0.001001001001001001,0.01,False
+static_data__fullrecord_metadata__references__@count,,SMALLINT UNSIGNED,47,1.0,0,434,,,0,155,0.1021021021021021,6.410777553757684,False,65534,0.15515515515515516,0.01,False
+static_data__fullrecord_metadata__reprint_addresses__@count,,VARCHAR(1),1,1.0,0,1,,,1,7,0.6506506506506506,1.5323780080159144,False,1,0.007007007007007007,0.01,False
+static_data__item__@xmlns:xsi,,VARCHAR(64),http://www.w3.org/2001/XMLSchema-instance,1.0,41,41,,,http://www.w3.org/2001/XMLSchema-instance,1,1.0,-0.0,False,61,0.001001001001001001,0.01,False
+static_data__item__@xsi:type,,VARCHAR(32),itemType_wos,1.0,12,12,,,itemType_wos,1,1.0,-0.0,False,18,0.001001001001001001,0.01,False
+static_data__item__bib_id,,TEXT,49 (3): 330-339 JUN 2023,1.0,8,53,,,: - 2023,922,0.01001001001001001,9.782145403860142,False,79,0.9229229229229229,0.01,False
+static_data__item__bib_pagecount__#text,,SMALLINT UNSIGNED,110,1.0,1,6581,,,10,319,0.057057057057057055,7.060184149446238,False,65534,0.31931931931931934,0.01,False
+static_data__item__bib_pagecount__@type,,VARCHAR(16),Journal,1.0,4,7,,,Journal,2,0.992992992992993,0.06022252509153394,False,10,0.002002002002002002,0.01,False
+static_data__item__book_chapters,,VARCHAR(4),,1.0,0,2,,,,3,0.997997997997998,0.02283401562524976,False,3,0.003003003003003003,0.01,False
+static_data__item__book_pages,,VARCHAR(4),,1.0,0,3,,,,8,0.992992992992993,0.07989368070154718,False,4,0.008008008008008008,0.01,False
+static_data__item__ids__#text,,VARCHAR(8),K8ET3,1.0,5,5,,,O0QN2,959,0.008008008008008008,9.871228205121094,False,7,0.95995995995996,0.01,False
+static_data__item__ids__@avail,,VARCHAR(1),Y,1.0,1,1,,,N,2,0.7067067067067067,0.8729374985480021,False,1,0.002002002002002002,0.01,False
+static_data__item__keywords_plus__@count,,VARCHAR(4),6,1.0,0,2,,,,11,0.2682682682682683,3.0847120886621058,False,3,0.011011011011011011,0.01,False
+static_data__item__reviewed_work__languages__@count,,VARCHAR(1),,1.0,0,1,,,,2,0.991991991991992,0.06727722819100719,False,1,0.002002002002002002,0.01,False
+static_data__item__reviewed_work__languages__language,,VARCHAR(16),,1.0,0,7,,,,4,0.991991991991992,0.07577595191039965,False,10,0.004004004004004004,0.01,False
+static_data__item__reviewed_work__rw_authors__@count,,VARCHAR(1),,1.0,0,1,,,,3,0.993993993993994,0.056863391666179985,False,1,0.003003003003003003,0.01,False
+static_data__item__reviewed_work__rw_year,,VARCHAR(64),,1.0,2021-01-01 00:00:00,2023-01-01 00:00:00,,,,4,0.991991991991992,0.07977995591440365,False,-,0.004004004004004004,0.01,False
+static_data__summary__EWUID__WUID__@coll_id,,VARCHAR(4),WOS,1.0,3,3,,,WOS,1,1.0,-0.0,False,4,0.001001001001001001,0.01,False
+static_data__summary__conferences__@count,,VARCHAR(1),,1.0,0,1,,,,2,0.9279279279279279,0.3736090708557683,False,1,0.002002002002002002,0.01,False
+static_data__summary__conferences__conference__@conf_id,,VARCHAR(16),,1.0,0,6,,,,53,0.9279279279279279,0.7619673667490178,False,9,0.05305305305305305,0.01,False
+static_data__summary__conferences__conference__conf_dates__@count,,VARCHAR(1),,1.0,0,1,,,,2,0.9279279279279279,0.3736090708557683,False,1,0.002002002002002002,0.01,False
+static_data__summary__conferences__conference__conf_dates__conf_date__#text,,VARCHAR(32),,1.0,0,19,,,,53,0.9279279279279279,0.7619673667490178,False,28,0.05305305305305305,0.01,False
+static_data__summary__conferences__conference__conf_dates__conf_date__@conf_end,,VARCHAR(64),,1.0,2021-11-01 00:00:00,2023-10-25 00:00:00,,,,50,0.92992992992993,0.7365857461126002,False,-,0.05005005005005005,0.01,False
+static_data__summary__conferences__conference__conf_dates__conf_date__@conf_start,,VARCHAR(64),,1.0,2021-10-28 00:00:00,2023-10-22 00:00:00,,,,51,0.9279279279279279,0.755819509441634,False,-,0.05105105105105105,0.01,False
+static_data__summary__conferences__conference__conf_infos__@count,,VARCHAR(1),,1.0,0,1,,,,2,0.9279279279279279,0.3736090708557683,False,1,0.002002002002002002,0.01,False
+static_data__summary__conferences__conference__conf_infos__conf_info,,TEXT,,1.0,0,233,,,,53,0.9279279279279279,0.7619673667490178,False,349,0.05305305305305305,0.01,False
+static_data__summary__conferences__conference__conf_locations__@count,,VARCHAR(1),,1.0,0,1,,,,2,0.9279279279279279,0.3736090708557683,False,1,0.002002002002002002,0.01,False
+static_data__summary__conferences__conference__conf_locations__conf_location__conf_city,,VARCHAR(32),,1.0,0,16,,,,37,0.9319319319319319,0.6755134825173446,False,24,0.037037037037037035,0.01,False
+static_data__summary__conferences__conference__conf_locations__conf_location__conf_host,,VARCHAR(64),,1.0,0,22,,,,6,0.994994994994995,0.057074171783496955,False,33,0.006006006006006006,0.01,False
+static_data__summary__conferences__conference__conf_locations__conf_location__conf_state,,VARCHAR(32),,1.0,0,15,,,,28,0.9279279279279279,0.6752235161592899,False,22,0.028028028028028028,0.01,False
+static_data__summary__conferences__conference__conf_titles__@count,,VARCHAR(1),,1.0,0,1,,,,2,0.9279279279279279,0.3736090708557683,False,1,0.002002002002002002,0.01,False
+static_data__summary__conferences__conference__conf_titles__conf_title,,TEXT,,1.0,0,198,,,,53,0.9279279279279279,0.7619673667490178,False,297,0.05305305305305305,0.01,False
+static_data__summary__conferences__conference__sponsors__@count,,VARCHAR(4),,1.0,0,2,,,,12,0.9569569569569569,0.3456305719408995,False,3,0.012012012012012012,0.01,False
+static_data__summary__doctypes__@count,,TINYINT UNSIGNED,1,1.0,1,2,,,1,2,0.8688688688688688,0.5605321761375495,False,254,0.002002002002002002,0.01,False
+static_data__summary__names__@count,,TINYINT UNSIGNED,2,1.0,1,40,,,5,27,0.13113113113113112,3.6984323129058807,False,254,0.02702702702702703,0.01,False
+static_data__summary__pub_info__@coverdate,,VARCHAR(32),JUN 2023,1.0,4,12,,,2023,245,0.07707707707707707,6.432206809748536,False,18,0.24524524524524524,0.01,False
+static_data__summary__pub_info__@early_access_date,,VARCHAR(64),,1.0,2022-11-01 00:00:00,2023-12-01 00:00:00,,,,14,0.5495495495495496,2.586153500158284,False,-,0.014014014014014014,0.01,False
+static_data__summary__pub_info__@early_access_month,,VARCHAR(4),,1.0,0,2,,,,13,0.5495495495495496,2.5744040912860786,False,3,0.013013013013013013,0.01,False
+static_data__summary__pub_info__@early_access_year,,VARCHAR(64),,1.0,2022-01-01 00:00:00,2023-01-01 00:00:00,,,,3,0.5495495495495496,1.0114293270560213,False,-,0.003003003003003003,0.01,False
+static_data__summary__pub_info__@has_abstract,,VARCHAR(1),Y,1.0,1,1,,,Y,2,0.8358358358358359,0.6441791338543332,False,1,0.002002002002002002,0.01,False
+static_data__summary__pub_info__@issue,,VARCHAR(16),3,1.0,0,7,,,,56,0.3923923923923924,3.572426147394859,False,10,0.056056056056056056,0.01,False
+static_data__summary__pub_info__@part_no,,VARCHAR(1),,1.0,0,1,,,,5,0.993993993993994,0.06372500625304019,False,1,0.005005005005005005,0.01,False
+static_data__summary__pub_info__@pubmonth,,VARCHAR(16),JUN,1.0,0,7,,,,240,0.07807807807807808,6.385661263548766,False,10,0.24024024024024024,0.01,False
+static_data__summary__pub_info__@pubtype,,VARCHAR(32),Journal,1.0,4,14,,,Journal,3,0.973973973973974,0.1990703133670978,False,21,0.003003003003003003,0.01,False
+static_data__summary__pub_info__@pubyear,,YEAR,2023,1.0,2022,2024,,,2023,3,0.986986986986987,0.10525460885620752,False,2100,0.003003003003003003,0.01,False
+static_data__summary__pub_info__@sortdate,,VARCHAR(64),2023-06-01,1.0,2022-01-01 00:00:00,2024-02-01 00:00:00,,,2023-01-01,220,0.11311311311311312,5.947992724180176,False,-,0.22022022022022023,0.01,False
+static_data__summary__pub_info__@special_issue,,VARCHAR(4),,1.0,0,2,,,,2,0.980980980980981,0.1358966205672459,False,3,0.002002002002002002,0.01,False
+static_data__summary__pub_info__@supplement,,VARCHAR(4),,1.0,0,2,,,,11,0.928928928928929,0.5269900756634214,False,3,0.011011011011011011,0.01,False
+static_data__summary__pub_info__@vol,,VARCHAR(8),49,1.0,0,5,,,,254,0.15315315315315314,6.618887320425074,False,7,0.25425425425425424,0.01,False
+static_data__summary__pub_info__page__#text,,VARCHAR(16),330-339,1.0,0,11,,,,416,0.5825825825825826,4.609388465817823,False,16,0.4164164164164164,0.01,False
+static_data__summary__pub_info__page__@begin,,VARCHAR(8),330,1.0,0,5,,,,376,0.5825825825825826,4.517522162003191,False,7,0.3763763763763764,0.01,False
+static_data__summary__pub_info__page__@end,,VARCHAR(8),339,1.0,0,5,,,,380,0.5825825825825826,4.528778530869895,False,7,0.38038038038038036,0.01,False
+static_data__summary__pub_info__page__@page_count,,SMALLINT UNSIGNED,10,1.0,1,233,,,10,50,0.08608608608608609,4.69517447853382,False,65534,0.05005005005005005,0.01,False
+static_data__summary__publishers__publisher__address_spec__@addr_no,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,0.001001001001001001,0.01,False
+static_data__summary__publishers__publisher__address_spec__city,,VARCHAR(32),LAWRENCE,1.0,4,19,,,BASEL,118,0.1031031031031031,5.090458371383036,False,28,0.11811811811811812,0.01,False
+static_data__summary__publishers__publisher__address_spec__full_address,,TEXT,"810 E 10TH ST, LAWRENCE, KS 66044 USA",1.0,29,126,,,"ST ALBAN-ANLAGE 66, CH-4052 BASEL, SWITZERLAND",199,0.0980980980980981,6.136313423758121,False,189,0.1991991991991992,0.01,False
+static_data__summary__publishers__publisher__names__@count,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,0.001001001001001001,0.01,False
+static_data__summary__publishers__publisher__names__name__@addr_no,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,0.001001001001001001,0.01,False
+static_data__summary__publishers__publisher__names__name__@role,,VARCHAR(16),publisher,1.0,9,9,,,publisher,1,1.0,-0.0,False,13,0.001001001001001001,0.01,False
+static_data__summary__publishers__publisher__names__name__@seq_no,,TINYINT UNSIGNED,1,1.0,1,1,,,1,1,1.0,-0.0,False,254,0.001001001001001001,0.01,False
+static_data__summary__publishers__publisher__names__name__display_name,,TEXT,ALLEN PRESS INC,1.0,3,62,,,MDPI,193,0.0980980980980981,6.049388946139143,False,93,0.1931931931931932,0.01,False
+static_data__summary__publishers__publisher__names__name__full_name,,TEXT,ALLEN PRESS INC,1.0,3,62,,,MDPI,193,0.0980980980980981,6.049388946139143,False,93,0.1931931931931932,0.01,False
+static_data__summary__publishers__publisher__names__name__unified_name,,TEXT,Allen Press Inc,0.954954954954955,4,62,,,Elsevier,144,0.22422422422422422,4.473335798902788,False,93,0.14414414414414414,0.01,False
+static_data__summary__titles__@count,,TINYINT UNSIGNED,6,1.0,2,8,,,6,5,0.973973973973974,0.21929026425820866,False,254,0.005005005005005005,0.01,False

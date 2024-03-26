@@ -1,0 +1,5 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,9,1.6253385495034607,1.697693524600758,,10,0.3006319590731267,2.462925061903265,False,254,0.003009328919650918,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:001097757000001,999,0.003009328919650918,9.787603073893553,False,28,0.3006319590731267,0.01,False
+static_data__fullrecord_metadata__category_info__subjects__subject__#text,,TEXT,"Dentistry, Oral Surgery & Medicine",1.0,3,48,,,Engineering,247,0.04092687330725248,7.124804404942356,False,72,0.07433042431537767,0.01,False
+static_data__fullrecord_metadata__category_info__subjects__subject__@ascatype,,VARCHAR(16),traditional,1.0,8,11,,,traditional,2,0.5206139030996088,0.998773554957608,False,16,0.0006018657839301836,0.01,False

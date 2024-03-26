@@ -1,0 +1,19 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,39,3.9055652173913042,4.383108556495959,,40,0.17373913043478262,3.563131250387311,False,254,0.006956521739130435,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:000968962500001,999,0.006956521739130435,9.644208887002389,False,28,0.17373913043478262,0.01,False
+static_data__summary__names__name__@addr_no,,VARCHAR(64),1,1.0,0,24,,,1,152,0.42417391304347823,3.4797091691521214,False,36,0.026434782608695653,0.01,False
+static_data__summary__names__name__@claim_status,,VARCHAR(8),true,1.0,0,5,,,false,3,0.788695652173913,0.856423303615745,False,7,0.0005217391304347826,0.01,False
+static_data__summary__names__name__@orcid_id,,VARCHAR(32),,1.0,0,19,,,,2311,0.5966956521739131,5.478375386523741,False,28,0.40191304347826085,0.01,False
+static_data__summary__names__name__@orcid_id_tr,,VARCHAR(32),,1.0,0,19,,,,1018,0.8198260869565217,2.4784849197828467,False,28,0.17704347826086955,0.01,False
+static_data__summary__names__name__@r_id,,VARCHAR(32),IYS-7403-2023,1.0,0,13,,,,5597,0.025565217391304348,12.302850269468497,False,19,0.9733913043478261,0.01,False
+static_data__summary__names__name__@r_id_tr,,VARCHAR(16),,1.0,0,11,,,,2,0.9998260869565218,0.0024229418821899236,False,16,0.00034782608695652176,0.01,False
+static_data__summary__names__name__@reprint,,VARCHAR(1),,1.0,0,1,,,,2,0.8104347826086956,0.7005610418150775,False,1,0.00034782608695652176,0.01,False
+static_data__summary__names__name__@role,,VARCHAR(16),author,1.0,4,11,,,author,6,0.9892173913043478,0.1061888847699144,False,16,0.0010434782608695651,0.01,False
+static_data__summary__names__name__@seq_no,,TINYINT UNSIGNED,1,1.0,1,40,,,1,40,0.17373913043478262,3.563131250387311,False,254,0.006956521739130435,0.01,False
+static_data__summary__names__name__display_name,,VARCHAR(64),"Akgun, Gokcen",1.0,3,39,,,IEEE,5664,0.002260869565217391,12.45265066344511,False,58,0.9850434782608696,0.01,False
+static_data__summary__names__name__email_addr,,VARCHAR(64),,1.0,0,41,,,,1560,0.7288695652173913,3.7188013230680688,False,61,0.271304347826087,0.01,False
+static_data__summary__names__name__first_name,,VARCHAR(64),Gokcen,1.0,0,32,,,,4171,0.006260869565217392,11.626692254829406,False,48,0.7253913043478261,0.01,False
+static_data__summary__names__name__full_name,,VARCHAR(64),"Akgun, Gokcen",1.0,3,39,,,IEEE,5664,0.002260869565217391,12.45265066344511,False,58,0.9850434782608696,0.01,False
+static_data__summary__names__name__last_name,,VARCHAR(32),Akgun,1.0,0,21,,,Wang,3418,0.03217391304347826,10.509324825742347,False,31,0.5944347826086956,0.01,False
+static_data__summary__names__name__suffix,,VARCHAR(4),,1.0,0,3,,,,5,0.9984347826086957,0.019803205153588715,False,4,0.0008695652173913044,0.01,False
+static_data__summary__names__name__wos_standard,,VARCHAR(64),"Akgün, G",1.0,0,32,,,,5332,0.002782608695652174,12.305996868448666,False,48,0.927304347826087,0.01,False

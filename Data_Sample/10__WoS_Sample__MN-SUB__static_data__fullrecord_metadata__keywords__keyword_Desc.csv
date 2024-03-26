@@ -1,0 +1,4 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,17,2.3766513885144245,2.078477707855214,,18,0.19385279050957133,2.8365432826045156,False,254,0.004853060124022647,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:001009177400004,719,0.004853060124022647,9.416143446296967,False,28,0.19385279050957133,0.01,False
+static_data__fullrecord_metadata__keywords__keyword,,TEXT,implant-supported bar-retained overdentures,1.0,1,69,,,COVID-19,3520,0.0021569156106767324,11.740123461646228,False,103,0.9490428686977622,0.01,False

@@ -1,0 +1,5 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,6,1.8526893523600438,1.3997109428860504,,7,0.21931942919868277,2.3937420115885546,False,254,0.0015367727771679472,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:000949675700001,999,0.0015367727771679472,9.940133669374747,False,28,0.21931942919868277,0.01,False
+dynamic_data__cluster_related__identifiers__identifier__@type,,VARCHAR(32),accession_no,1.0,3,15,,,accession_no,10,0.21931942919868277,2.641127368921153,False,22,0.0021953896816684962,0.01,False
+dynamic_data__cluster_related__identifiers__identifier__@value,,TEXT,K8ET3,1.0,2,49,,,2071-1050,4187,0.0019758507135016466,11.956847949898922,False,73,0.9192096597145993,0.01,False

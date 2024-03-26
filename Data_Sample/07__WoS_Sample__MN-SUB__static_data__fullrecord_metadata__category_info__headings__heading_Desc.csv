@@ -1,0 +1,4 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,BOOLEAN,0,1.0,0,1,0.027263875365141188,0.16293067532173114,,2,0.9727361246348588,0.18047902061007548,False,1,0.0019474196689386564,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:001101702400001,999,0.0019474196689386564,9.949692715587911,False,28,0.9727361246348588,0.01,False
+static_data__fullrecord_metadata__category_info__headings__heading,,VARCHAR(32),Science & Technology,1.0,15,20,,,Science & Technology,3,0.8958130477117819,0.5670373533501056,False,30,0.0029211295034079843,0.01,False

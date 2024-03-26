@@ -9,7 +9,7 @@ MariaDB/MySQL Handling for All type DB
 To preprocess, import, export and manage the DB
 """
 
-__version__ = "0.4.0"
+__version__ = "0.6.0"
 
 from . import manage
 from . import plot

@@ -340,7 +340,10 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     return fig
 
 
-def draw_schema(node_size=8, font_size=5, X_SIZE=10, Y_SIZE=24, title='DB Schema', x_unit=1, table_unit=14, features=['Coverage', 'freq', 'uniq_ratio'], DPI=300, svg_fonttype='none', sep='__'):
+def draw_schema(df_descs, flist, index_key, node_size=8, font_size=5, X_SIZE=10, Y_SIZE=24, 
+                title='DB Schema', x_unit=1, table_unit=14, max_num_row=80, features=['Coverage', 'freq', 'uniq_ratio'], DPI=300, svg_fonttype='none', sep='__'):
+    import matplotlib.pyplot as plt
+    import matplotlib.gridspec as gridspec
     import matplotlib.patches as mpatches
     from matplotlib.patches import Wedge
     
@@ -390,12 +393,22 @@ def draw_schema(node_size=8, font_size=5, X_SIZE=10, Y_SIZE=24, title='DB Schema
         table_name = "/".join(f.split('/')[-1].split(sep)[2:])[:-4]
         table_name = split_title_line(table_name, max_words=max_words)
         
-        if (table_name == 'EX') | (fi == 1):
-            x_base += table_unit*1.4
+        # if (table_name == 'EX') | (fi == 1):
+        #     x_base += table_unit*1.4 * (fi//max_num_table)
+        #     y_base = 0 
+        # elif fi != 0:
+        #     y_base -= i+5
+
+        if fi == 1:
+            x_base = table_unit*1.4
             y_base = 0
-        elif fi != 0:
-            y_base -= i+5
-        plt.text(x_base+table_unit*.42, y_base+1, table_name, ha='center', fontdict=dict(fontsize=font_size*1.4))
+        elif fi > 1:
+            y_base -= i + 5
+        if y_base < -max_num_row:
+            y_base = 0
+            x_base += table_unit*1.4
+        
+        plt.text(x_base+table_unit*.42, y_base+1, f'{y_base}'+' '+table_name, ha='center', fontdict=dict(fontsize=font_size*1.4))
         for j, v in enumerate(features):
             plt.text(x_base+x_unit+table_unit*(.85 + 0.05*j), y_base+1, v[:3], ha='center', fontdict=dict(fontsize=font_size*.8))
         return x_base, y_base
@@ -429,7 +442,7 @@ def draw_schema(node_size=8, font_size=5, X_SIZE=10, Y_SIZE=24, title='DB Schema
     
     plt.xlim([-x_unit*2, table_unit*4])
     
-    plt.tight_layout()
+    # plt.tight_layout()
     plt.axis('off')
     plt.title(title, y=0.985, fontdict=dict(fontsize=font_size*2))
     

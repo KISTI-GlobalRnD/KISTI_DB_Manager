@@ -1,0 +1,6 @@
+,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
+index,,TINYINT UNSIGNED,0,1.0,0,2,0.9148770011714175,0.8294960787315414,,3,0.39008199921905506,1.5747704458745484,False,254,0.0011714174150722373,0.01,False
+UID,,VARCHAR(32),WOS:001018722200015,1.0,19,19,,,WOS:001018722200015,999,0.0011714174150722373,9.872445797968545,False,28,0.39008199921905506,0.01,False
+dynamic_data__citation_related__citation_topics__subj-group__subject__#text,,TEXT,Clinical & Life Sciences,1.0,0,56,,,Clinical & Life Sciences,828,0.11128465443186256,7.750661008697419,False,84,0.3233112065599375,0.01,False
+dynamic_data__citation_related__citation_topics__subj-group__subject__@content-id,,VARCHAR(16),1,1.0,0,11,,,1,831,0.11128465443186256,7.7577448468270855,False,16,0.32448262397500977,0.01,False
+dynamic_data__citation_related__citation_topics__subj-group__subject__@content-type,,VARCHAR(8),macro,1.0,0,5,,,macro,4,0.30495900039047247,1.8700237647477898,False,7,0.0015618898867629833,0.01,False

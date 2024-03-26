@@ -1,4 +1,0 @@
-,Description,Type,Example,Coverage,min,max,mean,std,top,uniq,freq,entr,Failed,_max_range,uniq_ratio,Null_ratio,is_key
-ic_related__oases__@count,,VARCHAR(1),,1.0,0,1,,,,8,0.9343326753571638,0.4451200254261767,False,1,0.00015635077295913382,0.01,False
-ic_related__oases__@is_OA,,VARCHAR(4),,1.0,0,3,,,,2,0.9343326753571638,0.34954285328657353,False,4,3.9087693239783456e-05,0.01,False
-UID,,VARCHAR(32),WOS:000203024800008,1.0,19,19,,,WOS:000203984800001,51166,3.9087693239783456e-05,15.64288694025202,False,28,0.9999804561533802,0.01,True
