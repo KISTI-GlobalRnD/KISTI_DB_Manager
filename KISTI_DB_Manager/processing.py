@@ -290,7 +290,7 @@ def multiples_to_dataframes(multiples, separation='__'):
             df = pd.DataFrame(value_list)
             df.columns = [f'{key}{separation}{col}' if col != key else col for col in df.columns]
         else:
-            print(key)
+            # print(key)
             # If the list contains primitive types, create a single-column DataFrame with the prefixed column name
             df = pd.DataFrame(value_list, columns=[f'{key}'])
         
