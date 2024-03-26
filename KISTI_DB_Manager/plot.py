@@ -21,7 +21,7 @@ import pandas as pd
 import numpy as np
 
 __all__ = ["Cubic_Bezier", "draw_Bezier_edges", "get_position_grid", "init_vis_structure", 
-          "plot_schema"]
+          "plot_schema", "draw_schema"]
 
 def Cubic_Bezier(p, o, ax, c=(0,0), r=0.1, color='black', lw=1.0, method='circular'):
     '''
@@ -238,16 +238,19 @@ def init_vis_structure(json_dict, G, origin, count_dict, forced={}, xy_unit=(14,
     Returns:
     - tuple: Returns a tuple containing the updated graph G, positions dictionary, labels dictionary, and types Series.
     """
-    from .processing import json_to_key_pairs, key_pair_to_df, select_duplicated
+    from .processing import json_to_key_pairs, key_pair_to_df#, select_duplicated
 
     
     key_pairs = json_to_key_pairs(json_dict, parent=origin, parent_type='Dict', sep=sep)
+    # print(key_pairs)
     # When excepted, duplicated index exist
     # So, only revise Multiples delete singles    
-    key_pairs = key_pair_to_df(key_pairs, excepted, forced=forced, sep=sep) # without unique_set, Multiple and Single is appear twice
+    key_pairs_df = key_pair_to_df(key_pairs, sep=sep) # without unique_set, Multiple and Single is appear twice
+    # print(key_pairs_df)
         
-    types = key_pairs.set_index('branch')['type']
-    types = select_duplicated(types)
+    types = key_pairs_df.set_index('branch')['type']
+    # types = select_duplicated(types)
+    # print(types)
     
     df_pos = get_position_grid(types, origin, count_dict)
     msk = df_pos['type'].str.contains('List')
@@ -259,10 +262,14 @@ def init_vis_structure(json_dict, G, origin, count_dict, forced={}, xy_unit=(14,
     df_pos['x'] = df_pos['depth']*xy_unit[0]
     df_pos['y'] = df_pos[::-1].cumsum()['cnt']*xy_unit[1]
     df_pos['name'] = [sep.join([_x for _x in x if _x != '']) for x in df_pos.index.values]
+    # print(df_pos)
     # return df_pos
-    edges = key_pairs[['parent', 'branch']].dropna().values
+    # edges = key_pairs[['parent', 'branch']].dropna().values
+    edges = np.array(key_pairs)[:,1:]
     G.add_edges_from(edges)
     pos = {n:(x, y) for n, x, y in df_pos[['name', 'x', 'y']].values}
+    pos[origin] = (0,df_pos['y'].max())
+    # print(pos)
     labels = {x:x.split('__')[-1] for x in list(G.nodes())}
     return G, pos, labels, types
 
@@ -274,7 +281,7 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     import networkx as nx
     
     count_dict = {
-            'Value':1, 'Value in List of Dict':1, 'List of Dict':0, 'Dict':0, 'List of Value':1
+            'Value':1, 'Value in List of Dict':1, 'List of Dict':0, 'Dict':0, 'List of Value':1, 'List':1
         }
     title = f'The structure of {data_name} XML'
     
@@ -330,4 +337,100 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     plt.tight_layout()
     plt.axis('off')
     plt.title(title)
+    return fig
+
+
+def draw_schema(node_size=8, font_size=5, X_SIZE=10, Y_SIZE=24, title='DB Schema', x_unit=1, table_unit=14, features=['Coverage', 'freq', 'uniq_ratio'], DPI=300, svg_fonttype='none', sep='__'):
+    import matplotlib.patches as mpatches
+    from matplotlib.patches import Wedge
+    
+    def write_item():
+        x = x_base
+        y = y_base-i
+        # name = idx.split(sep)[-1]
+        
+        name = " ".join(idx.split(sep)[-2:])
+        type = df_desc.loc[idx, 'Type']
+        fts = df_desc.loc[idx, features]
+        freq = df_desc.loc[idx, 'freq']
+        colors = ['lightsalmon', 'orchid', 'gold']
+        color = 'royalblue'
+        if freq == 1.: # freq
+            alpha = 0.2
+        else:
+            alpha = 1.
+            
+        if name == index_key:
+            color = 'limegreen'
+        
+        plt.scatter(x, y, alpha=alpha, s=node_size, c=color)
+        plt.text(x+x_unit, y, name, alpha=alpha, ha='left', va='center', fontdict=dict(fontsize=font_size)) # Name
+        plt.text(x+x_unit+table_unit*.8, y, type, alpha=alpha, ha='right', va='center', color='grey', fontdict=dict(fontsize=font_size)) # Type
+        # Coverage, freq, uniq_ratio
+        for j, v in enumerate(fts):
+            _wedge = mpatches.Wedge((x+x_unit+table_unit*(.85 + 0.05*j), y), 0.2, 0, 360*v, alpha=alpha, width=0.12, ec="none", fc=colors[j])
+            ax.add_artist(_wedge)
+    
+    
+    def split_title_line(title_text, max_words=24):  # , max_words=None):
+        """
+        A function that splits any string based on specific character
+        (returning it with the string), with maximum number of words on it
+        """
+        splited = []
+        text = title_text[:]
+        while text != '':
+            splited.append(text[:max_words])
+            text = text[max_words:]
+        return '\n'.join(splited)
+    
+    
+    def base_set(x_base, y_base, fi, max_words):
+        f = flist[fi]
+        table_name = "/".join(f.split('/')[-1].split(sep)[2:])[:-4]
+        table_name = split_title_line(table_name, max_words=max_words)
+        
+        if (table_name == 'EX') | (fi == 1):
+            x_base += table_unit*1.4
+            y_base = 0
+        elif fi != 0:
+            y_base -= i+5
+        plt.text(x_base+table_unit*.42, y_base+1, table_name, ha='center', fontdict=dict(fontsize=font_size*1.4))
+        for j, v in enumerate(features):
+            plt.text(x_base+x_unit+table_unit*(.85 + 0.05*j), y_base+1, v[:3], ha='center', fontdict=dict(fontsize=font_size*.8))
+        return x_base, y_base
+    
+    
+    def set_bbox():
+        box = mpatches.FancyBboxPatch((x_base-x_unit*.5, y_base-i-.3), table_unit*1.08, i+2.3, ec="none", fc='grey', alpha=.12,
+                                boxstyle=mpatches.BoxStyle("Round", pad=.4))
+        ax.add_artist(box)
+    
+    
+    N_ROW = 1
+    N_COL = 1
+    plt.rcParams['font.family'] = ['NanumSquare', 'Helvetica']
+    plt.rcParams['svg.fonttype'] = svg_fonttype
+    
+    fig=plt.figure(figsize = (X_SIZE*N_COL,Y_SIZE*N_ROW), dpi=DPI)
+    spec = gridspec.GridSpec(ncols=N_COL, nrows=N_ROW, figure=fig, )#, width_ratios=[1,1,.1], wspace=.3)
+    axes = []
+    axi=0
+    ax = fig.add_subplot(spec[axi//N_COL,axi%N_COL]) # row, col
+    
+    ########### Draw ###########
+    x_base, y_base = 0, 0
+    patches = []
+    for fi, df_desc in enumerate(df_descs):
+        x_base, y_base = base_set(x_base, y_base, fi, max_words=30)
+        for i, idx in enumerate(df_desc.index):
+            write_item() ## a line
+        set_bbox()
+    
+    plt.xlim([-x_unit*2, table_unit*4])
+    
+    plt.tight_layout()
+    plt.axis('off')
+    plt.title(title, y=0.985, fontdict=dict(fontsize=font_size*2))
+    
     return fig
