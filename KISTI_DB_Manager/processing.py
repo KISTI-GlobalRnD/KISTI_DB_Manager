@@ -330,6 +330,7 @@ def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[]
     _id = _df.loc[index, index_key]
     df_subs = multiples_to_dataframes(multiples)
     df_subs_add_idx = add_index_column_to_dfs(df_subs, index_key, _id)
+
     for idx, key in enumerate(except_keys):
         excepted[key][index_key] = _id
     return _df, df_subs_add_idx, excepted
@@ -587,7 +588,7 @@ def key_pair_to_df(key_pairs, sep='__'):
 
     # print(res.reset_index().set_index('branch')['type']['static_data__fullrecord_metadata__references__reference__physicalSection'])
     # print(res.reset_index().set_index('branch')['type']['static_data__fullrecord_metadata__references__reference__physicalSection__@physicalLocation'])
-    return res.reset_index()
+    return res.reset_index().iloc[1:]
 
 
 # def key_pair_to_df(key_pairs, unique_set=True, forced={}, sep='__'):
@@ -881,44 +882,86 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
                     _full_key = k
 
                 if types[_full_key] == 'Value':
-                    __res[k] += v # Init is ''
+                    # print('V**', v, _full_key, '\n')
+                    __res[k] = v # Init is ''
                 elif types[_full_key] == 'Value in List of Dict':
-                    __res += v # Init is ''
+                    # print('VLD**', v, k, data, '\n')
+                    __res[k] = v # Init is ''
                 elif types[_full_key] == 'Dict':
-                    _blanc = get_value(__init().copy(), _full_key.split(sep))
-                    __dummy = insert_value(v, _blanc, _full_key)
-                    print('\nD*', v,'\n', _blanc, __dummy,'\n', _full_key,'\n')
+                    # if _full_key == 'static_data__summary__titles__title':
+                        # print('D**', v, _full_key, '\n')
+                    insert_value(v, __res[k], _full_key)
                 elif types[_full_key] == 'List of Dict':
-                    _blanc = get_value(__init(), _full_key.split(sep))
+                    # if _full_key == 'static_data__summary__titles__title':
+                    # print('LD*', __res, v, k, data)
+                    _keys = _full_key.split(sep)
+                    if type(v) != list: # '0'번째에 채워넣기
+                        format = get_value(__init(), _keys)[0]
+                        for k2, v2 in v.items():
+                            format[k2] = v2
+                        __res[k][0] = format
+                    else: # 덮어서 붙여넣기 (해도 되나?)
+                        # print('LD*', __res, v, k)
+                        _formats = []
+                        for _v in v:
+                            format = get_value(__init(), _keys)[0]
+                            for k2, v2 in _v.items():
+                                format[k2] = v2
+                            _formats.append(format)
+                        # print('$$$$', _formats)
+                        __res[k] = _formats
+                            
+                            # __res[k].append(v)
+                elif types[_full_key] == 'List of Value':
+                    # for _v in v:
                     __res[k] = v
+                        # insert_value(_v, __res[k], _full_key)
                 else:
-                    _blanc = get_value(format, _full_key.split(sep))
-                    __res[k].append(v)
+                    print('*****', types[_full_key])
 
         elif isinstance(data, list):
             for item in data:
                 if types[full_key] == 'Value':
                     # print('VoL*', item, data, full_key)
-                    __res += item # Init is ''
+                    __res = item # Init is ''
                 elif types[full_key] == 'Value in List of Dict':
                     # print('VLDoL*', item, data, full_key)
-                    __res += item # Init is ''
+                    __res = item # Init is ''
                 elif types[full_key] == 'Dict':
                     # print('DoL*', item, data,full_key)
-                    __res = item # Init is {}
-                else:
-                    # print('EoL*', item, data,full_key)
-                    _blanc = get_value(format, full_key.split(sep))
+                    for k, v in item.items():
+                        if full_key != '':
+                            _full_key = full_key+sep+k
+                        else:
+                            _full_key = k
+                        insert_value(item, __res[k], _full_key)
+                elif types[full_key] == 'List of Dict':
+                    # print('LD*', __res, v, k)
+                    for k, v in item.items():
+                        if full_key != '':
+                            _full_key = full_key+sep+k
+                        else:
+                            _full_key = k
+                        insert_value(_v, __res, _full_key)
+                    # for _v in item:
+                    #     insert_value(_v, __res, _full_key)
+                elif types[_full_key] == 'List of Value':
                     __res.append(item)
+                    # print('EoL*', item, data,full_key)
+                else:
+                    print('*****', types[_full_key])
         else:
             if types[full_key] == 'List of Value':
                 print('LV*', data, __res, full_key)
-                __res += [data]
+                # insert_value(data, __res, full_key)
+                __res = data
+            elif data == None:
+                # 데이타 없어서 걍 넘어가도 기본형식으로 채워짐
+                pass
             else:
-                print('E*', data, __res, full_key)
+                print('E*', types[full_key], data, __res, full_key)
 
     result = []
-    format = __init().copy()
     for _json in _jsons:
         _res = __init().copy()
         insert_value(_json, _res, base_key)
