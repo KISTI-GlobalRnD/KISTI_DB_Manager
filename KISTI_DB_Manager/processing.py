@@ -792,16 +792,19 @@ def save_data(dfs, data_config):
     idx = 1
     suffix = 'MN'
     fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
-    df.to_feather(fname)
-    print(f"'{fname}' is successfully saved.")
-    idx += 1
-    
-    for key in df_subs.keys():
-        suffix = f"MN-SUB{SEP}{key}"
-        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
-        try:
-            df_subs[key].reset_index().to_feather(fname)
-            idx += 1
-            print(f"'{fname}' is successfully saved.")
-        except:
-            print(f'Fail to save the {fname}')
+    try:
+        df.to_feather(fname)
+        print(f"'{fname}' is successfully saved.")
+        idx += 1
+        
+        for key in df_subs.keys():
+            suffix = f"MN-SUB{SEP}{key}"
+            fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+            try:
+                df_subs[key].reset_index().to_feather(fname)
+                idx += 1
+                print(f"'{fname}' is successfully saved.")
+            except:
+                print(f'Fail to save the {fname}')
+    except:
+        print(f"Fail to save the {fname}")

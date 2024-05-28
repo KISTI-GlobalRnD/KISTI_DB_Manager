@@ -46,7 +46,7 @@ def is_Null(_type, _null_ratio):
 def read_Description(data_config):
     """Read the Description File"""
     PATH, f = data_config['PATH'], data_config['file_name']
-    df_res = pd.read_csv(f'{PATH}Desc_{f[:-4]}.csv', index_col=0)
+    df_res = pd.read_csv(f'{PATH}{f[:-4]}_Desc.csv', index_col=0)
     return df_res
 
 
