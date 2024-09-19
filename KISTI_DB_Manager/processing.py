@@ -798,8 +798,19 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
 
 def json_parsing(jsons_data, origin='', forced={}, index_key='id'):
     '''
-
-    return: df, df_subs, df_exc, sample
+    json_parsing 함수는 JSON 데이터를 분석하고 정규화하여 여러 데이터프레임을 반환합니다.
+    
+    매개변수:
+    - jsons_data: JSON 데이터 리스트 (list of dicts).
+    - origin: 선택적 매개변수로, JSON 정규화 중 출처를 명시하기 위한 문자열.
+    - forced: 특정 키에 대해 강제 적용할 값이 있는 경우 사용하는 딕셔너리.
+    - index_key: 각 JSON 객체의 고유 식별자 역할을 하는 키. 기본값은 'id'.
+    
+    반환값:
+    - df_ex: 정규화된 JSON 데이터로부터 추출된 메인 데이터프레임.
+    - df_ex_subs: JSON에서 추출된 서브 데이터프레임 (nested 구조의 데이터).
+    - excepted_part: 추출에서 제외된 JSON 일부 (구조가 복잡한 부분 등).
+    - sample: 정규화된 JSON 데이터의 첫 번째 샘플.
     '''
     # STEP 1. Analyze Json Structure
     print('STEP 1. Analyze Json Structure:')
