@@ -24,7 +24,7 @@ from tqdm import tqdm
 
 __all__ = ["conv_HTML_entities", "flatten_dict", "read_a_xml", "flatten_nested_json_with_list", 
            "read_dict_from_zip", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs",
-          "key_pair_to_df", "excepted_regularization", "separate_excepted"]
+          "key_pair_to_df", "excepted_regularization", "separate_excepted", "json_parsing"]
 
 def conv_HTML_entities(content, replace_list=['p', 'sub', 'sup', 'i', 'b', ], 
                        rounds=[('<', '>'), ('</', '>')], 
