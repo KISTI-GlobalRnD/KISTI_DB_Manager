@@ -362,7 +362,7 @@ def read_dict_from_zip(zip_path, json_file_name):
     dict: The dictionary read from the JSON file.
     """
     import zipfile
-    import json
+    import orjson
     # from io import BytesIO
     
     # Initialize an empty dictionary
@@ -375,7 +375,7 @@ def read_dict_from_zip(zip_path, json_file_name):
             # Read the JSON file from the ZIP archive
             with zip_ref.open(json_file_name) as json_file:
                 # Load the file content as a dictionary
-                extracted_dict = json.load(json_file)
+                extracted_dict = orjson.loads(json_file)
         else:
             print(f"The file {json_file_name} does not exist in the ZIP archive.")
 
@@ -411,7 +411,8 @@ def extract_data_from_jsons(jsons, index_key='id', except_keys=[]):
     """
     from tqdm import tqdm
 
-    for i, _json in enumerate(tqdm(jsons)):
+    for i, _json in enumerate(tqdm(jsons, desc='\t', #ncols=90, 
+                      mininterval=1)):
         # Process each JSON object to flatten it and extract data into DataFrames
         _df, _df_subs, excepted = flatten_nested_json_with_list(_json, index=i, index_key=index_key, except_keys=except_keys)
         if i == 0:
@@ -425,16 +426,26 @@ def extract_data_from_jsons(jsons, index_key='id', except_keys=[]):
         # Attempt to concatenate the new DataFrames with the aggregated ones
         df_tot.append(_df)
         for key in df_subs_tot.keys():
-            df_subs_tot[key].append(_df_subs[key])
+            if len(_df_subs[key]) > 0:
+                df_subs_tot[key].append(_df_subs[key])
         for key in except_keys:
             try:
-                excepted_tot[key].append(excepted[key])
+                if len(excepted[key]) > 0:
+                    excepted_tot[key].append(excepted[key])
             except:
                 print('err log')
                 pass
-    df_tot = pd.concat(df_tot)
+    
+    df_tot = pd.concat(df_tot).dropna(axis=1, how='all')
+    del_keys = []
     for key in df_subs_tot.keys():
-        df_subs_tot[key] = pd.concat(df_subs_tot[key])
+        if len(df_subs_tot[key]) > 0:
+            __res = pd.concat(df_subs_tot[key]).dropna(axis=1, how='all').reset_index(drop=True)
+            df_subs_tot[key] = __res
+        else:
+            del_keys.append(key)
+    for key in del_keys:
+        df_subs_tot.pop(key)
     for key in except_keys:
         try:
             excepted_tot[key].append(excepted[key])
@@ -456,7 +467,7 @@ def read_dict_from_gz(gz_path):
     Series: The Series of json read from the compressed JSON file.
     """
     import gzip
-    import json
+    import orjson
     
     # Initialize an empty dictionary
     extracted_dict = {}
@@ -467,7 +478,7 @@ def read_dict_from_gz(gz_path):
         df_data = pd.DataFrame(json_strs, columns=['raw_str'])
         msk = df_data != ''
         df_data = df_data[msk].dropna()
-        df_data['json'] =  df_data['raw_str'].apply(json.loads)
+        df_data['json'] =  df_data['raw_str'].apply(orjson.loads)
 
     return df_data['json']
 
@@ -523,7 +534,8 @@ def json_to_key_pairs(json_data, parent=None, parent_type=None, result=None, sep
         return result
     if isinstance(json_data, list):
         res = []
-        for _json_data in json_data:
+        for _json_data in tqdm(json_data, desc='\t', #ncols=90, 
+                      mininterval=1):
             _res =  get_res(_json_data)
             res += _res
     else:
@@ -776,12 +788,37 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
 
     result = []
     types = types.iloc[1:]
-    for _json in _jsons:
+    for _json in tqdm(_jsons, desc='\t', #ncols=90, 
+                      mininterval=1):#, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}", mininterval=1):
         _res = __init().copy()
         insert_value(_json, _res, base_key)
         result.append(_res)
     return result
 
+
+def json_parsing(jsons_data, origin='', forced={}, index_key='id'):
+    '''
+
+    return: df, df_subs, df_exc, sample
+    '''
+    # STEP 1. Analyze Json Structure
+    print('STEP 1. Analyze Json Structure:')
+    key_pairs = json_to_key_pairs(jsons_data, '')
+    key_pairs_df = key_pair_to_df(key_pairs)
+    types = key_pairs_df.reset_index().set_index('branch')['type']
+    # When The Structure is stiff. with except_keys
+    # except_key = ['dynamic_data']
+    # df, df_subs, excepted_part = processing.extract_data_from_jsons(jsons[:], index_key, except_keys)
+    # When The Structure is unstable.
+
+    # STEP 2.
+    print('STEP 2. Regularize Json:')
+    excepted_reg = excepted_regularization(jsons_data, types, origin)
+    
+    # STEP 3.
+    print('STEP 3. Extract Data from Regularized json:')
+    df_ex, df_ex_subs, excepted_part = extract_data_from_jsons(excepted_reg, index_key)
+    return df_ex, df_ex_subs, excepted_part, excepted_reg[0]
 
 
 def save_data(dfs, data_config):

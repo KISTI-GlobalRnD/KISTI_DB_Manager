@@ -275,7 +275,8 @@ def init_vis_structure(json_dict, G, origin, count_dict, forced={}, xy_unit=(14,
 
 
 def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={}, sep='__', 
-          legend_loc='center left', node_size=12, font_size=3, X_SIZE=6, Y_SIZE=5, DPI=300):
+                node_size=12, font_size=3, X_SIZE=6, Y_SIZE=5, DPI=300,
+                right_margin_ratio=1.2, legend_loc='best'):
     import matplotlib.pyplot as plt
     import matplotlib.gridspec as gridspec
     import networkx as nx
@@ -284,13 +285,15 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
             'Value':1, 'Value in List of Dict':1, 'List of Dict':0, 'Dict':0, 'List of Value':1, 'List':1
         }
     title = f'The structure of {data_name} XML'
+
+    
     
     G = nx.Graph()
     G, pos, labels, types = init_vis_structure(jsons, G, origin, count_dict, forced, sep=sep)
     # G, pos, labels, types = init_vis_structure(json_ex, G, origin, count_dict, except_keys=except_keys)
     
     N_ROW = 1
-    N_COL = 1
+    N_COL = 2
     plt.rcParams['font.family'] = ['NanumSquare', 'Helvetica']
     # plt.rcParams['font.family'] = ['Helvetica', 'NanumSquare']
     
@@ -299,6 +302,12 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     axes = []
     axi=0
     ax = fig.add_subplot(spec[axi//N_COL,axi%N_COL]) # row, col
+
+    # 여백 설정 (오른쪽 여백 추가)
+    plt.subplots_adjust(left=0.05, right=0.8, top=0.95, bottom=0.05)  # 전체 여백 설정
+    # 서브플롯 위치 조정
+    box = ax.get_position()
+    ax.set_position([box.x0, box.y0, box.width * 0.55, box.height])  # 너비를 85%로 줄여 오른쪽 공간 확보
     
     # Draw Edge with Bezier
     draw_Bezier_edges(
@@ -329,13 +338,15 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
                                       font_family='NanumSquare', 
                                       font_size=font_size, ax=ax)
     
-    legend = plt.legend(scatterpoints=1, fontsize=font_size*1.5, loc='center left', title='branch type', title_fontsize=font_size*2.)
+    legend = plt.legend(scatterpoints=1, fontsize=font_size*1.2, loc=legend_loc, title='branch type', title_fontsize=font_size*2.)
     for item in legend.legend_handles:
         item._sizes = [node_size]
     # plt.margins(x=.1)
-    # plt.subplots_adjust(right=1.)
-    plt.tight_layout()
+    # plt.subplots_adjust(right=.1)
+    # plt.tight_layout()
     plt.axis('off')
+    _xlim = plt.xlim()
+    plt.xlim([_xlim[0], _xlim[1]*right_margin_ratio])
     plt.title(title)
     return fig
 
@@ -346,6 +357,9 @@ def draw_schema(df_descs, flist, index_key, node_size=8, font_size=5, X_SIZE=10,
     import matplotlib.gridspec as gridspec
     import matplotlib.patches as mpatches
     from matplotlib.patches import Wedge
+
+    # 여백 설정 (오른쪽 여백 추가)
+    plt.subplots_adjust(left=0.05, right=0.9, top=0.95, bottom=0.05)  # 오른쪽 여백을 0.9로 설정
     
     def write_item():
         x = x_base
