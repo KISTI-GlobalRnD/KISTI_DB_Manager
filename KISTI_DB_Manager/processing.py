@@ -227,21 +227,63 @@ def read_NSF_from_zip(zipf, path, key_on, ext_keys=[]):
 
 #     return result
 
-def flatten_json_separate_lists(nested_json, except_keys=[], separator='__', parent=''):
+# def flatten_json_separate_lists(nested_json, except_keys=[], separator='__', parent=''):
+#     """
+#     Flattens a nested JSON object (Python dictionary) and separates the output into
+#     two dictionaries: one for keys with single (non-list) values, and another for keys
+#     with multiple values (lists), with keys indicating the path through the original
+#     nested structure.
+
+#     Parameters:
+#     nested_json (dict): The JSON object (dictionary) to flatten.
+#     separator (str): The separator to use for concatenating nested keys. Default is '.'.
+
+#     Returns:
+#     tuple: A tuple containing two dictionaries. The first dictionary contains flattened
+#            keys with single (non-list) values. The second dictionary contains flattened
+#            keys with list values.
+#     """
+#     single_values = {}
+#     multiple_values = {}
+#     excepted_values = {}
+
+#     def flatten(x, name=''):
+#         if isinstance(x, dict):
+#             for a in x:
+#                 if a in except_keys:
+#                     excepted_values[a] = x[a]
+#                 else:
+#                     flatten(x[a], name + a + separator)
+#         elif isinstance(x, list):
+#             multiple_values[name[:-1*len(separator)]] = x
+#             # print(name)
+#         else:
+#             single_values[name[:-1*len(separator)]] = x
+
+#     flatten(nested_json)
+#     print(single_values, '*****', multiple_values, '*****', excepted_values, '\n\n')
+#     return single_values, multiple_values, excepted_values
+
+
+def flatten_json_separate_lists(nested_json, except_keys=[], sep='__', parent=''):
     """
     Flattens a nested JSON object (Python dictionary) and separates the output into
     two dictionaries: one for keys with single (non-list) values, and another for keys
     with multiple values (lists), with keys indicating the path through the original
     nested structure.
 
+    This version keeps lists as is but flattens any dictionaries within the lists
+    and stores them in multiple_values.
+
     Parameters:
     nested_json (dict): The JSON object (dictionary) to flatten.
-    separator (str): The separator to use for concatenating nested keys. Default is '.'.
+    separator (str): The separator to use for concatenating nested keys. Default is '__'.
+    except_keys (list): Keys to exclude from flattening.
 
     Returns:
     tuple: A tuple containing two dictionaries. The first dictionary contains flattened
            keys with single (non-list) values. The second dictionary contains flattened
-           keys with list values.
+           keys with list values. The third dictionary contains excepted values.
     """
     single_values = {}
     multiple_values = {}
@@ -251,20 +293,31 @@ def flatten_json_separate_lists(nested_json, except_keys=[], separator='__', par
         if isinstance(x, dict):
             for a in x:
                 if a in except_keys:
-                    excepted_values[a] = x[a]
+                    excepted_values[name + a] = x[a]
                 else:
-                    flatten(x[a], name + a + separator)
+                    flatten(x[a], name + a + sep)
         elif isinstance(x, list):
-            multiple_values[name[:-1*len(separator)]] = x
-            # print(name)
+            # If the list contains dictionaries, flatten each dictionary but keep the list structure
+            if len(x) > 0 and isinstance(x[0], dict):
+                flat_list = []
+                for i, item in enumerate(x):
+                    # Recursively flatten each dictionary inside the list
+                    sub_single, sub_multiple, sub_excepted = flatten_json_separate_lists(
+                        item, except_keys=except_keys, sep=sep, parent=name)
+                    # Append each flattened dictionary to the list
+                    flat_list.append({**sub_single, **sub_multiple})
+                multiple_values[name[:-len(sep)]] = flat_list
+            else:
+                # If it's a simple list, store it directly in multiple_values
+                multiple_values[name[:-len(sep)]] = x
         else:
-            single_values[name[:-1*len(separator)]] = x
+            single_values[name[:-len(sep)]] = x
 
     flatten(nested_json)
     return single_values, multiple_values, excepted_values
 
 
-def multiples_to_dataframes(multiples, separation='__'):
+def multiples_to_dataframes(multiples, sep='__'):
     """
     Converts a dictionary containing keys mapped to list values into a dictionary
     of pandas DataFrames, where each list is converted into a DataFrame. Column names
@@ -282,13 +335,13 @@ def multiples_to_dataframes(multiples, separation='__'):
           names prefixed by the key.
     """
     dataframes = {}
-    
+
     for key, value_list in multiples.items():
         # Check if the list contains dictionaries (for structured DataFrame creation)
         if value_list and isinstance(value_list[0], dict):
             # Prefix column names with the key and separator
             df = pd.DataFrame(value_list)
-            df.columns = [f'{key}{separation}{col}' if col != key else col for col in df.columns]
+            df.columns = [f'{key}{sep}{col}' if col != key else col for col in df.columns]
         else:
             # print(key)
             # If the list contains primitive types, create a single-column DataFrame with the prefixed column name
@@ -323,9 +376,9 @@ def add_index_column_to_dfs(dfs, index_column_name, index_value):
     return updated_dfs
 
 
-def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[]):
+def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[], sep='__'):
 
-    single, multiples, excepted = flatten_json_separate_lists(_json, except_keys=except_keys)
+    single, multiples, excepted = flatten_json_separate_lists(_json, except_keys=except_keys, sep=sep)
     _df = pd.DataFrame(single, index=[index])
     _id = _df.loc[index, index_key]
     df_subs = multiples_to_dataframes(multiples)
@@ -382,7 +435,7 @@ def read_dict_from_zip(zip_path, json_file_name):
     return extracted_dict
 
 
-def extract_data_from_jsons(jsons, index_key='id', except_keys=[]):
+def extract_data_from_jsons(jsons, index_key='id', except_keys=[], sep='__'):
     """
     Aggregates data from a list of JSON objects into a primary DataFrame and a set of subsidiary DataFrames.
     Each JSON object is flattened, with its nested structures and lists transformed into DataFrames.
@@ -414,7 +467,7 @@ def extract_data_from_jsons(jsons, index_key='id', except_keys=[]):
     for i, _json in enumerate(tqdm(jsons, desc='\t', #ncols=90, 
                       mininterval=1)):
         # Process each JSON object to flatten it and extract data into DataFrames
-        _df, _df_subs, excepted = flatten_nested_json_with_list(_json, index=i, index_key=index_key, except_keys=except_keys)
+        _df, _df_subs, excepted = flatten_nested_json_with_list(_json, index=i, index_key=index_key, except_keys=except_keys, sep=sep)
         if i == 0:
             df_tot = []
             df_subs_tot = {}
@@ -483,67 +536,10 @@ def read_dict_from_gz(gz_path):
     return df_data['json']
 
 
-# def json_to_key_pairs_v1(json_data, parent=None, parent_type=None, result=None, sep='__'):
-    
-#     _Types = {
-#         'l': 'List',
-#         'lv': 'List of Value',
-#         'ld': 'List of Dict',
-#         'vld': 'Value in List of Dict',
-#         'd': 'Dict',
-#         'v': 'Value',
-#     }
+import pandas as pd
+import numpy as np
 
-#     def get_res(__json_data, parent=None, parent_type=None, result=None, sep='__'):
-#         if result is None:
-#             result = [(_Types['d'], np.nan, parent)]
-        
-#         if isinstance(__json_data, dict):
-#             for key, value in __json_data.items():
-#                 child_type = _Types['d'] if isinstance(value, dict) else _Types['lv'] if isinstance(value, list) else _Types['v']
-#                 try:
-#                     if any(isinstance(i, dict) for i in value):
-#                         child_type = _Types['ld']
-#                 except:
-#                     pass
-#                 if parent == None:
-#                     new_parent = key
-#                 else:
-#                     new_parent = parent+sep+key
-#                 result.append((child_type, parent, new_parent))
-#                 get_res(value, new_parent, child_type, result)
-#         elif isinstance(__json_data, list):
-#             item_type = _Types['ld'] if any(isinstance(i, dict) for i in __json_data) else _Types['lv']
-#             # If the list contains dictionaries, treat each key in those dictionaries
-#             if item_type == _Types['ld']:
-#                 for item in __json_data:
-#                     if isinstance(item, dict):
-#                         for key in item:
-#                             if parent_type == _Types['ld']:
-#                                 item_type = _Types['vld']
-#                             if parent == None:
-#                                 new_parent = key
-#                             else:
-#                                 new_parent = parent+sep+key
-#                             result.append((item_type, parent, new_parent))
-#                             get_res(item[key], new_parent, item_type, result)
-#             # For lists of primitives, skip adding them directly but mark the presence of a list
-#             elif parent_type != _Types['lv']:
-#                 if parent is not None:
-#                     result.append((_Types['l'], parent, parent+sep+_Types['l']))
-#         return result
-#     if isinstance(json_data, list):
-#         res = []
-#         for _json_data in tqdm(json_data, desc='\t', #ncols=90, 
-#                       mininterval=1):
-#             _res =  get_res(_json_data)
-#             res += _res
-#     else:
-#         res = get_res(json_data)
-#     res = pd.DataFrame(res).fillna(parent).dropna().values.tolist()
-#     return [tuple(l) for l in res]
 def json_to_key_pairs(json_data, parent=None, parent_type=None, result=None, sep='__'):
-    
     _Types = {
         'l': 'List',
         'lv': 'List of Value',
@@ -560,480 +556,102 @@ def json_to_key_pairs(json_data, parent=None, parent_type=None, result=None, sep
         if isinstance(__json_data, dict):
             for key, value in __json_data.items():
                 child_type = _Types['d'] if isinstance(value, dict) else _Types['lv'] if isinstance(value, list) else _Types['v']
-                try:
-                    if any(isinstance(i, dict) for i in value):
-                        child_type = _Types['ld']
-                except:
-                    pass
-                if parent == None:
-                    new_parent = key
-                else:
-                    new_parent = parent+sep+key
+                if isinstance(value, list) and any(isinstance(i, dict) for i in value):
+                    child_type = _Types['ld']
+                
+                new_parent = key if parent is None else parent + sep + key
                 result.append((child_type, type(__json_data).__name__, parent, new_parent))
                 get_res(value, new_parent, child_type, result)
+        
         elif isinstance(__json_data, list):
             item_type = _Types['ld'] if any(isinstance(i, dict) for i in __json_data) else _Types['lv']
-            # If the list contains dictionaries, treat each key in those dictionaries
-            if item_type == _Types['ld']:
-                for item in __json_data:
-                    if isinstance(item, dict):
-                        for key in item:
-                            if parent_type == _Types['ld']:
-                                item_type = _Types['vld']
-                            if parent == None:
-                                new_parent = key
-                            else:
-                                new_parent = parent+sep+key
-                            result.append((item_type, type(__json_data).__name__, parent, new_parent))
-                            get_res(item[key], new_parent, item_type, result)
-            # For lists of primitives, skip adding them directly but mark the presence of a list
-            elif parent_type != _Types['lv']:
-                if parent is not None:
-                    result.append((_Types['l'], type(__json_data).__name__, parent, parent+sep+_Types['l']))
+            for item in __json_data:
+                if isinstance(item, dict):
+                    for key in item:
+                        new_parent = key if parent is None else parent + sep + key
+                        result.append((_Types['vld'], type(__json_data).__name__, parent, new_parent))
+                        get_res(item[key], new_parent, _Types['vld'], result)
+            if parent_type != _Types['lv'] and parent is not None:
+                result.append((_Types['l'], type(__json_data).__name__, parent, parent + sep + _Types['l']))
+                
         return result
-    if isinstance(json_data, list):
-        res = []
-        for _json_data in tqdm(json_data, desc='\t', #ncols=90, 
-                      mininterval=1):
-            _res =  get_res(_json_data)
-            res += _res
-    else:
-        res = get_res(json_data)
-    res = pd.DataFrame(res).fillna(parent).dropna().values.tolist()
-    return [tuple(l) for l in res]
+
+    res = get_res(json_data)
+    res_df = pd.DataFrame(res).fillna(parent).dropna()
+    return [tuple(l) for l in res_df.values.tolist()]
 
 
-# def key_pair_to_df_v1(key_pairs, sep='__'):
-#     cols = ['type', 'parent', 'branch']
-#     temp = pd.DataFrame(list(set(key_pairs)), columns=cols).sort_values(cols)
-#     temp['note'] = ''
-#     temp['count'] = 1
-    
-#     new_cols = ['parent', 'branch', 'type']
-#     temp = temp.reset_index().fillna('').groupby(new_cols).sum()['count'].unstack().fillna(0).astype(int)
-#     temp['cnt'] = temp.sum(axis=1)
-#     # print(temp)
-#     res = pd.DataFrame([], index=temp.index)
-#     res['note'] = ''
-#     res['type'] = ''
-#     for idx in temp.index:
-#         # print(idx)
-#         _ = temp.loc[idx]
-#         msk = _ == 1
-#         if _['cnt'] == 1:
-#             res.loc[idx, 'type'] = _[msk].index[0]
-#         else: # First, change all to Final values 
-#             __note = ";".join(_[msk].index)
-#             res.loc[idx, 'note'] = __note
-#             if (__note == 'List of Dict;Value in List of Dict') | (__note == 'Value in List of Dict;List of Dict'):
-#                 # _type = 'Value in List of Dict'
-#                 _type = 'List of Dict'
-#                 # print(idx)
-#             elif (__note == 'List of Value;List of Dict') | (__note == 'List of Dict;List of Value'):
-#                 _type = 'List of Dict'
-#             elif (__note == 'Dict;Value in List of Dict') | (__note == 'Value in List of Dict;Dict'):
-#                 _type = 'Dict'
-#             elif (__note == 'Dict;Value') | (__note == 'Value;Dict'):
-#                 _type = 'Dict'
-#             else:
-#                 _max_len = max([len(x) for x in _[msk].index])
-#                 _type = [x for x in _[msk].index if len(x) == _max_len][0]
-#             res.loc[idx, 'type'] = _type
-
-#     # Convert VLD to LD when offs are also VLD
-#     temp = res.reset_index()
-#     msk0 = temp['type'] == 'Value in List of Dict'
-#     for i, idx in enumerate(temp[msk0]['branch']):
-#         msk = (temp['parent'] == idx) #& (temp['type'] == 'Value in List of Dict')
-#         # Change the parent
-#         if msk.sum() > 0:
-#             _idx = temp[msk0].iloc[i][['parent', 'branch']].values
-#             _idx = tuple(list(_idx))
-#             res.loc[_idx, 'type'] = 'List of Dict'
-    
-#     temp = res.reset_index()
-#     msk0 = temp['type'] == 'List of Dict'
-#     for i, idx in enumerate(temp[msk0]['parent']):
-#         msk = (temp['branch'] == idx) & (temp['type'] == 'List of Dict')
-#         if msk.sum() > 0:
-#             _idx = temp[msk0].iloc[i][['parent', 'branch']].values
-#             _idx = tuple(list(_idx))
-#             res.loc[_idx, 'type'] = 'Value in List of Dict'
-#     # return res.reset_index()
-
-#     # Convert VLD to LD when offs are also VLD Again
-#     temp = res.reset_index()
-#     msk0 = temp['type'] == 'Value in List of Dict'
-#     for i, idx in enumerate(temp[msk0]['branch']):
-#         msk = (temp['parent'] == idx) #& (temp['type'] == 'Value in List of Dict')
-#         # Change the parent
-#         if msk.sum() > 0:
-#             _idx = temp[msk0].iloc[i][['parent', 'branch']].values
-#             _idx = tuple(list(_idx))
-#             res.loc[_idx, 'type'] = 'List of Dict'
-
-
-#     # print(res.reset_index().set_index('branch')['type']['static_data__fullrecord_metadata__references__reference__physicalSection'])
-#     # print(res.reset_index().set_index('branch')['type']['static_data__fullrecord_metadata__references__reference__physicalSection__@physicalLocation'])
-#     return res.reset_index()#.iloc[1:]
 def key_pair_to_df(key_pairs, sep='__'):
     """
-    New Version
+    Optimized version of key_pair_to_df.
     """
     cols = ['type', 'dtype', 'parent', 'branch']
-    _cols = ['type', 'parent', 'branch']
-    temp = pd.DataFrame(list(set(key_pairs)), columns=cols)#.sort_values(_cols)
-    temp['note'] = ''
+    temp = pd.DataFrame(list(set(key_pairs)), columns=cols)
     temp['count'] = 1
     
-    new_cols = ['parent', 'branch', 'type', 'dtype']
-    temp = temp.reset_index().fillna('').groupby(new_cols).sum()['count'].unstack().fillna(0).astype(int)
+    # Grouping by parent and branch, and counting occurrences
+    temp_grouped = temp.groupby(['parent', 'branch', 'type']).sum()['count'].unstack(fill_value=0)
     
-    midx = [[a for a,b,c in temp.index], [b for a,b,c in temp.index]]
-    res = pd.DataFrame([], index=pd.MultiIndex.from_arrays(midx, names=('parent', 'branch')))
-    res['note'] = ''
-    res['type'] = ''
-    for parent in temp.index.levels[0]:#.reset_index().groupby(['parent', 'branch', 'type']).sum()
-        temp2 = temp.xs(parent)
-        for branch in temp2.reset_index()['branch'].values:#temp2.index.levels[0]:
-            pinotype = ''
-            # Determine offspring
-            idx = (parent, branch)
-            temp3 = temp2.xs(branch)
-            if len(temp3) > 1:
-                pinotype = 'List of Dict'
-            elif temp3.index[0] == 'Dict':
-                pinotype = 'Dict'
-            elif temp3.index[0] == 'List of Value':
-                pinotype = 'List'
-            elif temp3.index[0] == 'Value':
-                pinotype = 'Value'
-            elif temp3.index[0] == 'Value in List of Dict':
-                try:
-                    temp4 = temp.xs(branch)
-                    if temp4.index[0][1] == 'List':
-                        pinotype = 'Dict'
-                        _idx = (sep.join(branch.split(sep)[:-1]), branch)
-                        res.loc[_idx, 'type'] = pinotype
-                        _idx = (branch, branch+sep+'List')
-                        res.loc[_idx, 'type'] = "List"
-                    elif all(temp4.reset_index()['type'].values == 'Value'):
-                        pinotype = 'Dict'
-                    else:
-                        # print(temp3, offspring, temp4, (temp4.index.values))
-                        print('Unexpected type!!')
-                except:
-                    pinotype = 'Value'
-            elif temp3.index[0] == 'List of Dict':
-                pinotype = 'List of Dict'
-            if pinotype != '':
-                res.loc[idx, 'type'] = pinotype
+    # Re-organize the result into a MultiIndex DataFrame
+    res = pd.DataFrame(index=temp_grouped.index)
+    res['type'] = temp_grouped.idxmax(axis=1)
+    
     return res.reset_index().drop_duplicates().reset_index(drop=True)
 
 
-# def excepted_regularization_v1(_jsons, types, base_key='', sep='__'):
-#     def __init():
-#         _res = {}
-#         for branch in types.index:
-#             keys = branch.split(sep)[:]
-#             __type = types[branch]
-#             __res = _res
-#             for key in keys[:-1]:
-#                 if isinstance(__res, list):
-#                     __res = __res[0]
-#                 try:
-#                     __res = __res[key]
-#                 except:
-#                     __res[key] = {}
-#                     __res = __res[key]
-#             if len(keys) > 0:
-#                 fkey = keys[-1]
-#                 if isinstance(__res, list):
-#                     __res = __res[0]
-                    
-#                 if __type == 'Value':
-#                     __res[fkey] = ''
-#                 elif __type == 'List of Value':
-#                     __res[fkey] = []
-#                 elif __type == 'List of Dict': # Assume I: 'Values in List of Dict' is not empty
-#                     __res[fkey] = [{}]
-#                 elif __type == 'Value in List of Dict':
-#                     __res[fkey] = ''
-#                 elif __type == 'Dict':
-#                     __res[fkey] = {}
-#                 else: # List
-#                     __res[fkey] = []
-                
-#                 if isinstance(__res, list):
-#                     __res = __res[0]
-                
-#         return _res
-
-    
-#     def get_value(__data, keys):
-#         if isinstance(keys, list) and len(keys) > 0:
-#             if isinstance(__data, dict):
-#                 return get_value(__data[keys[0]], keys[1:])
-#             elif isinstance(__data, list):
-#                 return get_value(__data[0], keys)
-#         else:
-#             # print(__data)  # For debugging; you might want to remove this in the final version
-#             return __data if not isinstance(__data, dict) else __data.copy()
-
-    
-#     def insert_value(data, __res, full_key=''):
-#         if isinstance(data, dict):
-#             for k, v in data.items():
-#                 if full_key != '':
-#                     _full_key = full_key+sep+k
-#                 else:
-#                     _full_key = k
-
-#                 if types[_full_key] == 'Value':
-#                     # print('V**', v, _full_key, '\n')
-#                     __res[k] = v # Init is ''
-#                 elif types[_full_key] == 'Value in List of Dict':
-#                     # print('VLD**', v, k, data, '\n')
-#                     __res[k] = v # Init is ''
-#                 elif types[_full_key] == 'Dict':
-#                     # if _full_key == 'static_data__summary__titles__title':
-#                         # print('D**', v, _full_key, '\n')
-#                     insert_value(v, __res[k], _full_key)
-#                 elif types[_full_key] == 'List of Dict':
-#                     # if _full_key == 'static_data__summary__titles__title':
-#                     # print('LD*', __res, v, k, data)
-#                     _keys = _full_key.split(sep)
-#                     if type(v) != list: # '0'번째에 채워넣기
-#                         format = get_value(__init(), _keys)[0]
-#                         for k2, v2 in v.items():
-#                             format[k2] = v2
-#                         __res[k][0] = format
-#                     else: # 덮어서 붙여넣기 (해도 되나?)
-#                         # print('LD*', __res, v, k)
-#                         _formats = []
-#                         for _v in v:
-#                             format = get_value(__init(), _keys)[0]
-#                             for k2, v2 in _v.items():
-#                                 format[k2] = v2
-#                             _formats.append(format)
-#                         # print('$$$$', _formats)
-#                         __res[k] = _formats
-                            
-#                             # __res[k].append(v)
-#                 elif types[_full_key] == 'List of Value':
-#                     if type(v) != list: # '0'번째에 채워넣기
-#                         v = [v]
-#                     # for _v in v:
-#                     __res[k] = v
-#                         # insert_value(_v, __res[k], _full_key)
-#                 else:
-#                     print('*****', types[_full_key])
-
-#         elif isinstance(data, list):
-#             for item in data:
-#                 if types[full_key] == 'Value':
-#                     # print('VoL*', item, data, full_key)
-#                     __res = item # Init is ''
-#                 elif types[full_key] == 'Value in List of Dict':
-#                     # print('VLDoL*', item, data, full_key)
-#                     __res = item # Init is ''
-#                 elif types[full_key] == 'Dict':
-#                     # print('DoL*', item, data,full_key)
-#                     for k, v in item.items():
-#                         if full_key != '':
-#                             _full_key = full_key+sep+k
-#                         else:
-#                             _full_key = k
-#                         insert_value(item, __res[k], _full_key)
-#                 elif types[full_key] == 'List of Dict':
-#                     # print('LD*', __res, v, k)
-#                     for k, v in item.items():
-#                         if full_key != '':
-#                             _full_key = full_key+sep+k
-#                         else:
-#                             _full_key = k
-#                         insert_value(_v, __res, _full_key)
-#                     # for _v in item:
-#                     #     insert_value(_v, __res, _full_key)
-#                 elif types[_full_key] == 'List of Value':
-#                     __res.append(item)
-#                     # print('EoL*', item, data,full_key)
-#                 else:
-#                     print('*****', types[_full_key])
-#         else:
-#             if types[full_key] == 'List of Value':
-#                 print('LV*', data, __res, full_key)
-#                 # insert_value(data, __res, full_key)
-#                 __res = data
-#             elif data == None:
-#                 # 데이타 없어서 걍 넘어가도 기본형식으로 채워짐
-#                 pass
-#             else:
-#                 print('E*', types[full_key], data, __res, full_key)
-
-#     result = []
-#     types = types.iloc[1:]
-#     for _json in tqdm(_jsons, desc='\t', #ncols=90, 
-#                       mininterval=1):#, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}", mininterval=1):
-#         _res = __init().copy()
-#         insert_value(_json, _res, base_key)
-#         result.append(_res)
-#     return result
 def excepted_regularization(_jsons, types, base_key='', sep='__'):
+    """
+    A
+    """
     def __init():
         _res = {}
         for branch in types.index:
-            keys = branch.split(sep)[:]
+            keys = branch.split(sep)
             __type = types[branch]
             __res = _res
             for key in keys[:-1]:
                 if isinstance(__res, list):
                     __res = __res[0]
-                try:
-                    __res = __res[key]
-                except:
-                    __res[key] = {}
-                    __res = __res[key]
-            if len(keys) > 0:
-                fkey = keys[-1]
-                if isinstance(__res, list):
-                    __res = __res[0]
-                    
-                if __type == 'Value':
-                    __res[fkey] = ''
-                elif __type == 'List':
-                    __res[fkey] = []
-                elif __type == 'List of Dict': # Assume I: 'Values in List of Dict' is not empty
-                    __res[fkey] = [{}]
-                elif __type == 'Value in List of Dict':
-                    __res[fkey] = ''
-                elif __type == 'Dict':
-                    __res[fkey] = {}
-                else: # List
-                    __res[fkey] = []
-                
-                if isinstance(__res, list):
-                    __res = __res[0]
-                
+                __res = __res.setdefault(key, {})
+
+            fkey = keys[-1]
+            if isinstance(__res, list):
+                __res = __res[0]
+
+            if __type == 'Value':
+                __res[fkey] = ''
+            elif __type == 'List':
+                __res[fkey] = []
+            elif __type == 'List of Dict':
+                __res[fkey] = [{}]
+            elif __type == 'Dict':
+                __res[fkey] = {}
         return _res
 
-    
-    def get_value(__data, keys):
-        if isinstance(keys, list) and len(keys) > 0:
-            if isinstance(__data, dict):
-                return get_value(__data[keys[0]], keys[1:])
-            elif isinstance(__data, list):
-                return get_value(__data[0], keys)
-        else:
-            # print(__data)  # For debugging; you might want to remove this in the final version
-            return __data if not isinstance(__data, dict) else __data.copy()
-
-    
     def insert_value(data, __res, full_key=''):
         if isinstance(data, dict):
             for k, v in data.items():
-                if full_key != '':
-                    _full_key = full_key+sep+k
-                else:
-                    _full_key = k
-
-                if types[_full_key] == 'Value':
-                    # print('V**', v, _full_key, '\n')
-                    __res[k] = v # Init is ''
-                elif types[_full_key] == 'Value in List of Dict':
-                    # print('VLD**', v, k, data, '\n')
-                    __res[k] = v # Init is ''
-                elif types[_full_key] == 'Dict':
-                    # if _full_key == 'static_data__summary__titles__title':
-                        # print('D**', v, _full_key, '\n')
+                _full_key = full_key + sep + k if full_key else k
+                if types[_full_key] == 'Dict':
                     insert_value(v, __res[k], _full_key)
-                elif types[_full_key] == 'List of Dict':
-                    # if _full_key == 'static_data__summary__titles__title':
-                    # print('LD*', __res, v, k, data)
-                    _keys = _full_key.split(sep)
-                    if type(v) != list: # '0'번째에 채워넣기
-                        format = get_value(__init(), _keys)[0]
-                        for k2, v2 in v.items():
-                            format[k2] = v2
-                        __res[k][0] = format
-                    else: # 덮어서 붙여넣기 (해도 되나?)
-                        # print('LD*', __res, v, k)
-                        _formats = []
-                        for _v in v:
-                            format = get_value(__init(), _keys)[0]
-                            for k2, v2 in _v.items():
-                                format[k2] = v2
-                            _formats.append(format)
-                        # print('$$$$', _formats)
-                        __res[k] = _formats
-                            
-                            # __res[k].append(v)
-                elif types[_full_key] == 'List':
-                    if type(v) != list: # '0'번째에 채워넣기
-                        v = [v]
-                    # for _v in v:
-                    __res[k] = v
-                        # insert_value(_v, __res[k], _full_key)
                 else:
-                    pass
-                    # print('*****', types[_full_key])
-                    # break
-        
+                    __res[k] = v
+
         elif isinstance(data, list):
             for item in data:
-                if types[full_key] == 'Value':
-                    # print('VoL*', item, data, full_key)
-                    __res = item # Init is ''
-                elif types[full_key] == 'Value in List of Dict':
-                    # print('VLDoL*', item, data, full_key)
-                    __res = item # Init is ''
-                elif types[full_key] == 'Dict':
-                    # print('DoL*', item, data,full_key)
-                    for k, v in item.items():
-                        if full_key != '':
-                            _full_key = full_key+sep+k
-                        else:
-                            _full_key = k
-                        insert_value(item, __res[k], _full_key)
-                elif types[full_key] == 'List of Dict':
-                    # print('LD*', __res, v, k)
-                    for k, v in item.items():
-                        if full_key != '':
-                            _full_key = full_key+sep+k
-                        else:
-                            _full_key = k
-                        insert_value(_v, __res, _full_key)
-                    # for _v in item:
-                    #     insert_value(_v, __res, _full_key)
-                elif types[_full_key] == 'List':
-                    __res.append(item)
-                    # print('EoL*', item, data,full_key)
-                else:
-                    pass
-                    # print('*****', types[_full_key])
-                    # break
-        else:
-            if types[full_key] == 'List':
-                print('LV*', data, __res, full_key)
-                # insert_value(data, __res, full_key)
-                __res = data
-            elif data == None:
-                # 데이타 없어서 걍 넘어가도 기본형식으로 채워짐
-                pass
-            else:
-                print('E*', types[full_key], data, __res, full_key)
+                insert_value(item, __res, full_key)
 
     result = []
     types = types.iloc[1:]
-    for _json in tqdm(_jsons, desc='\t', #ncols=90, 
-                      mininterval=1):#, bar_format="{l_bar}{bar}| {n_fmt}/{total_fmt}", mininterval=1):
+    for _json in tqdm(_jsons, desc='\t', mininterval=1):
         _res = __init().copy()
         insert_value(_json, _res, base_key)
         result.append(_res)
+
     return result
 
 
-def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id',except_keys = []):
+def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', except_keys=[]):
     '''
     json_parsing 함수는 JSON 데이터를 분석하고 정규화하여 여러 데이터프레임을 반환합니다.
     
@@ -1052,23 +670,20 @@ def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id',exce
     Usage:
     df, df_subs, excepted, sample = processing.json_parsing(json_data, origin=origin, forced={}, index_key='id')
     '''
-    # STEP 1. Analyze Json Structure
-    print('STEP 1. Analyze Json Structure:')
+    # STEP 1. Analyze JSON Structure
+    print('STEP 1. Analyze JSON Structure:')
     key_pairs = json_to_key_pairs(jsons_data, '', sep=sep)
     key_pairs_df = key_pair_to_df(key_pairs, sep=sep)
-    types = key_pairs_df.reset_index().set_index('branch')['type']
-    # When The Structure is stiff. with except_keys
-    # except_key = ['dynamic_data']
-    # df, df_subs, excepted_part = processing.extract_data_from_jsons(jsons[:], index_key, except_keys)
-    # When The Structure is unstable.
-
-    # STEP 2.
-    print('STEP 2. Regularize Json:')
+    types = key_pairs_df.set_index('branch')['type']
+    
+    # STEP 2. Regularize JSON
+    print('STEP 2. Regularize JSON:')
     excepted_reg = excepted_regularization(jsons_data, types, origin, sep=sep)
     
-    # STEP 3.
-    print('STEP 3. Extract Data from Regularized json:')
+    # STEP 3. Extract Data from Regularized JSON
+    print('STEP 3. Extract Data from Regularized JSON:')
     df, df_subs, excepted = extract_data_from_jsons(excepted_reg, index_key, except_keys, sep=sep)
+    
     return df, df_subs, excepted, excepted_reg[0]
 
 
