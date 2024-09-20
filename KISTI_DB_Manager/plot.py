@@ -265,7 +265,7 @@ def init_vis_structure(json_dict, G, origin, count_dict, forced={}, xy_unit=(14,
     # print(df_pos)
     # return df_pos
     # edges = key_pairs[['parent', 'branch']].dropna().values
-    edges = np.array(key_pairs)[:,1:]
+    edges = np.array(key_pairs)[:,-2:]
     G.add_edges_from(edges)
     pos = {n:(x, y) for n, x, y in df_pos[['name', 'x', 'y']].values}
     pos[origin] = (0,df_pos['y'].max())
@@ -293,7 +293,7 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     # G, pos, labels, types = init_vis_structure(json_ex, G, origin, count_dict, except_keys=except_keys)
     
     N_ROW = 1
-    N_COL = 2
+    N_COL = 1
     plt.rcParams['font.family'] = ['NanumSquare', 'Helvetica']
     # plt.rcParams['font.family'] = ['Helvetica', 'NanumSquare']
     

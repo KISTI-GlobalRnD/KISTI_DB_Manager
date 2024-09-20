@@ -252,11 +252,16 @@ def update_data_config(f, data_config):
 
 
 def get_Table_Description(data_config, params, verbose=False, sep='__'):
+    import numpy
+    
     PATH, f, SEP, Conv_DATETIME = data_config['PATH'], data_config['file_name'], data_config['SEP'], data_config['Conv_DATETIME']
     df = read_data_from_tabular(data_config)
     df_desc = pd.DataFrame([])
     for i, col in enumerate(df.columns):
         _series = df[col]
+        # 리스트가 포함된 컬럼을 문자열로 변환
+        _series = _series.apply(lambda x: str(x) if isinstance(x, numpy.ndarray) else x)
+        _series = _series.apply(lambda x: str(x) if isinstance(x, dict) else x)
         if verbose:
             print(col)
         res = get_Field_Description(_series, **params)
