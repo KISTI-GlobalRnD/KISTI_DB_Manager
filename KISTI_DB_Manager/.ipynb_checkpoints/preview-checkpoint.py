@@ -72,107 +72,109 @@ def size_to_next_power_of_2(max_length):
 
 def check_range(x, _type_dict, Extra_ratio=1.2):
     """
-    Purpose:
-        Iterates through potential data types (integer or floating-point)
-        and checks if the data in a column fits within their respective ranges.
-    Functionality:
-        Considers an Extra_ratio to provide flexibility in type selection
-        and handles special cases for boolean detection.
-    Usage:
-        Central function in determining the appropriate SQL data type
-        for a column based on its value range.
-
-    Parameters
-    ----------
-    x : Series
-    _type_dict : Dict
-    Extra_ratio : Float [1,)
+    Checks if the data in a column fits within the range of a given data type.
     """
     _not_yet = True
     for _type in _type_dict:
         _byte = _type_dict[_type]
         _max, _min = x.max(), x.min()
+
         if len(_type_dict) == len(Integer_Types):
             _max_range = get_int_max(_byte)
-            if _min >= 0: # Unsigned
+            if _min >= 0:  # Unsigned
                 _max_range *= 2
                 _type += ' UNSIGNED'
             if (_min == 0) & (_max == 1):
-                break # Escape for Boolean
+                break  # Escape for Boolean
         else:
             _min_range, _max_range = get_float_range(_byte)
-            # _max, _min = _max, np.log10(_min)
-            # Check if it fits within FLOAT precision
+            # Check if it fits within float precision
             if (_min_range <= _min <= _max_range) and \
                (_min_range <= _max <= _max_range):
                 break
-        if _max_range > _max*Extra_ratio:
+        
+        # Check if it fits within the allowed range with the Extra_ratio
+        if _max_range > _max * Extra_ratio:
             _not_yet = False
             break
+
     return _type, _min, _max, _max_range, _not_yet
 
 
 def get_MariaDB_Type(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100):
     """
-        Backlog.1: Datetime to Year?
-        Backlog.2: TEXT vs BLOB
-    Purpose:
-        The main function to determine the most appropriate MariaDB data type for each column in a DataFrame.
-    Functionality:
-        Identifies whether a column contains numeric (integer or float), boolean, datetime, or textual data.
-        Uses check_range to find the best fitting numeric type.
-        Checks for boolean-like data and datetime values.
-        Defaults to VARCHAR with a length based on the longest string in the column, adjusted by Extra_ratio.
-    Usage:
-        Call this function with a pandas series (column) to get the suggested MariaDB data type
-        along with additional information like minimum, maximum, and range.
+    Determines the most appropriate MariaDB data type for a given pandas Series.
     """
     _type, _min, _max, _max_range, _not_yet = 'Unknown', 'Unknown', 'Unknown', 'Unknown', True
-    # Pass Numeric(Int or Float)
-    if pd.to_numeric(_series, errors='coerce').notna().all(): 
-        try: # When already _series is a datetime, it falling to numeric (can converted)
-            if np.issubdtype(_series, np.datetime64):
+
+    # 먼저 문자열이 아닌지 확인하고 문자열일 경우 문자열 처리로 분기
+    if _series.dtype == 'object':
+        try:
+            _len = _series.astype(str).map(len)
+            _max = _len.max()
+            _max_range = int(_max * Extra_ratio)
+            _type = size_to_next_power_of_2(_max_range)
+            if _type > 64:
+                _type = 'TEXT'
+            else:
+                _type = f"VARCHAR({_type})"
+            _min, _max, _max_range, _not_yet = _len.min(), _max, _max_range, False
+        except Exception as e:
+            print(f"Error processing series as string: {e}")
+        return pd.Series({
+            'Type': _type,
+            'min': _min,
+            'max': _max,
+            '_max_range': _max_range,
+            'Failed': _not_yet
+        })
+
+    # Try to convert to numeric (integer or float)
+    numeric_series = pd.to_numeric(_series, errors='coerce')
+
+    if numeric_series.notna().all():
+        try:
+            # When already a datetime, falling to numeric can be handled
+            if np.issubdtype(_series.dtype, np.datetime64):
                 _x = pd.to_datetime(_series)
                 _type, _min, _max, _max_range, _not_yet = "DATETIME", _x.min(), _x.max(), '-', False
-            elif (_series.astype(int) % 1 == 0).all():  # Data is integer
-                _type, _min, _max, _max_range, _not_yet = check_range(_series.astype(int), Integer_Types, Extra_ratio)
-                # [Deprecated] Special Case for Year type
+            elif (_series % 1 == 0).all():  # Data is integer (checking if the series consists of whole numbers)
+                _type, _min, _max, _max_range, _not_yet = check_range(numeric_series.astype(int), Integer_Types, Extra_ratio)
                 if (_min > Min_Year) & (_max < Max_Year):
                     _type, _min, _max, _max_range, _not_yet = 'YEAR', _min, _max, Max_Year, False
-            else: # Float
-                _type, _min, _max, _max_range, _not_yet = check_range(_series, Float_Types, Extra_ratio)
-        except:
-            pass
+            else:  # Data is float
+                _type, _min, _max, _max_range, _not_yet = check_range(numeric_series.astype(float), Float_Types, Extra_ratio)
+        except Exception as e:
+            print(f"Error processing series: {e}")
+    
     if _not_yet:
-        # Boolean
+        # Check for boolean
         if _series.dropna().isin([0, 1, True, False]).all():
             _type, _min, _max, _max_range, _not_yet = 'BOOLEAN', 0, 1, 1, False
         if _not_yet:
-            try: # For DateTime
-                # Use Try to get speed
-                import warnings
-                warnings.filterwarnings(action='ignore')
+            try:
+                # Try to convert to datetime
                 _x = pd.to_datetime(_series)
-                # print(_series)
                 _type, _min, _max, _max_range, _not_yet = "DATETIME", _x.min(), _x.max(), '-', False
-                warnings.filterwarnings(action='default')
-            except: # Fallback to VARCHAR, with length based on the longest string
+            except:
+                # Fallback to VARCHAR
                 _len = _series.astype(str).map(len)
                 _max = _len.max()
-                _max_range = int(_max*Extra_ratio)
+                _max_range = int(_max * Extra_ratio)
                 _type = size_to_next_power_of_2(_max_range)
                 if _type > 64:
                     _type = 'TEXT'
                 else:
                     _type = f"VARCHAR({_type})"
                 _min, _max, _max_range, _not_yet = _len.min(), _max, _max_range, False
-                
-    _items = ['Type', 'min', 'max', '_max_range', 'Failed']
-    _values = [_type, _min, _max, _max_range, _not_yet]
-    _res = pd.Series({}, index=_items)
-    for i, _item in enumerate(_items):
-        _res[_item] = _values[i]
-    return _res
+    
+    return pd.Series({
+        'Type': _type,
+        'min': _min,
+        'max': _max,
+        '_max_range': _max_range,
+        'Failed': _not_yet
+    })
 
 
 def get_Field_Description(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100, unique_ratio_th=.5, freq_ratio_th=1e-3):
@@ -236,7 +238,7 @@ def calculate_shannon_entropy(series):
 
 
 def key_selection(_res, unique_ratio_th, freq_ratio_th):
-    _msk1 = _res['Coverage'] == 1.
+    _msk1 = _res['Coverage'] > .999
     _msk2 = _res['uniq_ratio'] > unique_ratio_th
     _msk3 = _res['freq'] < freq_ratio_th
     _msk4 = _res['Type'] != 'TEXT'
@@ -268,6 +270,10 @@ def get_Table_Description(data_config, params, verbose=False, sep='__'):
         if (res['Type'] == 'DATETIME') & (Conv_DATETIME == False):
             res['Type'] = 'VARCHAR(64)' # prefix
         df_desc[col] = res
+        if data_config['KEYS']:
+            keys = data_config['KEYS']
+            for key in keys:
+                df_desc.loc["is_key", key] = True
 
     # dot to underscore
     df_desc.columns = [x.replace('.', sep) for x in df_desc.columns] # Will be deprecated

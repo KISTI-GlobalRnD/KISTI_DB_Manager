@@ -1142,7 +1142,7 @@ def save_data(dfs, data_config):
             suffix = f"MN-SUB{SEP}{key}"
             fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
             try:
-                df_subs[key].reset_index().to_feather(fname)
+                df_subs[key].reset_index(drop=True).to_feather(fname)
                 idx += 1
                 print(f"'{fname}' is successfully saved.")
             except:

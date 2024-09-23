@@ -690,21 +690,25 @@ def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', exc
 def save_data(dfs, data_config):
 
     df, df_subs = dfs
-    PATH, KEY, SEP, table_name = data_config['PATH'], data_config['KEY'], data_config['SEP'], data_config['table_name']
+    PATH, KEYS, SEP, table_name = data_config['PATH'], data_config['KEYS'], data_config['SEP'], data_config['table_name']
 
     idx = 1
-    suffix = 'MN'
-    fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+    suffix = 'MAIN'
+    fname = f'{PATH}{table_name}{SEP}{suffix}.ftr'
+    if data_config['fname_index']:
+        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
     try:
         df.to_feather(fname)
         print(f"'{fname}' is successfully saved.")
         idx += 1
         
         for key in df_subs.keys():
-            suffix = f"MN-SUB{SEP}{key}"
-            fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+            suffix = f"SUB{SEP}{key}"
+            fname = f'{PATH}{table_name}{SEP}{suffix}.ftr'
+            if data_config['fname_index']:
+                fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
             try:
-                df_subs[key].reset_index().to_feather(fname)
+                df_subs[key].reset_index(drop=True).to_feather(fname)
                 idx += 1
                 print(f"'{fname}' is successfully saved.")
             except:

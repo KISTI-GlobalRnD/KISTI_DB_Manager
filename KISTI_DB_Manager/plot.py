@@ -284,12 +284,16 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     count_dict = {
             'Value':1, 'Value in List of Dict':1, 'List of Dict':0, 'Dict':0, 'List of Value':1, 'List':1
         }
+    # count_dict = {
+    #         'Value':1, 'Value in List of Dict':1, 'Dict':0, 'List':1
+    #     }
     title = f'The structure of {data_name} XML'
 
     
     
     G = nx.Graph()
     G, pos, labels, types = init_vis_structure(jsons, G, origin, count_dict, forced, sep=sep)
+    print(types)
     # G, pos, labels, types = init_vis_structure(json_ex, G, origin, count_dict, except_keys=except_keys)
     
     N_ROW = 1

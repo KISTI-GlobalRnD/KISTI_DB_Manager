@@ -121,7 +121,7 @@ def fill_table_from_file(data_config, db_config, sep='__'):
 
     # Use pandas to_sql() function to insert data into the table
     # Replace 'append' with 'replace' if you want to overwrite existing data in the table
-    df.to_sql(table_name, engine, if_exists='append', index=False)
+    df.reset_index(drop=True).to_sql(table_name, engine, if_exists='append', index=False)
     print(f"Data inserted into table `{table_name}` successfully.")
 
 
@@ -269,6 +269,72 @@ def set_index(db_config, data_config):
             conn.close()
 
 
+def backup_database_pymysql(db_config, data_config):
+    """
+    Backs up a MariaDB/MySQL database using PyMySQL and saves the output as a .sql file.
+
+    Parameters:
+    db_config (dict): A dictionary containing the database connection parameters.
+                      Expected keys: 'host', 'user', 'password', 'database'.
+    data_config (dict): A dictionary containing the output file path.
+                      Expected key: 'out_path' (path to save the backup file).
+    """
+    import pymysql
+    import os
+    
+    connection = pymysql.connect(
+        host=db_config['host'],
+        user=db_config['user'],
+        password=db_config['password'],
+        database=db_config['database'],
+        cursorclass=pymysql.cursors.DictCursor
+    )
+
+    try:
+        with connection.cursor() as cursor:
+            # 데이터베이스의 모든 테이블 이름을 가져옴
+            cursor.execute("SHOW TABLES")
+            tables = cursor.fetchall()
+
+            backup_file = os.path.join(data_config['out_path'], f"{db_config['database']}_backup.sql")
+
+            with open(backup_file, 'w') as f:
+                for table in tables:
+                    table_name = list(table.values())[0]
+
+                    # 테이블 생성문 덤프
+                    cursor.execute(f"SHOW CREATE TABLE `{table_name}`")
+                    create_table_stmt = cursor.fetchone()["Create Table"]
+                    f.write(f"\n-- Table structure for `{table_name}`\n")
+                    f.write(f"{create_table_stmt};\n\n")
+
+                    # 테이블 데이터 덤프
+                    cursor.execute(f"SELECT * FROM `{table_name}`")
+                    rows = cursor.fetchall()
+
+                    if rows:
+                        columns = ", ".join([f"`{col}`" for col in rows[0].keys()])
+                        f.write(f"-- Dumping data for table `{table_name}`\n")
+                        f.write(f"INSERT INTO `{table_name}` ({columns}) VALUES\n")
+                        row_data = []
+
+                        for row in rows:
+                            values = ", ".join([f"'{str(value)}'" if value is not None else 'NULL' for value in row.values()])
+                            row_data.append(f"({values})")
+                        
+                        f.write(",\n".join(row_data) + ";\n\n")
+                    else:
+                        f.write(f"-- No data for table `{table_name}`\n\n")
+                    
+        print(f"Backup completed successfully. File saved at: {backup_file}")
+
+    except Exception as e:
+        print(f"Error during backup: {e}")
+
+    finally:
+        connection.close()
+
+
 def optimize_table(db_config, data_config):
     """Optimize the table for MariaDB"""
     try:
@@ -290,7 +356,31 @@ def optimize_table(db_config, data_config):
             cursor.close()
             conn.close()
 
+
 def init_MySQL():
     """ Initializing"""
     import os
     os.system('service mysql start')
+
+
+def rename_columns(df, df_subs, options):
+    # 옵션에서 구분자를 '_'로 대체
+    if options.get('replace_delimiters', True):
+        df.columns = [col.replace('__', '_').replace('.', '_') for col in df.columns]
+        for field in df_subs:
+            df_subs[field].columns = [col.replace('__', '_').replace('.', '_') for col in df_subs[field].columns]
+
+    # df_subs의 열 이름을 처리하는 함수 정의
+    def process_col_name(col_name, sub_df_name):
+        # df_subs의 col_name이 테이블 구조를 따른다면 하위 필드만 사용
+        if options.get('sub_df_simplify', True):
+            if col_name.startswith(sub_df_name + '_'):
+                return col_name[len(sub_df_name) + 1:]  # 필드 이름만 남김
+        return col_name
+
+    # df_subs에 대해 열 이름 변경 처리
+    for sub_df_name, sub_df in df_subs.items():
+        sub_df.columns = [process_col_name(col, sub_df_name) for col in sub_df.columns]
+        df_subs[sub_df_name] = sub_df  # 수정된 sub_df 저장
+
+    return df, df_subs
