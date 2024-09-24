@@ -179,32 +179,21 @@ def get_MariaDB_Type(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100):
 
 def get_Field_Description(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100, unique_ratio_th=.5, freq_ratio_th=1e-3):
     """
-
-    Returns
-    -------
-        attributes
-        Description
-        Type
-        Example
-        Coverage(%)
-        min
-        max
-        mean
-        std
-        uniq
-        freq
-        enter
+    Returns field description and statistics.
     """
     _items = ['Description', 'Type', 'Example', 'Coverage', 'min', 'max', 'mean', 'std', 'top', 'uniq', 'freq', 'entr', 'Failed']
-    _res = pd.Series({}, index=_items, name='attributes')
+    _res = pd.Series({item: None for item in _items}, index=_items, name='attributes')  # Initialize with None to avoid dtype issues
     _desc = _series.describe()
+    
     for _item in _items:
         try:
-            _res[_item] = _desc[_item]
+            # Ensure compatible dtype by explicit casting
+            _res[_item] = _desc[_item] if _item in _desc else None
         except:
             pass
-    _desc2 = _series.astype('str').describe()
+    _desc2 = _series.astype('str').describe()  # Describe as string
     
+    # Get MariaDB type (assumed to be another function)
     _res2 = get_MariaDB_Type(_series.dropna(), Extra_ratio, Min_Year, Max_Year)
     for _item in _res2.index:
         try:
@@ -212,19 +201,26 @@ def get_Field_Description(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100
         except:
             pass
 
+    # Set additional values
     _res['Description'] = ''
     try:
         _res['Example'] = _series.dropna().reset_index(drop=True)[0]
     except:
         _res['Example'] = ''
-    _res['Coverage'] = _desc['count'] / _series.size
-    _res['uniq'] = len(set(_series))
+    
+    # Assign coverage, unique counts, and ratios
+    _res['Coverage'] = _desc['count'] / _series.size if 'count' in _desc else None
+    _res['uniq'] = len(_series.unique())
     _res['uniq_ratio'] = _res['uniq'] / _series.size
-    _res['freq'] = _desc2['freq'] / _series.size
-    _res['entr'] = calculate_shannon_entropy(_series)
-    _res['Null_ratio'] = 0.01
-    _res['is_key'] = key_selection(_res, unique_ratio_th, freq_ratio_th)
+    _res['freq'] = _desc2['freq'] / _series.size if 'freq' in _desc2 else None
+    _res['entr'] = calculate_shannon_entropy(_series)  # Entropy calculation (assumed to be another function)
+    
+    # Handle Null ratio and key selection
+    _res['Null_ratio'] = _series.isnull().mean()  # Calculate null ratio directly from series
+    _res['is_key'] = key_selection(_res, unique_ratio_th, freq_ratio_th)  # Key selection logic (assumed to be another function)
+    
     return _res
+
 
 
 def calculate_shannon_entropy(series):

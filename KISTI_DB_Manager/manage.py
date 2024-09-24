@@ -214,9 +214,11 @@ def create_DB(DB_name, CHARACTER_SET, COLLATE, db_config):
         print(f"Failed to create database `{DB_name}`. Error: {e}")
     finally:
         # Ensure the connection is closed even if an error occurs
-        if conn:
+        try:
             cursor.close()
             conn.close()
+        except:
+            pass
 
 
 def backup_database_subprocess(db_config, data_config):
@@ -363,22 +365,3 @@ def init_MySQL():
     os.system('service mysql start')
 
 
-def rename_columns(df, df_subs, options):
-    # 옵션에서 구분자를 '_'로 대체
-    if options.get('replace_delimiters', True):
-        df.columns = [col.replace('__', '_').replace('.', '_') for col in df.columns]
-        for field in df_subs:
-            df_subs[field].columns = [col.replace('__', '_').replace('.', '_') for col in df_subs[field].columns]
-
-    # df_subs의 열 이름을 처리하는 함수 정의
-    def process_col_name(col_name, sub_df_name):
-        # df_subs의 col_name이 테이블 구조를 따른다면 하위 필드만 사용
-        if options.get('sub_df_simplify', True):
-            if col_name.startswith(sub_df_name + '_'):
-                return col_name[len(sub_df_name) + 1:]  # 필드 이름만 남김
-        return col_name
-
-    # df_subs에 대해 열 이름 변경 처리
-    for sub_df_name, sub_df in df_subs.items():
-        sub_df.columns = [process_col_name(col, sub_df_name) for col in sub_df.columns]
-        df_subs[sub_df_name] = sub_df  # 수정된 sub_df 저장

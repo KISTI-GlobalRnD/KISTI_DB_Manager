@@ -715,3 +715,52 @@ def save_data(dfs, data_config):
                 print(f'Fail to save the {fname}')
     except:
         print(f"Fail to save the {fname}")
+
+
+def rename_columns(df, df_subs, options):
+    # 옵션에서 구분자를 '_'로 대체
+    if options.get('replace_delimiters', True):
+        df.columns = [col.replace('__', '_').replace('.', '_') for col in df.columns]
+        for field in df_subs:
+            df_subs[field].columns = [col.replace('__', '_').replace('.', '_') for col in df_subs[field].columns]
+
+    # df_subs의 열 이름을 처리하는 함수 정의
+    def process_col_name(col_name, sub_df_name):
+        # df_subs의 col_name이 테이블 구조를 따른다면 하위 필드만 사용
+        if options.get('sub_df_simplify', True):
+            if col_name.startswith(sub_df_name + '_'):
+                return col_name[len(sub_df_name) + 1:]  # 필드 이름만 남김
+        return col_name
+
+    # df_subs에 대해 열 이름 변경 처리
+    for sub_df_name, sub_df in df_subs.items():
+        sub_df.columns = [process_col_name(col, sub_df_name) for col in sub_df.columns]
+        df_subs[sub_df_name] = sub_df  # 수정된 sub_df 저장
+
+
+def one_hot_encoding(df, table_name='MAIN', exceptions=[], max_unique_num=5):
+    def one_hot(df, col, exceptions):
+        # Get the unique values in the column
+        unique_vals = sorted(df[col].explode().unique())  # 고유 값을 정렬
+        
+        # Limit to the values not in exceptions
+        unique_vals = [val for val in unique_vals if val not in exceptions]
+        
+        # Create one-hot encoded columns for each unique value
+        for val in unique_vals:
+            df[f'{col}_{val}'] = df[col].apply(lambda x: 1 if isinstance(x, (list, np.ndarray, set)) and val in x else 0)
+        del df[col]  # 원본 열 삭제
+
+    # Iterate through columns
+    i = 0
+    for col in df.columns:
+        # NaN 처리: 리스트나 배열이 아닌 경우 빈 리스트로 변환
+        df[col] = df[col].apply(lambda x: x if isinstance(x, (list, np.ndarray, set)) else x if pd.isnull(x) else x)
+
+        # Check if the column contains lists and unique values are less than the threshold
+        if df[col].apply(lambda x: isinstance(x, (list, np.ndarray, set))).any() and len(df[col].explode().unique()) <= max_unique_num:
+            if i == 0:
+                print(f"In '{table_name}' table,")
+                i += 1
+            print(f"\tConvert '{col}' to one-hot")
+            one_hot(df, col, exceptions)
