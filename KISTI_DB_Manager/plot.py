@@ -408,7 +408,7 @@ def draw_schema(df_descs, flist, index_key, node_size=8, font_size=5, X_SIZE=10,
     
     def base_set(x_base, y_base, fi, max_words):
         f = flist[fi]
-        table_name = "/".join(f.split('/')[-1].split(sep)[2:])[:-4]
+        table_name = "_".join(f.split('/')[-1].split(sep)[1:-1])#[:-4]
         table_name = split_title_line(table_name, max_words=max_words)
         
         # if (table_name == 'EX') | (fi == 1):
@@ -426,7 +426,8 @@ def draw_schema(df_descs, flist, index_key, node_size=8, font_size=5, X_SIZE=10,
             y_base = 0
             x_base += table_unit*1.4
         
-        plt.text(x_base+table_unit*.42, y_base+1, f'{y_base}'+' '+table_name, ha='center', fontdict=dict(fontsize=font_size*1.4))
+        # plt.text(x_base+table_unit*.42, y_base+1, f'{y_base}'+' '+table_name, ha='center', fontdict=dict(fontsize=font_size*1.4))
+        plt.text(x_base+table_unit*.42, y_base+1, table_name, ha='center', fontdict=dict(fontsize=font_size*1.4))
         for j, v in enumerate(features):
             plt.text(x_base+x_unit+table_unit*(.85 + 0.05*j), y_base+1, v[:3], ha='center', fontdict=dict(fontsize=font_size*.8))
         return x_base, y_base
