@@ -115,7 +115,12 @@ def get_MariaDB_Type(_series, Extra_ratio=1.5, Min_Year=1900, Max_Year=2100):
             _max_range = int(_max * Extra_ratio)
             _type = size_to_next_power_of_2(_max_range)
             if _type > 64:
-                _type = 'TEXT'
+                if _max_range <= 65535:  # 약 64KB → TEXT
+                    _type = 'TEXT'
+                elif _max_range <= 16_777_215:  # 약 16MB → MEDIUMTEXT
+                    _type = 'MEDIUMTEXT'
+                else:  # 최대 4GB
+                    _type = 'LONGTEXT'
             else:
                 _type = f"VARCHAR({_type})"
             _min, _max, _max_range, _not_yet = _len.min(), _max, _max_range, False
@@ -227,7 +232,14 @@ def calculate_shannon_entropy(series):
     """
     Calculate the Shannon Entropy.
     """
+    # drop NA and known placeholders
+    series = series.dropna()
+    series = series[~series.isin([-1, '', None])]
+
+    if len(series) == 0:
+        return None
     value_counts = series.value_counts()
+    
     probabilities = value_counts / len(series)
     entropy = -np.sum(probabilities * np.log2(probabilities))
     return entropy

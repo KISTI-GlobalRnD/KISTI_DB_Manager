@@ -720,7 +720,7 @@ def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', exc
 def save_data(dfs, data_config):
 
     df, df_subs = dfs
-    PATH, KEYS, SEP, table_name = data_config['PATH'], data_config['KEYS'], data_config['SEP'], data_config['table_name']
+    PATH, KEYs, SEP, table_name = data_config['PATH'], data_config['KEYs'], data_config['SEP'], data_config['table_name']
 
     idx = 1
     suffix = 'MAIN'

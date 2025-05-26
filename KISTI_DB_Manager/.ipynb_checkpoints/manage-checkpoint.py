@@ -53,6 +53,8 @@ def read_Description(data_config):
 def generate_create_table_sql(data_config):
     """Generate SQL statement for creating a table based on DataFrame dtypes."""
     df_desc = read_Description(data_config)
+    cols = df_desc[df_desc.Type != 'Unknown'].index.values
+    df_desc = df_desc.loc[cols]
     column_types = {idx: df_desc.loc[idx, 'Type'] for idx in df_desc.index}
     for idx in df_desc.index:
         _null_ratio = df_desc.loc[idx, 'Null_ratio']
@@ -99,7 +101,7 @@ def convert_datetime(df, data_config, FORMAT='%Y-%m-%d %H:%M:%S'):
         df[col] = pd.to_datetime(df[col]).dt.strftime(FORMAT)
     return df
 
-def fill_table_from_file(data_config, db_config, sep='__'):
+def fill_table_from_file(df_desc, data_config, db_config, sep='__'):
     from sqlalchemy import create_engine
     from .preview import read_data_from_tabular
     PATH, f, table_name, TYPE = data_config['PATH'], data_config['file_name'], data_config['table_name'], data_config['file_type']
@@ -121,7 +123,8 @@ def fill_table_from_file(data_config, db_config, sep='__'):
 
     # Use pandas to_sql() function to insert data into the table
     # Replace 'append' with 'replace' if you want to overwrite existing data in the table
-    df.reset_index(drop=True).to_sql(table_name, engine, if_exists='append', index=False)
+    cols = df_desc[df_desc.Type != 'Unknown'].index.values
+    df[cols].reset_index(drop=True).to_sql(table_name, engine, if_exists='append', index=False)
     print(f"Data inserted into table `{table_name}` successfully.")
 
 
@@ -363,6 +366,7 @@ def optimize_table(db_config, data_config):
 def init_MySQL():
     """ Initializing"""
     import os
-    os.system('service mysql start')
+    # os.system('service mariadb start')
+    os.system("systemctl start mariadb	")
 
 
