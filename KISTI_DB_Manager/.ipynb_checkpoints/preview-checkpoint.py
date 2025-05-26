@@ -244,8 +244,12 @@ def key_selection(_res, unique_ratio_th, freq_ratio_th):
 
 def update_data_config(f, data_config):
     data_config['file_name'] = f
-    data_config['table_name'] = f[:-4]
-    data_config['file_type'] = f[-3:]
+    data_config['table_name'] = ".".join(f.split('.')[:-1])
+    data_config['file_type'] = f.split('.')[-1]
+    try:
+        data_config['KEYs'] = list(set(data_config['KEYs'] + [data_config['KEY']]))
+    except:
+        data_config['KEYs'] = [data_config['KEY']]
     return data_config
 
 
@@ -266,8 +270,8 @@ def get_Table_Description(data_config, params, verbose=False, sep='__'):
         if (res['Type'] == 'DATETIME') & (Conv_DATETIME == False):
             res['Type'] = 'VARCHAR(64)' # prefix
         df_desc[col] = res
-        if data_config['KEYS']:
-            keys = data_config['KEYS']
+        if data_config['KEYs']:
+            keys = data_config['KEYs']
             for key in keys:
                 df_desc.loc["is_key", key] = True
 
@@ -286,4 +290,6 @@ def read_data_from_tabular(data_config):
         df = pd.read_csv(f'{PATH}{f}', sep=SEP)
     elif TYPE == 'ftr':
         df = pd.read_feather(f'{PATH}{f}')
+    elif TYPE == 'parquet':
+        df = pd.read_parquet(f'{PATH}{f}')
     return df

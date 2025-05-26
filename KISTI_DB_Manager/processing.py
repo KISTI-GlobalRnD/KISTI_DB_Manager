@@ -464,6 +464,22 @@ def extract_data_from_jsons(jsons, index_key='id', except_keys=[], sep='__'):
     """
     from tqdm import tqdm
 
+    def cleanse_dummies(df_subs, sep):
+        for sub in df_subs:
+            df_sub = df_subs[sub]
+            cols = df_sub.columns.values
+            tg_idx = []
+            for i, col in enumerate(cols):
+                _set = df_sub[col].value_counts()
+                if sep+'List' in col:
+                    if len(_set) == 1:
+                        x = df_sub[col].value_counts().index.values
+                        if x.tolist() == [[]]:
+                            tg_idx.append(i)
+            new_cols = np.delete(cols, tg_idx)
+            df_subs[sub] = df_sub[new_cols]
+        return df_subs
+
     for i, _json in enumerate(tqdm(jsons, desc='\t', #ncols=90, 
                       mininterval=1)):
         # Process each JSON object to flatten it and extract data into DataFrames
@@ -505,6 +521,8 @@ def extract_data_from_jsons(jsons, index_key='id', except_keys=[], sep='__'):
         except:
             print('err log')
             pass
+
+    df_subs_tot = cleanse_dummies(df_subs_tot, sep)
 
     return df_tot, df_subs_tot, excepted_tot
 
@@ -628,6 +646,16 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
                 __res[fkey] = {}
         return _res
 
+
+    def remove_none(obj):
+        if isinstance(obj, dict):
+            return {k: remove_none(v) for k, v in obj.items() if v is not None}
+        elif isinstance(obj, list):
+            return [remove_none(item) for item in obj if item is not None]
+        else:
+            return obj
+    
+
     def insert_value(data, __res, full_key=''):
         if isinstance(data, dict):
             for k, v in data.items():
@@ -640,6 +668,8 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
         elif isinstance(data, list):
             for item in data:
                 insert_value(item, __res, full_key)
+
+    _jsons = [remove_none(x) for x in _jsons]
 
     result = []
     types = types.iloc[1:]
@@ -694,9 +724,9 @@ def save_data(dfs, data_config):
 
     idx = 1
     suffix = 'MAIN'
-    fname = f'{PATH}{table_name}{SEP}{suffix}.ftr'
+    fname = f'{PATH}{table_name}{SEP}{suffix}.parquet'
     if data_config['fname_index']:
-        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.parquet'
     try:
         df.to_feather(fname)
         print(f"'{fname}' is successfully saved.")
@@ -704,11 +734,29 @@ def save_data(dfs, data_config):
         
         for key in df_subs.keys():
             suffix = f"SUB{SEP}{key}"
-            fname = f'{PATH}{table_name}{SEP}{suffix}.ftr'
+            fname = f'{PATH}{table_name}{SEP}{suffix}.parquet'
             if data_config['fname_index']:
-                fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.ftr'
+                fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.parquet'
             try:
-                df_subs[key].reset_index(drop=True).to_feather(fname)
+                try:
+                    df_subs[key].reset_index(drop=True).to_parquet(fname)
+                except:
+                    def fix_type(val):
+                        '''
+                        주어진 값을 문자열로 변환.
+                        - bytes 타입이면 UTF-8로 디코딩 (문제가 있으면 errors='replace' 적용)
+                        - 그 외에는 str()을 통해 문자열로 변환.
+                        '''
+                        if isinstance(val, bytes):
+                            try:
+                                return val.decode("utf-8")
+                            except UnicodeDecodeError:
+                                return val.decode("utf-8", errors='replace')
+                        else:
+                            return str(val)
+                    df_subs[key] = df_subs[key].map(fix_type)
+                    df_subs[key].reset_index(drop=True).to_parquet(fname)
+                    
                 idx += 1
                 print(f"'{fname}' is successfully saved.")
             except:

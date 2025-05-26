@@ -293,7 +293,7 @@ def plot_schema(jsons, data_name="", origin='excepted', except_keys=[], forced={
     
     G = nx.Graph()
     G, pos, labels, types = init_vis_structure(jsons, G, origin, count_dict, forced, sep=sep)
-    print(types)
+    # print(types)
     # G, pos, labels, types = init_vis_structure(json_ex, G, origin, count_dict, except_keys=except_keys)
     
     N_ROW = 1
@@ -408,7 +408,8 @@ def draw_schema(df_descs, flist, index_key, node_size=8, font_size=5, X_SIZE=10,
     
     def base_set(x_base, y_base, fi, max_words):
         f = flist[fi]
-        table_name = "_".join(f.split('/')[-1].split(sep)[1:-1])#[:-4]
+        # table_name = "_".join(f.split('/')[-1].split(sep)[1:-1])#[:-4]
+        table_name = f.split('/')[-1].split(sep)[-1].split('.')[0]
         table_name = split_title_line(table_name, max_words=max_words)
         
         # if (table_name == 'EX') | (fi == 1):

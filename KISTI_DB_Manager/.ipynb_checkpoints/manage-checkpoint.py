@@ -46,7 +46,7 @@ def is_Null(_type, _null_ratio):
 def read_Description(data_config):
     """Read the Description File"""
     PATH, f = data_config['PATH'], data_config['file_name']
-    df_res = pd.read_csv(f'{PATH}{f[:-4]}_Desc.csv', index_col=0)
+    df_res = pd.read_csv(f'{PATH}{".".join(f.split(".")[:-1])}_Desc.csv', index_col=0)
     return df_res
 
 
@@ -198,7 +198,8 @@ def create_DB(DB_name, CHARACTER_SET, COLLATE, db_config):
         # Establish connection to the database
         conn = pymysql.connect(host=db_config.get('host'),
                                user=db_config.get('user'),
-                               password=db_config.get('password'))
+                               password=db_config.get('password'),
+                               port=db_config.get('port', 3306))  # Default to 3306 if not provided
         cursor = conn.cursor()
 
         # Prepare the DROP TABLE statement
