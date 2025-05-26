@@ -728,7 +728,7 @@ def save_data(dfs, data_config):
     if data_config['fname_index']:
         fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.parquet'
     try:
-        df.to_feather(fname)
+        df.to_parquet(fname)
         print(f"'{fname}' is successfully saved.")
         idx += 1
         
