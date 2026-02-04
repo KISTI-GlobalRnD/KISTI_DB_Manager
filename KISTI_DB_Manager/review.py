@@ -963,6 +963,15 @@ def _render_html(
             "<div class=\"schema-toolbar\">"
             "<input id=\"schema-search\" type=\"search\" placeholder=\"Search table…\" />"
             "<button id=\"schema-reset\" type=\"button\">Reset</button>"
+            "<span class=\"schema-option\">"
+            "<span class=\"muted\">Depth</span>"
+            "<input id=\"schema-depth\" type=\"range\" min=\"0\" max=\"0\" step=\"1\" />"
+            "<code id=\"schema-depth-value\">0</code>"
+            "</span>"
+            "<label class=\"schema-option\">"
+            "<input id=\"schema-only-flagged\" type=\"checkbox\" />"
+            "<span class=\"muted\">Only flagged</span>"
+            "</label>"
             "<span id=\"schema-status\" class=\"muted\"></span>"
             "</div>"
             "<div id=\"schema-container\" class=\"schema-container\">"
@@ -1091,6 +1100,11 @@ def _render_html(
 
     badge_counts_json = json.dumps(badge_counts, ensure_ascii=False).replace("<", "\\u003c")
 
+    base_table_sql_value = str(meta.get("base_table_sql") or meta.get("base_table") or "")
+    key_sep_value = str(meta.get("key_sep") or meta.get("KEY_SEP") or "__")
+    base_table_sql_json = json.dumps(base_table_sql_value, ensure_ascii=False).replace("<", "\\u003c")
+    key_sep_json = json.dumps(key_sep_value, ensure_ascii=False).replace("<", "\\u003c")
+
     timings_section = ""
     if timings_ms and isinstance(timings_ms, Mapping):
         items: list[tuple[str, int]] = []
@@ -1185,15 +1199,19 @@ def _render_html(
     .bar-fill {{ height: 100%; background: #0969da; }}
     details.details summary {{ cursor: pointer; }}
     details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
-    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }}
-    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
-    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
-    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
-    .schema-container svg {{ max-width: 100%; height: auto; }}
-    .schema-container .node.dim {{ opacity: 0.15; }}
-    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
-    .schema-container .node.has-error .box {{ stroke: #cf222e; stroke-width: 2; }}
-    .schema-container .node.has-warning .box {{ stroke: #bf8700; stroke-width: 2; }}
+	    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }}
+	    .schema-toolbar .schema-option {{ display: inline-flex; gap: 6px; align-items: center; }}
+	    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
+	    .schema-toolbar input[type="range"] {{ width: 140px; }}
+	    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
+	    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
+	    .schema-container svg {{ max-width: 100%; height: auto; }}
+	    .schema-container .node.hidden {{ display: none; }}
+	    .schema-container .edge.hidden {{ display: none; }}
+	    .schema-container .node.dim {{ opacity: 0.15; }}
+	    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
+	    .schema-container .node.has-error .box {{ stroke: #cf222e; stroke-width: 2; }}
+	    .schema-container .node.has-warning .box {{ stroke: #bf8700; stroke-width: 2; }}
     .schema-container .node.has-quarantine .box {{ stroke: #8250df; stroke-width: 2; }}
     .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
     .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; }}
@@ -1262,13 +1280,61 @@ def _render_html(
     const svg = container.querySelector('svg');
     if (!svg) return;
 
-    const nodes = Array.from(svg.querySelectorAll('.node'));
-    const edges = Array.from(svg.querySelectorAll('.edge'));
-    const badgeCounts = {badge_counts_json} || {{}};
+	    const nodes = Array.from(svg.querySelectorAll('.node'));
+	    const edges = Array.from(svg.querySelectorAll('.edge'));
+	    const badgeCounts = {badge_counts_json} || {{}};
+	    const KEY_SEP = {key_sep_json};
+	    const BASE_TABLE_SQL = {base_table_sql_json};
+	    const depthInput = document.getElementById('schema-depth');
+	    const depthValue = document.getElementById('schema-depth-value');
+	    const onlyFlagged = document.getElementById('schema-only-flagged');
 
-    const detailsByTable = {{}};
-    for (const d of document.querySelectorAll('details.details[data-table]')) {{
-      const t = d.getAttribute('data-table');
+	    function matchPrefix(nameSql) {{
+	      if (!nameSql || !BASE_TABLE_SQL || !KEY_SEP) return null;
+	      const candidates = [
+	        BASE_TABLE_SQL + KEY_SEP,
+	        BASE_TABLE_SQL + '-SUB' + KEY_SEP,
+	        BASE_TABLE_SQL + '_SUB' + KEY_SEP,
+	      ];
+	      for (const p of candidates) {{
+	        if (nameSql.startsWith(p)) return p;
+	      }}
+	      return null;
+	    }}
+
+	    function nodeDepth(nameSql) {{
+	      if (!nameSql) return 0;
+	      if (nameSql === BASE_TABLE_SQL) return 0;
+	      const prefix = matchPrefix(nameSql);
+	      if (!prefix) return 0;
+	      const suffix = nameSql.substring(prefix.length);
+	      const parts = suffix.split(KEY_SEP).filter(Boolean);
+	      return Math.max(1, parts.length);
+	    }}
+
+	    const depthBySql = {{}};
+	    let maxDepth = 0;
+	    const nodeBySql = {{}};
+	    for (const n of nodes) {{
+	      const sql = n.getAttribute('data-name-sql') || '';
+	      if (!sql) continue;
+	      nodeBySql[sql] = n;
+	      const d = nodeDepth(sql);
+	      depthBySql[sql] = d;
+	      if (d > maxDepth) maxDepth = d;
+	    }}
+
+	    if (depthInput) {{
+	      depthInput.max = String(maxDepth);
+	      depthInput.value = String(maxDepth);
+	    }}
+	    if (depthValue) {{
+	      depthValue.textContent = depthInput ? String(depthInput.value) : String(maxDepth);
+	    }}
+
+	    const detailsByTable = {{}};
+	    for (const d of document.querySelectorAll('details.details[data-table]')) {{
+	      const t = d.getAttribute('data-table');
       if (t) detailsByTable[t] = d;
     }}
 
@@ -1316,27 +1382,99 @@ def _render_html(
       }}
     }}
 
-    function clearSelection() {{
-      for (const n of nodes) n.classList.remove('selected');
-      for (const e of edges) e.classList.remove('selected');
-    }}
+	    function clearSelection() {{
+	      for (const n of nodes) n.classList.remove('selected');
+	      for (const e of edges) e.classList.remove('selected');
+	    }}
 
-    function applyFilter(q) {{
-      const query = (q || '').trim().toLowerCase();
-      let matches = 0;
-      for (const n of nodes) {{
-        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
-        const name = (n.getAttribute('data-name') || '').toLowerCase();
-        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
-        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
+	    const parentByChildSql = {{}};
+	    for (const e of edges) {{
+	      const p = e.getAttribute('data-parent-sql') || '';
+	      const c = e.getAttribute('data-child-sql') || '';
+	      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
+	    }}
+
+	    function isFlagged(nodeEl) {{
+	      return (
+	        nodeEl.classList.contains('has-error') ||
+	        nodeEl.classList.contains('has-warning') ||
+	        nodeEl.classList.contains('has-quarantine') ||
+	        nodeEl.classList.contains('diff-added') ||
+	        nodeEl.classList.contains('diff-removed') ||
+	        nodeEl.classList.contains('diff-changed')
+	      );
+	    }}
+
+	    let visibleNodesCount = nodes.length;
+	    function recomputeVisibility() {{
+	      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
+	      if (depthValue) depthValue.textContent = String(depthLimit);
+	      const only = !!(onlyFlagged && onlyFlagged.checked);
+
+	      const allow = new Set();
+	      if (only) {{
+	        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
+	        for (const n of nodes) {{
+	          const sql = n.getAttribute('data-name-sql') || '';
+	          if (!sql) continue;
+	          if (!isFlagged(n)) continue;
+	          if ((depthBySql[sql] || 0) > depthLimit) continue;
+	          allow.add(sql);
+	          let cur = sql;
+	          let safety = 0;
+	          while (safety++ < 1000) {{
+	            const p = parentByChildSql[cur];
+	            if (!p) break;
+	            allow.add(p);
+	            if (p === BASE_TABLE_SQL) break;
+	            cur = p;
+	          }}
+	        }}
+	      }}
+
+	      visibleNodesCount = 0;
+	      for (const n of nodes) {{
+	        const sql = n.getAttribute('data-name-sql') || '';
+	        const d = depthBySql[sql] || 0;
+	        const withinDepth = d <= depthLimit;
+	        const visible = withinDepth && (!only || allow.has(sql));
+	        n.classList.toggle('hidden', !visible);
+	        if (visible) visibleNodesCount += 1;
+	      }}
+
+	      for (const e of edges) {{
+	        const p = e.getAttribute('data-parent-sql') || '';
+	        const c = e.getAttribute('data-child-sql') || '';
+	        const pn = p ? nodeBySql[p] : null;
+	        const cn = c ? nodeBySql[c] : null;
+	        const visible = !!(pn && cn && !pn.classList.contains('hidden') && !cn.classList.contains('hidden'));
+	        e.classList.toggle('hidden', !visible);
+	      }}
+	    }}
+
+	    function applyFilter(q) {{
+	      const query = (q || '').trim().toLowerCase();
+	      let matches = 0;
+	      for (const n of nodes) {{
+	        if (n.classList.contains('hidden')) {{
+	          n.classList.remove('dim');
+	          n.classList.remove('match');
+	          continue;
+	        }}
+	        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
+	        const name = (n.getAttribute('data-name') || '').toLowerCase();
+	        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
+	        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
         n.classList.toggle('dim', !!query && !ok);
         n.classList.toggle('match', !!query && ok);
-        if (ok && query) matches += 1;
-      }}
-      if (status) {{
-        status.textContent = query ? ('matches: ' + matches + ' / ' + nodes.length) : '';
-      }}
-    }}
+	        if (ok && query) matches += 1;
+	      }}
+	      if (status) {{
+	        if (query) status.textContent = 'matches: ' + matches + ' / ' + visibleNodesCount;
+	        else if (visibleNodesCount !== nodes.length) status.textContent = 'visible: ' + visibleNodesCount + ' / ' + nodes.length;
+	        else status.textContent = '';
+	      }}
+	    }}
 
     function selectTable(tableSql) {{
       if (!tableSql) return;
@@ -1368,21 +1506,37 @@ def _render_html(
       }});
     }}
 
-    if (search) {{
-      search.addEventListener('input', () => applyFilter(search.value));
-    }}
-    if (reset) {{
-      reset.addEventListener('click', () => {{
-        if (search) search.value = '';
-        applyFilter('');
-        clearSelection();
-      }});
-    }}
+	    if (search) {{
+	      search.addEventListener('input', () => applyFilter(search.value));
+	    }}
+	    if (depthInput) {{
+	      depthInput.addEventListener('input', () => {{
+	        recomputeVisibility();
+	        applyFilter(search ? search.value : '');
+	      }});
+	    }}
+	    if (onlyFlagged) {{
+	      onlyFlagged.addEventListener('change', () => {{
+	        recomputeVisibility();
+	        applyFilter(search ? search.value : '');
+	      }});
+	    }}
+	    if (reset) {{
+	      reset.addEventListener('click', () => {{
+	        if (search) search.value = '';
+	        if (depthInput) depthInput.value = String(maxDepth);
+	        if (onlyFlagged) onlyFlagged.checked = false;
+	        recomputeVisibility();
+	        applyFilter('');
+	        clearSelection();
+	      }});
+	    }}
 
-    applyBadges(badgeCounts);
-    applyFilter(search ? search.value : '');
-  }})();
-  </script>
+	    applyBadges(badgeCounts);
+	    recomputeVisibility();
+	    applyFilter(search ? search.value : '');
+	  }})();
+	  </script>
 </body>
 </html>
 """

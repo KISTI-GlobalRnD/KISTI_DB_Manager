@@ -411,6 +411,23 @@ def render_review_diff_html(
     if svg_inline.lstrip().startswith("<?xml"):
         svg_inline = svg_inline.split("?>", 1)[-1]
 
+    key_sep = str(after_doc.get("key_sep") or before_doc.get("key_sep") or "__")
+    base = str(
+        after_doc.get("base_table_sql")
+        or after_doc.get("base_table")
+        or before_doc.get("base_table_sql")
+        or before_doc.get("base_table")
+        or ""
+    )
+    if base and base not in union_tables:
+        base_sql = str(after_doc.get("base_table_sql") or before_doc.get("base_table_sql") or "")
+        base = base_sql if base_sql and base_sql in union_tables else base
+    if not base or base not in union_tables:
+        base = union_tables[0] if union_tables else "base"
+
+    key_sep_json = json.dumps(key_sep, ensure_ascii=False).replace("<", "\\u003c")
+    base_json = json.dumps(base, ensure_ascii=False).replace("<", "\\u003c")
+
     def badge(status: str) -> str:
         cls = {
             "added": "badge added",
@@ -514,16 +531,20 @@ def render_review_diff_html(
     th {{ background: #f6f8fa; text-align: left; }}
     .muted {{ color: #57606a; }}
     .card {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 16px; margin: 16px 0; background: #ffffff; }}
-    details.details summary {{ cursor: pointer; }}
-    details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
-    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }}
-    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
-    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
-    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
-    .schema-container svg {{ max-width: 100%; height: auto; }}
-    .schema-container .node.dim {{ opacity: 0.15; }}
-    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
-    .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
+	    details.details summary {{ cursor: pointer; }}
+	    details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
+	    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }}
+	    .schema-toolbar .schema-option {{ display: inline-flex; gap: 6px; align-items: center; }}
+	    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
+	    .schema-toolbar input[type="range"] {{ width: 140px; }}
+	    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
+	    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
+	    .schema-container svg {{ max-width: 100%; height: auto; }}
+	    .schema-container .node.hidden {{ display: none; }}
+	    .schema-container .edge.hidden {{ display: none; }}
+	    .schema-container .node.dim {{ opacity: 0.15; }}
+	    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
+	    .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
     .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; }}
     .badge {{ display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #d0d7de; background: #f6f8fa; }}
     .badge.added {{ border-color: #1a7f37; background: #dafbe1; }}
@@ -547,13 +568,22 @@ def render_review_diff_html(
 
   <div class="card">
     <h2>Diagram</h2>
-    <div class="schema-toolbar">
-      <input id="schema-search" type="search" placeholder="Search table…" />
-      <button id="schema-reset" type="button">Reset</button>
-      <span id="schema-status" class="muted"></span>
-    </div>
-    <div id="schema-container" class="schema-container">
-      {svg_inline}
+	    <div class="schema-toolbar">
+	      <input id="schema-search" type="search" placeholder="Search table…" />
+	      <button id="schema-reset" type="button">Reset</button>
+	      <span class="schema-option">
+	        <span class="muted">Depth</span>
+	        <input id="schema-depth" type="range" min="0" max="0" step="1" />
+	        <code id="schema-depth-value">0</code>
+	      </span>
+	      <label class="schema-option">
+	        <input id="schema-only-flagged" type="checkbox" />
+	        <span class="muted">Only changed</span>
+	      </label>
+	      <span id="schema-status" class="muted"></span>
+	    </div>
+	    <div id="schema-container" class="schema-container">
+	      {svg_inline}
     </div>
     <p class="muted">Legend: {badge('added')} {badge('removed')} {badge('changed')} {badge('unchanged')}</p>
   </div>
@@ -588,42 +618,162 @@ def render_review_diff_html(
     const container = document.getElementById('schema-container');
     if (!container) return;
 
-    const search = document.getElementById('schema-search');
-    const reset = document.getElementById('schema-reset');
-    const status = document.getElementById('schema-status');
-    const svg = container.querySelector('svg');
-    if (!svg) return;
+	    const search = document.getElementById('schema-search');
+	    const reset = document.getElementById('schema-reset');
+	    const status = document.getElementById('schema-status');
+	    const svg = container.querySelector('svg');
+	    if (!svg) return;
 
-    const nodes = Array.from(svg.querySelectorAll('.node'));
-    const edges = Array.from(svg.querySelectorAll('.edge'));
+	    const nodes = Array.from(svg.querySelectorAll('.node'));
+	    const edges = Array.from(svg.querySelectorAll('.edge'));
+	    const KEY_SEP = {key_sep_json};
+	    const BASE_TABLE_SQL = {base_json};
+	    const depthInput = document.getElementById('schema-depth');
+	    const depthValue = document.getElementById('schema-depth-value');
+	    const onlyFlagged = document.getElementById('schema-only-flagged');
 
-    const detailsByTable = {{}};
-    for (const d of document.querySelectorAll('details.details[data-table]')) {{
-      const t = d.getAttribute('data-table');
+	    function matchPrefix(nameSql) {{
+	      if (!nameSql || !BASE_TABLE_SQL || !KEY_SEP) return null;
+	      const candidates = [
+	        BASE_TABLE_SQL + KEY_SEP,
+	        BASE_TABLE_SQL + '-SUB' + KEY_SEP,
+	        BASE_TABLE_SQL + '_SUB' + KEY_SEP,
+	      ];
+	      for (const p of candidates) {{
+	        if (nameSql.startsWith(p)) return p;
+	      }}
+	      return null;
+	    }}
+
+	    function nodeDepth(nameSql) {{
+	      if (!nameSql) return 0;
+	      if (nameSql === BASE_TABLE_SQL) return 0;
+	      const prefix = matchPrefix(nameSql);
+	      if (!prefix) return 0;
+	      const suffix = nameSql.substring(prefix.length);
+	      const parts = suffix.split(KEY_SEP).filter(Boolean);
+	      return Math.max(1, parts.length);
+	    }}
+
+	    const depthBySql = {{}};
+	    let maxDepth = 0;
+	    const nodeBySql = {{}};
+	    for (const n of nodes) {{
+	      const sql = n.getAttribute('data-name-sql') || '';
+	      if (!sql) continue;
+	      nodeBySql[sql] = n;
+	      const d = nodeDepth(sql);
+	      depthBySql[sql] = d;
+	      if (d > maxDepth) maxDepth = d;
+	    }}
+
+	    if (depthInput) {{
+	      depthInput.max = String(maxDepth);
+	      depthInput.value = String(maxDepth);
+	    }}
+	    if (depthValue) {{
+	      depthValue.textContent = depthInput ? String(depthInput.value) : String(maxDepth);
+	    }}
+
+	    const detailsByTable = {{}};
+	    for (const d of document.querySelectorAll('details.details[data-table]')) {{
+	      const t = d.getAttribute('data-table');
       if (t) detailsByTable[t] = d;
     }}
 
-    function clearSelection() {{
-      for (const n of nodes) n.classList.remove('selected');
-      for (const e of edges) e.classList.remove('selected');
-    }}
+	    function clearSelection() {{
+	      for (const n of nodes) n.classList.remove('selected');
+	      for (const e of edges) e.classList.remove('selected');
+	    }}
 
-    function applyFilter(q) {{
-      const query = (q || '').trim().toLowerCase();
-      let matches = 0;
-      for (const n of nodes) {{
-        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
-        const name = (n.getAttribute('data-name') || '').toLowerCase();
-        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
-        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
+	    const parentByChildSql = {{}};
+	    for (const e of edges) {{
+	      const p = e.getAttribute('data-parent-sql') || '';
+	      const c = e.getAttribute('data-child-sql') || '';
+	      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
+	    }}
+
+	    function isFlagged(nodeEl) {{
+	      return (
+	        nodeEl.classList.contains('diff-added') ||
+	        nodeEl.classList.contains('diff-removed') ||
+	        nodeEl.classList.contains('diff-changed') ||
+	        nodeEl.classList.contains('has-error') ||
+	        nodeEl.classList.contains('has-warning') ||
+	        nodeEl.classList.contains('has-quarantine')
+	      );
+	    }}
+
+	    let visibleNodesCount = nodes.length;
+	    function recomputeVisibility() {{
+	      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
+	      if (depthValue) depthValue.textContent = String(depthLimit);
+	      const only = !!(onlyFlagged && onlyFlagged.checked);
+
+	      const allow = new Set();
+	      if (only) {{
+	        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
+	        for (const n of nodes) {{
+	          const sql = n.getAttribute('data-name-sql') || '';
+	          if (!sql) continue;
+	          if (!isFlagged(n)) continue;
+	          if ((depthBySql[sql] || 0) > depthLimit) continue;
+	          allow.add(sql);
+	          let cur = sql;
+	          let safety = 0;
+	          while (safety++ < 1000) {{
+	            const p = parentByChildSql[cur];
+	            if (!p) break;
+	            allow.add(p);
+	            if (p === BASE_TABLE_SQL) break;
+	            cur = p;
+	          }}
+	        }}
+	      }}
+
+	      visibleNodesCount = 0;
+	      for (const n of nodes) {{
+	        const sql = n.getAttribute('data-name-sql') || '';
+	        const d = depthBySql[sql] || 0;
+	        const withinDepth = d <= depthLimit;
+	        const visible = withinDepth && (!only || allow.has(sql));
+	        n.classList.toggle('hidden', !visible);
+	        if (visible) visibleNodesCount += 1;
+	      }}
+
+	      for (const e of edges) {{
+	        const p = e.getAttribute('data-parent-sql') || '';
+	        const c = e.getAttribute('data-child-sql') || '';
+	        const pn = p ? nodeBySql[p] : null;
+	        const cn = c ? nodeBySql[c] : null;
+	        const visible = !!(pn && cn && !pn.classList.contains('hidden') && !cn.classList.contains('hidden'));
+	        e.classList.toggle('hidden', !visible);
+	      }}
+	    }}
+
+	    function applyFilter(q) {{
+	      const query = (q || '').trim().toLowerCase();
+	      let matches = 0;
+	      for (const n of nodes) {{
+	        if (n.classList.contains('hidden')) {{
+	          n.classList.remove('dim');
+	          n.classList.remove('match');
+	          continue;
+	        }}
+	        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
+	        const name = (n.getAttribute('data-name') || '').toLowerCase();
+	        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
+	        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
         n.classList.toggle('dim', !!query && !ok);
         n.classList.toggle('match', !!query && ok);
-        if (ok && query) matches += 1;
-      }}
-      if (status) {{
-        status.textContent = query ? ('matches: ' + matches + ' / ' + nodes.length) : '';
-      }}
-    }}
+	        if (ok && query) matches += 1;
+	      }}
+	      if (status) {{
+	        if (query) status.textContent = 'matches: ' + matches + ' / ' + visibleNodesCount;
+	        else if (visibleNodesCount !== nodes.length) status.textContent = 'visible: ' + visibleNodesCount + ' / ' + nodes.length;
+	        else status.textContent = '';
+	      }}
+	    }}
 
     function selectTable(tableSql) {{
       if (!tableSql) return;
@@ -655,20 +805,36 @@ def render_review_diff_html(
       }});
     }}
 
-    if (search) {{
-      search.addEventListener('input', () => applyFilter(search.value));
-    }}
-    if (reset) {{
-      reset.addEventListener('click', () => {{
-        if (search) search.value = '';
-        applyFilter('');
-        clearSelection();
-      }});
-    }}
+	    if (search) {{
+	      search.addEventListener('input', () => applyFilter(search.value));
+	    }}
+	    if (depthInput) {{
+	      depthInput.addEventListener('input', () => {{
+	        recomputeVisibility();
+	        applyFilter(search ? search.value : '');
+	      }});
+	    }}
+	    if (onlyFlagged) {{
+	      onlyFlagged.addEventListener('change', () => {{
+	        recomputeVisibility();
+	        applyFilter(search ? search.value : '');
+	      }});
+	    }}
+	    if (reset) {{
+	      reset.addEventListener('click', () => {{
+	        if (search) search.value = '';
+	        if (depthInput) depthInput.value = String(maxDepth);
+	        if (onlyFlagged) onlyFlagged.checked = false;
+	        recomputeVisibility();
+	        applyFilter('');
+	        clearSelection();
+	      }});
+	    }}
 
-    applyFilter(search ? search.value : '');
-  }})();
-  </script>
+	    recomputeVisibility();
+	    applyFilter(search ? search.value : '');
+	  }})();
+	  </script>
 </body>
 </html>
 """
