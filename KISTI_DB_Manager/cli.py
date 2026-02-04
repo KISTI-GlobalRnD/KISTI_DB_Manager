@@ -358,10 +358,27 @@ def _cmd_review_plan(args: argparse.Namespace) -> int:
 
 
 def _cmd_review_diff(args: argparse.Namespace) -> int:
-    from .review_diff import diff_review_files, render_review_diff_markdown
+    from .review_diff import diff_review_files, render_review_diff_markdown, write_review_diff_report
 
     diff = diff_review_files(args.before, args.after)
     md = render_review_diff_markdown(diff, max_list=int(args.max_list))
+
+    if getattr(args, "out_dir", None):
+        res = write_review_diff_report(
+            before_path=args.before,
+            after_path=args.after,
+            out_dir=args.out_dir,
+            max_list=int(args.max_list),
+        )
+        print(f"out_dir: {res['out_dir']}")
+        print(f"diff_json: {res['diff_json']}")
+        print(f"diff_md: {res['diff_md']}")
+        print(f"diff_html: {res['diff_html']}")
+        print(f"schema_diff_svg: {res['schema_diff_svg']}")
+        if args.out:
+            Path(args.out).write_text(md, encoding="utf-8")
+            print(f"diff: {args.out}")
+        return 0
 
     if args.out:
         Path(args.out).write_text(md, encoding="utf-8")
@@ -590,6 +607,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_rdiff.add_argument("before", help="Path to before review.json (or plan.json)")
     p_rdiff.add_argument("after", help="Path to after review.json (or plan.json)")
     p_rdiff.add_argument("--out", help="Write markdown diff to this path (default: stdout)")
+    p_rdiff.add_argument("--out-dir", dest="out_dir", help="Write a diff pack directory (md/html/svg/json)")
     p_rdiff.add_argument("--max-list", type=int, default=50, help="Max items per section (default: 50)")
     p_rdiff.set_defaults(func=_cmd_review_diff)
 

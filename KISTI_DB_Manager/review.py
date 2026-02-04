@@ -439,6 +439,8 @@ def render_simple_svg(
     y_step: int = 70,
     box_w: int = 240,
     box_h: int = 44,
+    node_class_by_sql: Mapping[str, str] | None = None,
+    node_fill_by_sql: Mapping[str, str] | None = None,
 ) -> str:
     """
     Render a lightweight SVG table graph without external dependencies.
@@ -570,6 +572,9 @@ def render_simple_svg(
     lines.append(".meta { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #57606a; }")
     lines.append(".edge { stroke: #57606a; stroke-width: 1; fill: none; }")
     lines.append(".node { cursor: pointer; }")
+    lines.append(".diff-added .box { stroke: #1a7f37; stroke-width: 2; }")
+    lines.append(".diff-removed .box { stroke: #cf222e; stroke-width: 2; }")
+    lines.append(".diff-changed .box { stroke: #bf8700; stroke-width: 2; }")
     lines.append("</style>")
 
     # Edges first (under nodes)
@@ -607,9 +612,17 @@ def render_simple_svg(
         name_original = ti.name_original if ti is not None else None
 
         node_id = _sanitize_html_id(f"node_{name_sql}")
+        extra_cls = ""
+        if node_class_by_sql:
+            try:
+                extra_cls = str(node_class_by_sql.get(name_sql) or "").strip()
+            except Exception:
+                extra_cls = ""
+
+        cls = "node" + (f" {extra_cls}" if extra_cls else "")
         attrs = [
             f'id="{_svg_escape(node_id)}"',
-            'class="node"',
+            f'class="{_svg_escape(cls)}"',
             f'data-name="{_svg_escape(name)}"',
             f'data-name-sql="{_svg_escape(name_sql)}"',
         ]
@@ -621,9 +634,19 @@ def render_simple_svg(
             title = f"{name_original} ({name_sql})"
         title = f"{title} · rows: {rows} · cols: {cols_label}"
 
+        fill = None
+        if node_fill_by_sql:
+            try:
+                fill = node_fill_by_sql.get(name_sql)
+            except Exception:
+                fill = None
+        fill_color = str(fill) if fill else node_color(name)
+
         lines.append(f"<g {' '.join(attrs)}>")
         lines.append(f"<title>{_svg_escape(title)}</title>")
-        lines.append(f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="{node_color(name)}" />')
+        lines.append(
+            f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="{_svg_escape(fill_color)}" />'
+        )
         if len(label_lines) == 1:
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(label_lines[0])}</text>')
             lines.append(f'<text class="meta" x="{x + 10}" y="{y + 34}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')

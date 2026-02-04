@@ -63,6 +63,8 @@ kisti-db-manager modes
 kisti-db-manager report summary path/to/run_report.json
 kisti-db-manager report diff path/to/before.json path/to/after.json --out diff.md
 kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_out
+kisti-db-manager review pack --config path/to/config.json --report run_report.json --out review_out
+kisti-db-manager review diff path/to/before_review.json path/to/after_review.json --out-dir review_diff_out
 kisti-db-manager tabular run --config path/to/config.json --report run_report.json --quarantine quarantine.jsonl
 kisti-db-manager json run --config path/to/json_config.json --report json_report.json --quarantine quarantine.jsonl
 ```

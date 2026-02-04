@@ -6,6 +6,9 @@
 .meta { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #57606a; }
 .edge { stroke: #57606a; stroke-width: 1; fill: none; }
 .node { cursor: pointer; }
+.diff-added .box { stroke: #1a7f37; stroke-width: 2; }
+.diff-removed .box { stroke: #cf222e; stroke-width: 2; }
+.diff-changed .box { stroke: #bf8700; stroke-width: 2; }
 </style>
 <path class="edge" data-parent="WoS_Sample__MN" data-child="WoS_Sample__MN-SUB__dynamic_data__citation_related__SDG__sdg_category" data-parent-sql="WoS_Sample__MN" data-child-sql="WoS_Sample__MN-SUB__dynamic_data__citation_related__SDG__sdg_category" d="M 270 52 C 670 52, 670 52, 1070 52" />
 <path class="edge" data-parent="WoS_Sample__MN" data-child="WoS_Sample__MN-SUB__dynamic_data__citation_related__citation_topics__subj-group__subject" data-parent-sql="WoS_Sample__MN" data-child-sql="WoS_Sample__MN-SUB__dynamic_data__citation_related__citation_topics__subj-group__subject" d="M 270 52 C 800 52, 800 52, 1330 52" />
