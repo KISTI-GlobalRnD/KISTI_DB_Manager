@@ -985,6 +985,8 @@ def _render_html(
             "<div class=\"schema-toolbar\">"
             "<input id=\"schema-search\" type=\"search\" placeholder=\"Search table…\" />"
             "<button id=\"schema-reset\" type=\"button\">Reset</button>"
+            "<button id=\"schema-download-svg\" type=\"button\">SVG</button>"
+            "<button id=\"schema-download-png\" type=\"button\">PNG</button>"
             "<span class=\"schema-option\">"
             "<span class=\"muted\">Depth</span>"
             "<input id=\"schema-depth\" type=\"range\" min=\"0\" max=\"0\" step=\"1\" />"
@@ -1376,11 +1378,13 @@ def _render_html(
     const container = document.getElementById('schema-container');
     if (!container) return;
 
-    const search = document.getElementById('schema-search');
-    const reset = document.getElementById('schema-reset');
-    const status = document.getElementById('schema-status');
-    const svg = container.querySelector('svg');
-    if (!svg) return;
+	    const search = document.getElementById('schema-search');
+	    const reset = document.getElementById('schema-reset');
+	    const dlSvg = document.getElementById('schema-download-svg');
+	    const dlPng = document.getElementById('schema-download-png');
+	    const status = document.getElementById('schema-status');
+	    const svg = container.querySelector('svg');
+	    if (!svg) return;
 
 	    const nodes = Array.from(svg.querySelectorAll('.node'));
 	    const edges = Array.from(svg.querySelectorAll('.edge'));
@@ -1993,6 +1997,250 @@ def _render_html(
 		      }}
 		    }}
 
+		    function safeFileName(text) {{
+		      const t = String(text || 'schema');
+		      const s = t.replace(/[^0-9A-Za-z_.-]+/g, '_');
+		      return (s.length > 120 ? s.slice(0, 120) : s) || 'schema';
+		    }}
+
+		    function downloadBlob(blob, filename) {{
+		      try {{
+		        const url = URL.createObjectURL(blob);
+		        const a = document.createElement('a');
+		        a.href = url;
+		        a.download = String(filename || 'download');
+		        document.body.appendChild(a);
+		        a.click();
+		        a.remove();
+		        setTimeout(() => URL.revokeObjectURL(url), 2000);
+		      }} catch (_e) {{}}
+		    }}
+
+		    const EXTRA_SVG_CSS = [
+		      '.node.hidden{{display:none;}}',
+		      '.edge.hidden{{display:none;}}',
+		      '.node.dim{{opacity:0.15;}}',
+		      '.node.match .box{{stroke:#fb8c00;stroke-width:2;}}',
+		      '.node.has-error .box{{stroke:#cf222e;stroke-width:2;}}',
+		      '.node.has-warning .box{{stroke:#bf8700;stroke-width:2;}}',
+		      '.node.has-quarantine .box{{stroke:#8250df;stroke-width:2;}}',
+		      '.node.focus-root .box{{stroke:#0969da;stroke-width:3;stroke-dasharray:none;}}',
+		      '.node.focus-path .box{{stroke:#0969da;stroke-width:2;stroke-dasharray:6 3;}}',
+		      '.edge.focus-path{{stroke:#0969da;stroke-width:2;stroke-dasharray:6 3;}}',
+		      '.node.selected .box{{stroke:#0969da;stroke-width:2;stroke-dasharray:none;}}',
+		      '.edge.selected{{stroke:#0969da;stroke-width:2;stroke-dasharray:none;}}',
+		      '.badge-text{{font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;font-size:11px;font-weight:600;}}',
+		      '.badge-error{{fill:#cf222e;}}',
+		      '.badge-warning{{fill:#bf8700;}}',
+		      '.badge-quarantine{{fill:#8250df;}}',
+		    ].join('\\n');
+
+		    function exportSvgText() {{
+		      const clone = svg.cloneNode(true);
+		      for (const el of Array.from(clone.querySelectorAll('.hidden'))) {{
+		        try {{ el.remove(); }} catch (_e) {{}}
+		      }}
+		      const ns = 'http://www.w3.org/2000/svg';
+		      let styleEl = clone.querySelector('style');
+		      if (!styleEl) {{
+		        styleEl = document.createElementNS(ns, 'style');
+		        clone.insertBefore(styleEl, clone.firstChild);
+		      }}
+		      styleEl.textContent = (styleEl.textContent || '') + '\\n' + EXTRA_SVG_CSS;
+		      clone.setAttribute('xmlns', ns);
+		      const xml = new XMLSerializer().serializeToString(clone);
+		      if (xml.trim().startsWith('<?xml')) return xml;
+		      return '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n' + xml;
+		    }}
+
+		    function exportSvg() {{
+		      const txt = exportSvgText();
+		      const blob = new Blob([txt], {{ type: 'image/svg+xml;charset=utf-8' }});
+		      const name = safeFileName(BASE_TABLE_SQL || 'schema') + '.svg';
+		      downloadBlob(blob, name);
+		    }}
+
+		    function exportPng() {{
+		      try {{
+		        const txt = exportSvgText();
+		        const blob = new Blob([txt], {{ type: 'image/svg+xml;charset=utf-8' }});
+		        const url = URL.createObjectURL(blob);
+		        const img = new Image();
+		        img.onload = () => {{
+		          const w = Number(svg.getAttribute('width') || 0) || (svg.viewBox && svg.viewBox.baseVal ? Number(svg.viewBox.baseVal.width || 0) : 0) || 1400;
+		          const h = Number(svg.getAttribute('height') || 0) || (svg.viewBox && svg.viewBox.baseVal ? Number(svg.viewBox.baseVal.height || 0) : 0) || 800;
+		          const scale = 2;
+		          const canvas = document.createElement('canvas');
+		          canvas.width = Math.max(1, Math.floor(w * scale));
+		          canvas.height = Math.max(1, Math.floor(h * scale));
+		          const ctx = canvas.getContext('2d');
+		          if (!ctx) {{
+		            URL.revokeObjectURL(url);
+		            return;
+		          }}
+		          ctx.fillStyle = '#ffffff';
+		          ctx.fillRect(0, 0, canvas.width, canvas.height);
+		          ctx.scale(scale, scale);
+		          ctx.drawImage(img, 0, 0, w, h);
+		          canvas.toBlob((pngBlob) => {{
+		            if (pngBlob) {{
+		              const name = safeFileName(BASE_TABLE_SQL || 'schema') + '.png';
+		              downloadBlob(pngBlob, name);
+		            }}
+		            URL.revokeObjectURL(url);
+		          }}, 'image/png');
+		        }};
+		        img.onerror = () => {{
+		          URL.revokeObjectURL(url);
+		        }};
+		        img.src = url;
+		      }} catch (_e) {{}}
+		    }}
+
+		    function parseBool(v) {{
+		      const s = String(v || '').toLowerCase();
+		      return s === '1' || s === 'true' || s === 'yes' || s === 'y' || s === 'on';
+		    }}
+
+		    function buildUiState() {{
+		      return {{
+		        q: search ? String(search.value || '') : '',
+		        depth: depthInput ? Number(depthInput.value || maxDepth) : maxDepth,
+		        flagged: !!(onlyFlagged && onlyFlagged.checked),
+		        color: colorBy ? String(colorBy.value || '') : '',
+		        top: topPct ? Number(topPct.value || 100) : 100,
+		        focus: !!(focus && focus.checked),
+		        fmode: focusMode ? String(focusMode.value || 'subtree') : 'subtree',
+		        hops: focusHops ? Number(focusHops.value || 2) : 2,
+		        bpath: !!(focusBasePath && focusBasePath.checked),
+		        sel: String(selectedTableSql || ''),
+		        froot: String(focusRootSql || ''),
+		      }};
+		    }}
+
+		    const STORAGE_KEY = 'kisti-review:schema:' + String(BASE_TABLE_SQL || '');
+
+		    function readStateFromUrl() {{
+		      try {{
+		        const params = new URLSearchParams(window.location.search || '');
+		        const keys = ['q','depth','flagged','color','top','focus','fmode','hops','bpath','sel','froot'];
+		        let has = false;
+		        for (const k of keys) {{
+		          if (params.has(k)) {{ has = true; break; }}
+		        }}
+		        if (!has) return null;
+		        return {{
+		          q: params.get('q') || '',
+		          depth: params.get('depth'),
+		          flagged: params.get('flagged'),
+		          color: params.get('color') || '',
+		          top: params.get('top'),
+		          focus: params.get('focus'),
+		          fmode: params.get('fmode') || '',
+		          hops: params.get('hops'),
+		          bpath: params.get('bpath'),
+		          sel: params.get('sel') || '',
+		          froot: params.get('froot') || '',
+		        }};
+		      }} catch (_e) {{
+		        return null;
+		      }}
+		    }}
+
+		    function readStateFromStorage() {{
+		      try {{
+		        if (!window.localStorage) return null;
+		        const raw = localStorage.getItem(STORAGE_KEY);
+		        if (!raw) return null;
+		        return JSON.parse(raw);
+		      }} catch (_e) {{
+		        return null;
+		      }}
+		    }}
+
+		    function applyState(st) {{
+		      if (!st || typeof st !== 'object') return;
+		      if (search && typeof st.q === 'string') search.value = st.q;
+
+		      if (depthInput && st.depth != null) {{
+		        const v = Number(st.depth);
+		        if (isFinite(v)) depthInput.value = String(Math.max(0, Math.min(maxDepth, v)));
+		      }}
+		      if (onlyFlagged && st.flagged != null) onlyFlagged.checked = parseBool(st.flagged);
+
+		      if (colorBy && typeof st.color === 'string') {{
+		        const c = String(st.color || '');
+		        colorBy.value = c;
+		      }}
+		      if (topPct && st.top != null) {{
+		        const v = Number(st.top);
+		        if (isFinite(v)) topPct.value = String(Math.max(1, Math.min(100, v)));
+		      }}
+
+		      if (focus && st.focus != null) focus.checked = parseBool(st.focus);
+		      if (focusMode && typeof st.fmode === 'string') {{
+		        const m = String(st.fmode || '');
+		        if (m === 'subtree' || m === 'khop' || m === 'path') focusMode.value = m;
+		      }}
+		      if (focusHops && st.hops != null) {{
+		        const v = Number(st.hops);
+		        if (isFinite(v)) focusHops.value = String(Math.max(1, Math.min(6, v)));
+		      }}
+		      if (focusBasePath && st.bpath != null) focusBasePath.checked = parseBool(st.bpath);
+
+		      if (typeof st.sel === 'string') selectedTableSql = st.sel;
+		      if (typeof st.froot === 'string') focusRootSql = st.froot;
+
+		      updateFocusControls();
+		      if (focusHopsValue && focusHops) focusHopsValue.textContent = String(focusHops.value || '');
+		    }}
+
+		    function writeStateToStorage(st) {{
+		      try {{
+		        if (!window.localStorage) return;
+		        localStorage.setItem(STORAGE_KEY, JSON.stringify(st));
+		      }} catch (_e) {{}}
+		    }}
+
+		    function writeStateToUrl(st) {{
+		      try {{
+		        const url = new URL(window.location.href);
+		        const params = url.searchParams;
+		        function setOrDel(k, v, def) {{
+		          const sv = String(v == null ? '' : v);
+		          const sd = String(def == null ? '' : def);
+		          if (sv === sd || sv === '') params.delete(k);
+		          else params.set(k, sv);
+		        }}
+		        setOrDel('q', st.q || '', '');
+		        setOrDel('depth', String(st.depth), String(maxDepth));
+		        setOrDel('flagged', st.flagged ? '1' : '', '');
+		        setOrDel('color', st.color || '', '');
+		        setOrDel('top', String(st.top), '100');
+		        setOrDel('focus', st.focus ? '1' : '', '');
+		        setOrDel('fmode', st.fmode || '', 'subtree');
+		        setOrDel('hops', String(st.hops), '2');
+		        setOrDel('bpath', st.bpath ? '1' : '0', '1');
+		        setOrDel('sel', st.sel || '', '');
+		        setOrDel('froot', st.froot || '', '');
+		        url.search = params.toString();
+		        window.history.replaceState(null, '', url.toString());
+		      }} catch (_e) {{}}
+		    }}
+
+		    let persistTimer = null;
+		    let persistSuppressed = false;
+		    function schedulePersist() {{
+		      if (persistSuppressed) return;
+		      if (persistTimer) clearTimeout(persistTimer);
+		      persistTimer = setTimeout(() => {{
+		        persistTimer = null;
+		        const st = buildUiState();
+		        writeStateToStorage(st);
+		        writeStateToUrl(st);
+		      }}, 200);
+		    }}
+
 	    function selectTable(tableSql) {{
 	      if (!tableSql) return;
 	      selectedTableSql = tableSql;
@@ -2020,6 +2268,7 @@ def _render_html(
 		        recomputeVisibility();
 		        applyFilter(search ? search.value : '');
 		      }}
+		      schedulePersist();
 		    }}
 
     for (const n of nodes) {{
@@ -2030,71 +2279,92 @@ def _render_html(
       }});
     }}
 
-	    if (search) {{
-	      search.addEventListener('input', () => applyFilter(search.value));
-	    }}
-	    if (depthInput) {{
-	      depthInput.addEventListener('input', () => {{
-	        recomputeVisibility();
-	        applyFilter(search ? search.value : '');
-	      }});
-	    }}
-			    if (onlyFlagged) {{
-			      onlyFlagged.addEventListener('change', () => {{
-			        recomputeVisibility();
-			        applyFilter(search ? search.value : '');
-			      }});
-			    }}
-			    if (focus) {{
-			      focus.addEventListener('change', () => {{
-			        recomputeVisibility();
-			        applyFilter(search ? search.value : '');
-			      }});
-			    }}
-			    if (focusMode) {{
-			      focusMode.addEventListener('change', () => {{
-			        recomputeVisibility();
-			        applyFilter(search ? search.value : '');
-			      }});
-			    }}
-			    if (focusHops) {{
-			      focusHops.addEventListener('input', () => {{
-			        if (focusHopsValue) focusHopsValue.textContent = String(focusHops.value || '');
-			        recomputeVisibility();
-			        applyFilter(search ? search.value : '');
-			      }});
-			    }}
-			    if (focusBasePath) {{
-			      focusBasePath.addEventListener('change', () => {{
-			        recomputeVisibility();
-			        applyFilter(search ? search.value : '');
-			      }});
-			    }}
-			    if (colorBy) {{
-			      colorBy.addEventListener('change', () => {{
-			        if (topPct) topPct.value = '100';
-			        applyHeatmap();
-		        recomputeVisibility();
-		        applyFilter(search ? search.value : '');
+		    if (search) {{
+		      search.addEventListener('input', () => {{
+		        applyFilter(search.value);
+		        schedulePersist();
 		      }});
 		    }}
-			    if (topPct) {{
-			      topPct.addEventListener('input', () => {{
-			        applyHeatmap();
+		    if (depthInput) {{
+		      depthInput.addEventListener('input', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+				    if (onlyFlagged) {{
+				      onlyFlagged.addEventListener('change', () => {{
+				        recomputeVisibility();
+				        applyFilter(search ? search.value : '');
+				        schedulePersist();
+				      }});
+				    }}
+				    if (focus) {{
+				      focus.addEventListener('change', () => {{
+				        recomputeVisibility();
+				        applyFilter(search ? search.value : '');
+				        schedulePersist();
+				      }});
+				    }}
+				    if (focusMode) {{
+				      focusMode.addEventListener('change', () => {{
+				        recomputeVisibility();
+				        applyFilter(search ? search.value : '');
+				        schedulePersist();
+				      }});
+				    }}
+				    if (focusHops) {{
+				      focusHops.addEventListener('input', () => {{
+				        if (focusHopsValue) focusHopsValue.textContent = String(focusHops.value || '');
+				        recomputeVisibility();
+				        applyFilter(search ? search.value : '');
+				        schedulePersist();
+				      }});
+				    }}
+				    if (focusBasePath) {{
+				      focusBasePath.addEventListener('change', () => {{
+				        recomputeVisibility();
+				        applyFilter(search ? search.value : '');
+				        schedulePersist();
+				      }});
+				    }}
+				    if (colorBy) {{
+				      colorBy.addEventListener('change', () => {{
+				        if (topPct) topPct.value = '100';
+				        applyHeatmap();
 			        recomputeVisibility();
 			        applyFilter(search ? search.value : '');
+			        schedulePersist();
 			      }});
 			    }}
-			    if (joinCopy) {{
-			      joinCopy.addEventListener('click', async () => {{
-			        const ok = await copyText(joinSql ? joinSql.textContent : '');
-			        flashJoinStatus(ok ? 'copied' : 'copy failed');
-			      }});
-			    }}
-			    if (reset) {{
-			      reset.addEventListener('click', () => {{
-			        if (search) search.value = '';
-			        if (depthInput) depthInput.value = String(maxDepth);
+				    if (topPct) {{
+				      topPct.addEventListener('input', () => {{
+				        applyHeatmap();
+				        recomputeVisibility();
+				        applyFilter(search ? search.value : '');
+				        schedulePersist();
+				      }});
+				    }}
+				    if (dlSvg) {{
+				      dlSvg.addEventListener('click', () => {{
+				        exportSvg();
+				      }});
+				    }}
+				    if (dlPng) {{
+				      dlPng.addEventListener('click', () => {{
+				        exportPng();
+				      }});
+				    }}
+				    if (joinCopy) {{
+				      joinCopy.addEventListener('click', async () => {{
+				        const ok = await copyText(joinSql ? joinSql.textContent : '');
+				        flashJoinStatus(ok ? 'copied' : 'copy failed');
+				      }});
+				    }}
+				    if (reset) {{
+				      reset.addEventListener('click', () => {{
+				        if (search) search.value = '';
+				        if (depthInput) depthInput.value = String(maxDepth);
 			        if (onlyFlagged) onlyFlagged.checked = false;
 			        if (focus) focus.checked = false;
 			        if (focusMode) focusMode.value = 'subtree';
@@ -2103,22 +2373,35 @@ def _render_html(
 			        if (colorBy) colorBy.value = '';
 			        if (topPct) topPct.value = '100';
 			        applyHeatmap();
-			        recomputeVisibility();
-			        applyFilter('');
-			        clearSelection();
-			        updateJoinSql(BASE_TABLE_SQL);
-			      }});
-			    }}
+				        recomputeVisibility();
+				        applyFilter('');
+				        clearSelection();
+				        updateJoinSql(BASE_TABLE_SQL);
+				        schedulePersist();
+				      }});
+				    }}
 
-			    applyBadges(badgeCounts);
-			    applyHeatmap();
-			    updateJoinSql(BASE_TABLE_SQL);
-			    recomputeVisibility();
-			    applyFilter(search ? search.value : '');
+				    // Restore UI state (URL has priority over localStorage).
+				    persistSuppressed = true;
+				    const initialState = readStateFromUrl() || readStateFromStorage();
+				    if (initialState) applyState(initialState);
+				    persistSuppressed = false;
 
-			    // Samples UX: collapse/search/copy (best-effort).
-			    const samplePres = Array.from(document.querySelectorAll('pre.samples-pre'));
-			    for (const p of samplePres) {{
+				    applyBadges(badgeCounts);
+				    applyHeatmap();
+				    updateJoinSql(BASE_TABLE_SQL);
+				    recomputeVisibility();
+				    applyFilter(search ? search.value : '');
+				    if (selectedTableSql) {{
+				      // Apply selection after initial render.
+				      persistSuppressed = true;
+				      try {{ selectTable(selectedTableSql); }} catch (_e) {{}}
+				      persistSuppressed = false;
+				    }}
+
+				    // Samples UX: collapse/search/copy (best-effort).
+				    const samplePres = Array.from(document.querySelectorAll('pre.samples-pre'));
+				    for (const p of samplePres) {{
 			      if (!p.dataset.raw) p.dataset.raw = p.textContent || '';
 			    }}
 
