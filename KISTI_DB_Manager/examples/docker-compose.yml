@@ -1,0 +1,36 @@
+services:
+  mariadb:
+    image: mariadb:10.11
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpass
+      MARIADB_DATABASE: kisti_smoke
+    ports:
+      - "3307:3306"
+    command: ["--character-set-server=utf8mb4", "--collation-server=utf8mb4_unicode_ci", "--local-infile=1"]
+    healthcheck:
+      test: ["CMD", "mariadb-admin", "ping", "-uroot", "-prootpass"]
+      interval: 2s
+      timeout: 2s
+      retries: 30
+
+  smoke:
+    image: python:3.11-slim
+    working_dir: /repo
+    volumes:
+      - ../../:/repo
+    depends_on:
+      mariadb:
+        condition: service_healthy
+    environment:
+      KISTI_SMOKE_DB_HOST: mariadb
+      KISTI_SMOKE_DB_PORT: "3306"
+      KISTI_SMOKE_DB_USER: root
+      KISTI_SMOKE_DB_PASSWORD: rootpass
+      KISTI_SMOKE_DB_NAME: kisti_smoke
+    command:
+      [
+        "bash",
+        "-lc",
+        "python -m pip install -U pip setuptools wheel && pip install -e '.[db]' && mkdir -p KISTI_DB_Manager/examples/out && python -m KISTI_DB_Manager.cli tabular run --config KISTI_DB_Manager/examples/configs/tabular_config_docker.json --report KISTI_DB_Manager/examples/out/tabular_report.json --quarantine KISTI_DB_Manager/examples/out/tabular_quarantine.jsonl && python -m KISTI_DB_Manager.cli json run --config KISTI_DB_Manager/examples/configs/json_config_docker.json --report KISTI_DB_Manager/examples/out/json_report.json --quarantine KISTI_DB_Manager/examples/out/json_quarantine.jsonl"
+      ]
+    restart: "no"

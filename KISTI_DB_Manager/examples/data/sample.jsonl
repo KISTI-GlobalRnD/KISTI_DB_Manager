@@ -1,0 +1,4 @@
+{"id": 1, "title": "a", "meta": {"year": 2024}, "items": [{"x": 1, "y": "a"}, {"x": 2, "y": "b"}]}
+{"id": 2, "title": "b", "meta": {"year": 2025, "new_field": "n"}, "items": [{"x": 3, "y": "c"}], "extra": "zz"}
+{"id": 3, "title": null, "items": []}
+

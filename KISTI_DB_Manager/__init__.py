@@ -1,25 +1,53 @@
-# KISTI_DB_Manager/__init__.py
 """
-Note
-----
-Made by Young Jin Kim (kimyoungjin06@gmail.com)
-Last Update: 2024.02.06, YJ Kim
+KISTI_DB_Manager
 
-MariaDB/MySQL Handling for All type DB
-To preprocess, import, export and manage the DB
+MariaDB/MySQL handling utilities for preprocessing, import/export, and management.
 """
 
-__version__ = "0.6.0"
+from __future__ import annotations
 
-from . import manage
-from . import plot
-from . import preview
-from . import processing
+from importlib import import_module
+from typing import Any
 
-__all__ = list(
-        set(manage.__all__) |
-        set(plot.__all__) |    
-        set(preview.__all__) |
-        set(processing.__all__) |
-        {"__version__"}
-    )
+__version__ = "0.7.0"
+
+__all__ = [
+    "__version__",
+    "cli",
+    "config",
+    "manage",
+    "modes",
+    "namemap",
+    "naming",
+    "pipeline",
+    "plot",
+    "preview",
+    "processing",
+    "quarantine",
+    "quarantine_summary",
+    "report",
+    "review",
+    "review_diff",
+]
+
+
+def __getattr__(name: str) -> Any:
+    if name in {
+        "cli",
+        "config",
+        "namemap",
+        "naming",
+        "pipeline",
+        "manage",
+        "modes",
+        "plot",
+        "preview",
+        "processing",
+        "quarantine",
+        "quarantine_summary",
+        "report",
+        "review",
+        "review_diff",
+    }:
+        return import_module(f"{__name__}.{name}")
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

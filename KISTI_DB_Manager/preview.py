@@ -32,7 +32,15 @@ for f in tqdm(flist):
 import numpy as np
 import pandas as pd
 
-__all__ = ["get_MariaDB_Type", "read_data_from_tabular"]
+from .config import coerce_data_config, join_path
+
+__all__ = [
+    "get_MariaDB_Type",
+    "get_Field_Description",
+    "get_Table_Description",
+    "update_data_config",
+    "read_data_from_tabular",
+]
 
 Integer_Types = {
     'TINYINT': 1,
@@ -258,10 +266,13 @@ def update_data_config(f, data_config):
     data_config['file_name'] = f
     data_config['table_name'] = ".".join(f.split('.')[:-1])
     data_config['file_type'] = f.split('.')[-1]
-    try:
-        data_config['KEYs'] = list(set(data_config['KEYs'] + [data_config['KEY']]))
-    except:
-        data_config['KEYs'] = [data_config['KEY']]
+    key = data_config.get("KEY")
+    if key:
+        keys = set(data_config.get("KEYs", []))
+        keys.add(key)
+        data_config["KEYs"] = sorted(keys)
+    else:
+        data_config.setdefault("KEYs", [])
     return data_config
 
 
@@ -282,26 +293,28 @@ def get_Table_Description(data_config, params, verbose=False, sep='__'):
         if (res['Type'] == 'DATETIME') & (Conv_DATETIME == False):
             res['Type'] = 'VARCHAR(64)' # prefix
         df_desc[col] = res
-        if data_config['KEYs']:
-            keys = data_config['KEYs']
+        keys = data_config.get("KEYs", [])
+        if keys:
             for key in keys:
                 df_desc.loc["is_key", key] = True
 
     # dot to underscore
     df_desc.columns = [x.replace('.', sep) for x in df_desc.columns] # Will be deprecated
-    df_desc.T.to_csv(f"{PATH}{data_config['table_name']}_Desc.csv")
+    df_desc.T.to_csv(join_path(PATH, f"{data_config['table_name']}_Desc.csv"))
     print(f"Generate the Description file for table `{data_config['table_name']}`")
     return df_desc.T
 
 
 def read_data_from_tabular(data_config):
     """Read the tabular Data File"""
-    PATH, f, TYPE = data_config['PATH'], data_config['file_name'], data_config['file_type']
-    if (TYPE == 'csv') | (TYPE == 'txt'):
-        SEP = data_config['SEP']
-        df = pd.read_csv(f'{PATH}{f}', sep=SEP)
+    data_config = coerce_data_config(data_config)
+    PATH, f, TYPE = data_config["PATH"], data_config["file_name"], data_config["file_type"]
+    file_path = join_path(PATH, f)
+    if TYPE in {"csv", "txt"}:
+        SEP = data_config.get("SEP", data_config.get("FILE_SEP", "\t"))
+        df = pd.read_csv(file_path, sep=SEP)
     elif TYPE == 'ftr':
-        df = pd.read_feather(f'{PATH}{f}')
+        df = pd.read_feather(file_path)
     elif TYPE == 'parquet':
-        df = pd.read_parquet(f'{PATH}{f}')
+        df = pd.read_parquet(file_path)
     return df

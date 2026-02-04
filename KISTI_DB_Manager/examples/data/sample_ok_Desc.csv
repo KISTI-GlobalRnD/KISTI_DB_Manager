@@ -1,0 +1,6 @@
+,Type,Null_ratio,is_key
+id,BIGINT,0,1
+name,VARCHAR(64),0,0
+value,DOUBLE,0.3333,0
+created_at,DATETIME,0,0
+

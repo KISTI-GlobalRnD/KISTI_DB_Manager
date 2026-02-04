@@ -1,0 +1,24 @@
+{
+  "data_config": {
+    "PATH": "KISTI_DB_Manager/examples/data",
+    "file_name": "sample.jsonl",
+    "file_type": "jsonl",
+    "table_name": "kisti_v2_json_sample",
+    "KEY_SEP": "__",
+    "index_key": "id",
+    "except_keys": [],
+    "chunk_size": 2,
+    "auto_alter_table": true,
+    "fallback_on_insert_error": true,
+    "fallback_column_type": "LONGTEXT",
+    "insert_retry_max": 5,
+    "index_prefix_len": 191
+  },
+  "db_config": {
+    "host": "127.0.0.1",
+    "user": "root",
+    "password": "rootpass",
+    "database": "kisti_smoke",
+    "port": 3307
+  }
+}

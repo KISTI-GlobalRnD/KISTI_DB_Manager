@@ -1,0 +1,26 @@
+{
+  "data_config": {
+    "PATH": "KISTI_DB_Manager/examples/data",
+    "file_name": "sample.csv",
+    "file_type": "csv",
+    "table_name": "kisti_v2_tabular_sample",
+    "SEP": ",",
+    "KEY_SEP": "__",
+    "Conv_DATETIME": false,
+    "forced_null": false,
+    "include_extra_columns": true,
+    "auto_alter_table": true,
+    "fallback_on_insert_error": true,
+    "fallback_column_type": "LONGTEXT",
+    "insert_retry_max": 5,
+    "index_prefix_len": 191,
+    "chunksize": 1000
+  },
+  "db_config": {
+    "host": "mariadb",
+    "user": "root",
+    "password": "rootpass",
+    "database": "kisti_smoke",
+    "port": 3306
+  }
+}

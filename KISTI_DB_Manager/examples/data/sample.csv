@@ -1,0 +1,5 @@
+id,name,value,created_at,extra_field
+1,Alice,1.23,2024-01-01 12:00:00,foo
+2,Bob,4.56,not-a-date,bar
+3,Charlie,,2024-02-03 09:10:11,
+

@@ -23,7 +23,7 @@ from tqdm import tqdm
 
 
 __all__ = ["conv_HTML_entities", "flatten_dict", "read_a_xml", "flatten_nested_json_with_list", 
-           "read_dict_from_zip", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs",
+           "read_dict_from_zip", "extract_rows_from_jsons", "extract_data_from_jsons", "read_dict_from_gz", "json_to_key_pairs",
           "key_pair_to_df", "excepted_regularization", "separate_excepted", "json_parsing"]
 
 def conv_HTML_entities(content, replace_list=['p', 'sub', 'sup', 'i', 'b', ], 
@@ -34,11 +34,11 @@ def conv_HTML_entities(content, replace_list=['p', 'sub', 'sup', 'i', 'b', ],
     for r in tqdm(replace_list, desc='Convert HTML Entities: '):
         for i, ro in enumerate(rounds):
             _tag = f"{ro[0]}{r}{ro[1]}"
-            _tag_to = f"{trans[i][0]}{r}{trans[i][0]}"
+            _tag_to = f"{trans[i][0]}{r}{trans[i][1]}"
             content_conv = re.sub(_tag, _tag_to, content_conv)
             if verbose:
                 res = re.findall(_tag, content)
-                print(len(res), _tag, 'is converted from', gz_file_name, 'in', f'{f}.')
+                print(len(res), _tag, "converted")
     return content_conv
 
 
@@ -123,7 +123,7 @@ def extract_key(_dict, key, key_on):
             _df = pd.DataFrame([])
     return _dict, _df
 
-def read_NSF_from_zip(zipf, path, key_on, ext_keys=[]):
+def read_NSF_from_zip(zipf, path, key_on, ext_keys=None):
     """
     Reads XML files from a specified ZIP archive, parses each XML file into a flattened
     dictionary, and extracts specified keys into separate DataFrames. It aggregates all
@@ -144,13 +144,19 @@ def read_NSF_from_zip(zipf, path, key_on, ext_keys=[]):
     for files that could not be processed.
     """
     
+    if ext_keys is None:
+        ext_keys = []
+
     data = []
     sub_datas = {}
     logs = []
     for ek in ext_keys:
         sub_datas[ek] = []
     
-    with ZipFile(path+zf, 'r') as zipObj:
+    import os
+    import zipfile
+
+    with zipfile.ZipFile(os.path.join(path, zipf), "r") as zipObj:
         listOfFileNames = zipObj.namelist()
         for fileName in tqdm(listOfFileNames):
             if fileName.endswith('xml'):
@@ -166,8 +172,8 @@ def read_NSF_from_zip(zipf, path, key_on, ext_keys=[]):
                         print(_dict)
                         raise "Check!"
                     data.append(curr_df)
-                except: # Error Log
-                    logs.append([zf, fileName])
+                except:  # Error Log
+                    logs.append([zipf, fileName])
     _df = pd.concat(data).reset_index(drop=True)
     df_subs = []
     for ek in ext_keys:
@@ -265,7 +271,7 @@ def read_NSF_from_zip(zipf, path, key_on, ext_keys=[]):
 #     return single_values, multiple_values, excepted_values
 
 
-def flatten_json_separate_lists(nested_json, except_keys=[], sep='__', parent=''):
+def flatten_json_separate_lists(nested_json, except_keys=None, sep="__", parent=""):
     """
     Flattens a nested JSON object (Python dictionary) and separates the output into
     two dictionaries: one for keys with single (non-list) values, and another for keys
@@ -285,6 +291,9 @@ def flatten_json_separate_lists(nested_json, except_keys=[], sep='__', parent=''
            keys with single (non-list) values. The second dictionary contains flattened
            keys with list values. The third dictionary contains excepted values.
     """
+    if except_keys is None:
+        except_keys = []
+
     single_values = {}
     multiple_values = {}
     excepted_values = {}
@@ -292,10 +301,11 @@ def flatten_json_separate_lists(nested_json, except_keys=[], sep='__', parent=''
     def flatten(x, name=''):
         if isinstance(x, dict):
             for a in x:
-                if a in except_keys:
-                    excepted_values[name + a] = x[a]
+                full_key = f"{name}{a}" if name else str(a)
+                if a in except_keys or full_key in except_keys:
+                    excepted_values[full_key] = x[a]
                 else:
-                    flatten(x[a], name + a + sep)
+                    flatten(x[a], full_key + sep)
         elif isinstance(x, list):
             # If the list contains dictionaries, flatten each dictionary but keep the list structure
             if len(x) > 0 and isinstance(x[0], dict):
@@ -376,20 +386,109 @@ def add_index_column_to_dfs(dfs, index_column_name, index_value):
     return updated_dfs
 
 
-def flatten_nested_json_with_list(_json, index_key='id', index=0, except_keys=[], sep='__'):
+def flatten_nested_json_with_list(_json, index_key="id", index=0, except_keys=None, sep="__"):
+    if except_keys is None:
+        except_keys = []
 
     single, multiples, excepted = flatten_json_separate_lists(_json, except_keys=except_keys, sep=sep)
+    if index_key not in single or single.get(index_key) in {None, ""}:
+        single[index_key] = index
     _df = pd.DataFrame(single, index=[index])
     _id = _df.loc[index, index_key]
-    df_subs = multiples_to_dataframes(multiples)
+    df_subs = multiples_to_dataframes(multiples, sep=sep)
     df_subs_add_idx = add_index_column_to_dfs(df_subs, index_key, _id)
 
-    for idx, key in enumerate(except_keys):
-        try:
-            excepted[key][index_key] = _id
-        except:
-            excepted = {key:{index_key:_id}}
+    for key, value in list(excepted.items()):
+        if isinstance(value, dict):
+            value[index_key] = _id
+            excepted[key] = value
+        else:
+            excepted[key] = {index_key: _id, "value": value}
     return _df, df_subs_add_idx, excepted
+
+
+def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_keys=None, sep="__"):
+    """
+    Row-oriented variant of flatten_nested_json_with_list for performance.
+
+    Returns:
+      - single_row: dict
+      - sub_rows: dict[sub_key, list[dict]]
+      - excepted: dict[branch, dict]
+    """
+    if except_keys is None:
+        except_keys = []
+
+    single, multiples, excepted = flatten_json_separate_lists(_json, except_keys=except_keys, sep=sep)
+    if index_key not in single or single.get(index_key) in {None, ""}:
+        single[index_key] = index
+    _id = single.get(index_key)
+
+    sub_rows: dict[str, list[dict]] = {}
+    for key, value_list in (multiples or {}).items():
+        if not value_list:
+            continue
+
+        rows: list[dict] = []
+        if isinstance(value_list, list) and isinstance(value_list[0], dict):
+            for item in value_list:
+                if not isinstance(item, dict):
+                    continue
+                row: dict = {}
+                for col, val in item.items():
+                    col2 = col if col == key else f"{key}{sep}{col}"
+                    row[col2] = val
+                row[index_key] = _id
+                rows.append(row)
+        else:
+            for val in value_list:
+                rows.append({index_key: _id, key: val})
+
+        if rows:
+            sub_rows[str(key)] = rows
+
+    for key, value in list((excepted or {}).items()):
+        if isinstance(value, dict):
+            value[index_key] = _id
+            excepted[key] = value
+        else:
+            excepted[key] = {index_key: _id, "value": value}
+
+    return single, sub_rows, excepted
+
+
+def _safe_flatten_nested_json_with_list_rows_worker(args):
+    """
+    ProcessPool worker wrapper around flatten_nested_json_with_list_rows.
+
+    Returns a tuple so the caller can continue on per-record failures without the
+    whole pool raising.
+    """
+    import traceback
+
+    try:
+        index, record, index_key, except_keys, sep = args
+        row, sub_rows, excepted = flatten_nested_json_with_list_rows(
+            record,
+            index_key=index_key,
+            index=index,
+            except_keys=list(except_keys) if except_keys is not None else None,
+            sep=sep,
+        )
+        return index, True, row, sub_rows, excepted, None
+    except Exception as e:
+        return (
+            None,
+            False,
+            None,
+            None,
+            None,
+            {
+                "type": type(e).__name__,
+                "message": str(e),
+                "traceback": traceback.format_exc(),
+            },
+        )
 
 def separate_excepted(jsons, except_keys, sep='__'):
     _jsons = jsons.copy()
@@ -398,12 +497,17 @@ def separate_excepted(jsons, except_keys, sep='__'):
         for i, _json in enumerate(_jsons):
             _temp = _jsons[i]
             for _key in __keys[:-1]:
+                if not isinstance(_temp, dict) or _key not in _temp:
+                    _temp = None
+                    break
                 _temp = _temp[_key]
+            if _temp is None:
+                continue
             _temp.pop(__keys[-1], None)
     return _jsons
 
 
-def read_dict_from_zip(zip_path, json_file_name):
+def read_dict_from_zip(zip_path, json_file_name, report=None):
     """
     Reads a dictionary from a JSON file stored within a ZIP archive.
 
@@ -428,14 +532,190 @@ def read_dict_from_zip(zip_path, json_file_name):
             # Read the JSON file from the ZIP archive
             with zip_ref.open(json_file_name) as json_file:
                 # Load the file content as a dictionary
-                extracted_dict = orjson.loads(json_file)
+                extracted_dict = orjson.loads(json_file.read())
         else:
-            print(f"The file {json_file_name} does not exist in the ZIP archive.")
+            if report:
+                report.warn(
+                    stage="read_dict_from_zip",
+                    message="JSON file not found in ZIP archive",
+                    zip_path=zip_path,
+                    json_file_name=json_file_name,
+                )
+            else:
+                print(f"The file {json_file_name} does not exist in the ZIP archive.")
 
     return extracted_dict
 
 
-def extract_data_from_jsons(jsons, index_key='id', except_keys=[], sep='__'):
+def extract_rows_from_jsons(
+    jsons,
+    *,
+    index_key: str = "id",
+    except_keys=None,
+    sep: str = "__",
+    report=None,
+    quarantine=None,
+    index_offset: int = 0,
+    parallel_workers: int | None = None,
+):
+    """
+    Extract row dicts from JSON records (main + sub tables) without building DataFrames.
+
+    This is used for:
+    - parallel flattening (ProcessPool)
+    - streaming TSV generation (no pandas) + LOAD DATA LOCAL INFILE
+    """
+    if except_keys is None:
+        except_keys = []
+
+    try:
+        index_offset = int(index_offset or 0)
+    except Exception:
+        index_offset = 0
+
+    try:
+        parallel_workers = int(parallel_workers) if parallel_workers is not None else 0
+    except Exception:
+        parallel_workers = 0
+
+    rows_main: list[dict] = []
+    sub_rows_tot: dict[str, list[dict]] = {}
+    excepted_tot = {key: [] for key in except_keys}
+
+    def _handle_record_ok(row, sub_rows, excepted):
+        if report:
+            report.bump("records_ok", 1)
+        rows_main.append(row)
+
+        for key, rows in (sub_rows or {}).items():
+            if not rows:
+                continue
+            sub_rows_tot.setdefault(key, []).extend(rows)
+
+        for key in except_keys:
+            try:
+                if key in excepted and excepted[key]:
+                    excepted_tot.setdefault(key, []).append(excepted[key])
+            except Exception as e:
+                if report:
+                    report.exception(
+                        stage="extract_rows_from_jsons",
+                        message="Failed to collect excepted branch",
+                        exc=e,
+                        key=key,
+                    )
+                if quarantine:
+                    try:
+                        quarantine.write(
+                            stage="extract_rows_from_jsons.excepted",
+                            record={},
+                            exc=e,
+                            key=key,
+                        )
+                    except Exception:
+                        pass
+
+    def _handle_record_fail(i: int, record, err):
+        if report:
+            report.bump("records_failed", 1)
+            try:
+                report.warn(
+                    stage="extract_rows_from_jsons",
+                    message="Failed to flatten JSON record",
+                    index=int(i),
+                    error=err,
+                )
+            except Exception:
+                pass
+        if quarantine:
+            try:
+                quarantine.write(stage="extract_rows_from_jsons.flatten", record=record, index=i, exc=RuntimeError(str(err)))
+            except Exception:
+                pass
+
+    use_parallel = parallel_workers is not None and int(parallel_workers or 0) >= 2 and len(jsons) >= 2
+    if use_parallel:
+        processed = 0
+        try:
+            from concurrent.futures import ProcessPoolExecutor
+
+            except_keys_tuple = tuple(except_keys or [])
+            chunksize = max(1, min(256, len(jsons) // (int(parallel_workers) * 4) or 1))
+            args_iter = (
+                (index_offset + i, _json, index_key, except_keys_tuple, sep) for i, _json in enumerate(jsons)
+            )
+            with ProcessPoolExecutor(max_workers=int(parallel_workers)) as ex:
+                for out in ex.map(_safe_flatten_nested_json_with_list_rows_worker, args_iter, chunksize=chunksize):
+                    processed += 1
+                    idx, ok, row, sub_rows, excepted, err = out
+                    if ok:
+                        _handle_record_ok(row, sub_rows, excepted)
+                    else:
+                        # Map failure to original record (by processed-1)
+                        local_i = processed - 1
+                        try:
+                            rec = jsons[local_i]
+                        except Exception:
+                            rec = {}
+                        _handle_record_fail(index_offset + local_i, rec, err)
+        except Exception as e:
+            if report:
+                try:
+                    report.warn(
+                        stage="extract_rows_from_jsons.parallel",
+                        message="Parallel flatten failed; falling back to sequential for remaining records",
+                        error=str(e),
+                        processed=int(processed),
+                        total=int(len(jsons)),
+                    )
+                except Exception:
+                    pass
+            # Best-effort: process remaining sequentially to avoid losing the batch.
+            for i in range(processed, len(jsons)):
+                _json = jsons[i]
+                try:
+                    row, sub_rows, excepted = flatten_nested_json_with_list_rows(
+                        _json,
+                        index=index_offset + i,
+                        index_key=index_key,
+                        except_keys=except_keys,
+                        sep=sep,
+                    )
+                except Exception as e2:
+                    _handle_record_fail(index_offset + i, _json, {"type": type(e2).__name__, "message": str(e2)})
+                    continue
+                _handle_record_ok(row, sub_rows, excepted)
+        return rows_main, sub_rows_tot, excepted_tot
+
+    # Sequential path
+    for i, _json in enumerate(jsons):
+        try:
+            row, sub_rows, excepted = flatten_nested_json_with_list_rows(
+                _json,
+                index=index_offset + i,
+                index_key=index_key,
+                except_keys=except_keys,
+                sep=sep,
+            )
+        except Exception as e:
+            _handle_record_fail(index_offset + i, _json, {"type": type(e).__name__, "message": str(e)})
+            continue
+        _handle_record_ok(row, sub_rows, excepted)
+
+    return rows_main, sub_rows_tot, excepted_tot
+
+
+def extract_data_from_jsons(
+    jsons,
+    index_key="id",
+    except_keys=None,
+    sep="__",
+    report=None,
+    quarantine=None,
+    *,
+    index_offset: int = 0,
+    parallel_workers: int | None = None,
+):
     """
     Aggregates data from a list of JSON objects into a primary DataFrame and a set of subsidiary DataFrames.
     Each JSON object is flattened, with its nested structures and lists transformed into DataFrames.
@@ -462,65 +742,73 @@ def extract_data_from_jsons(jsons, index_key='id', except_keys=[], sep='__'):
     - An index is added to each DataFrame derived from a JSON object to maintain order and reference
       back to the original JSON object in the list.
     """
-    from tqdm import tqdm
+    if except_keys is None:
+        except_keys = []
+
+    if report:
+        report.bump("records_total", len(jsons) if hasattr(jsons, "__len__") else 0)
 
     def cleanse_dummies(df_subs, sep):
-        for sub in df_subs:
+        """
+        Best-effort cleanup for dummy list marker columns.
+
+        Older logic used value_counts() across all columns which is expensive and can fail
+        on unhashable values. Restrict to columns that look like list markers.
+        """
+        marker = f"{sep}List"
+        for sub in list(df_subs.keys()):
             df_sub = df_subs[sub]
-            cols = df_sub.columns.values
-            tg_idx = []
-            for i, col in enumerate(cols):
-                _set = df_sub[col].value_counts()
-                if sep+'List' in col:
-                    if len(_set) == 1:
-                        x = df_sub[col].value_counts().index.values
-                        if x.tolist() == [[]]:
-                            tg_idx.append(i)
-            new_cols = np.delete(cols, tg_idx)
-            df_subs[sub] = df_sub[new_cols]
+            drop_cols = []
+            for col in list(df_sub.columns):
+                if marker not in str(col):
+                    continue
+                series = df_sub[col]
+                # Drop only when all non-null values are empty lists.
+                try:
+                    all_empty = True
+                    for v in series:
+                        if v is None or (isinstance(v, float) and np.isnan(v)):
+                            continue
+                        if isinstance(v, list) and len(v) == 0:
+                            continue
+                        all_empty = False
+                        break
+                    if all_empty:
+                        drop_cols.append(col)
+                except Exception:
+                    continue
+            if drop_cols:
+                df_subs[sub] = df_sub.drop(columns=drop_cols)
         return df_subs
 
-    for i, _json in enumerate(tqdm(jsons, desc='\t', #ncols=90, 
-                      mininterval=1)):
-        # Process each JSON object to flatten it and extract data into DataFrames
-        _df, _df_subs, excepted = flatten_nested_json_with_list(_json, index=i, index_key=index_key, except_keys=except_keys, sep=sep)
-        if i == 0:
-            df_tot = []
-            df_subs_tot = {}
-            excepted_tot = {}
-            for key in _df_subs.keys():
-                df_subs_tot[key] = []
-            for key in except_keys:
-                excepted_tot[key] = []
-        # Attempt to concatenate the new DataFrames with the aggregated ones
-        df_tot.append(_df)
-        for key in df_subs_tot.keys():
-            if len(_df_subs[key]) > 0:
-                df_subs_tot[key].append(_df_subs[key])
-        for key in except_keys:
-            try:
-                if len(excepted[key]) > 0:
-                    excepted_tot[key].append(excepted[key])
-            except:
-                print('err log')
-                pass
+    rows_main, sub_rows_tot, excepted_tot = extract_rows_from_jsons(
+        jsons,
+        index_key=index_key,
+        except_keys=except_keys,
+        sep=sep,
+        report=report,
+        quarantine=quarantine,
+        index_offset=index_offset,
+        parallel_workers=parallel_workers,
+    )
     
-    df_tot = pd.concat(df_tot).dropna(axis=1, how='all')
-    del_keys = []
-    for key in df_subs_tot.keys():
-        if len(df_subs_tot[key]) > 0:
-            __res = pd.concat(df_subs_tot[key]).dropna(axis=1, how='all').reset_index(drop=True)
-            df_subs_tot[key] = __res
-        else:
-            del_keys.append(key)
-    for key in del_keys:
-        df_subs_tot.pop(key)
-    for key in except_keys:
-        try:
-            excepted_tot[key].append(excepted[key])
-        except:
-            print('err log')
-            pass
+    if len(rows_main) == 0:
+        if report:
+            report.warn(stage="extract_data_from_jsons", message="No records succeeded; returning empty results")
+        return pd.DataFrame([]), {}, excepted_tot
+
+    df_tot = pd.DataFrame.from_records(rows_main).dropna(axis=1, how="all")
+    if index_key in df_tot.columns:
+        df_tot = df_tot[[index_key] + [c for c in df_tot.columns if c != index_key]]
+
+    df_subs_tot: dict[str, pd.DataFrame] = {}
+    for key, rows in sub_rows_tot.items():
+        if not rows:
+            continue
+        df_sub = pd.DataFrame.from_records(rows).dropna(axis=1, how="all").reset_index(drop=True)
+        if index_key in df_sub.columns:
+            df_sub = df_sub[[index_key] + [c for c in df_sub.columns if c != index_key]]
+        df_subs_tot[key] = df_sub
 
     df_subs_tot = cleanse_dummies(df_subs_tot, sep)
 
@@ -681,7 +969,16 @@ def excepted_regularization(_jsons, types, base_key='', sep='__'):
     return result
 
 
-def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', except_keys=[]):
+def json_parsing(
+    jsons_data,
+    origin="",
+    sep="__",
+    forced=None,
+    index_key="id",
+    except_keys=None,
+    report=None,
+    quarantine=None,
+):
     '''
     json_parsing 함수는 JSON 데이터를 분석하고 정규화하여 여러 데이터프레임을 반환합니다.
     
@@ -700,6 +997,11 @@ def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', exc
     Usage:
     df, df_subs, excepted, sample = processing.json_parsing(json_data, origin=origin, forced={}, index_key='id')
     '''
+    if forced is None:
+        forced = {}
+    if except_keys is None:
+        except_keys = []
+
     # STEP 1. Analyze JSON Structure
     print('STEP 1. Analyze JSON Structure:')
     key_pairs = json_to_key_pairs(jsons_data, '', sep=sep)
@@ -712,7 +1014,14 @@ def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', exc
     
     # STEP 3. Extract Data from Regularized JSON
     print('STEP 3. Extract Data from Regularized JSON:')
-    df, df_subs, excepted = extract_data_from_jsons(excepted_reg, index_key, except_keys, sep=sep)
+    df, df_subs, excepted = extract_data_from_jsons(
+        excepted_reg,
+        index_key,
+        except_keys,
+        sep=sep,
+        report=report,
+        quarantine=quarantine,
+    )
     
     return df, df_subs, excepted, excepted_reg[0]
 
@@ -720,23 +1029,28 @@ def json_parsing(jsons_data, origin='', sep='__', forced={}, index_key='id', exc
 def save_data(dfs, data_config):
 
     df, df_subs = dfs
-    PATH, KEYs, SEP, table_name = data_config['PATH'], data_config['KEYs'], data_config['SEP'], data_config['table_name']
+    from .config import coerce_data_config, join_path
+
+    data_config = coerce_data_config(data_config)
+    PATH = data_config["PATH"]
+    key_sep = data_config.get("KEY_SEP", data_config.get("SEP", "__"))
+    table_name = data_config["table_name"]
 
     idx = 1
     suffix = 'MAIN'
-    fname = f'{PATH}{table_name}{SEP}{suffix}.parquet'
-    if data_config['fname_index']:
-        fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.parquet'
+    fname = join_path(PATH, f"{table_name}{key_sep}{suffix}.parquet")
+    if data_config.get("fname_index", False):
+        fname = join_path(PATH, f"{idx:02d}{key_sep}{table_name}{key_sep}{suffix}.parquet")
     try:
         df.to_parquet(fname)
         print(f"'{fname}' is successfully saved.")
         idx += 1
         
         for key in df_subs.keys():
-            suffix = f"SUB{SEP}{key}"
-            fname = f'{PATH}{table_name}{SEP}{suffix}.parquet'
-            if data_config['fname_index']:
-                fname = f'{PATH}{idx:02d}{SEP}{table_name}{SEP}{suffix}.parquet'
+            suffix = f"SUB{key_sep}{key}"
+            fname = join_path(PATH, f"{table_name}{key_sep}{suffix}.parquet")
+            if data_config.get("fname_index", False):
+                fname = join_path(PATH, f"{idx:02d}{key_sep}{table_name}{key_sep}{suffix}.parquet")
             try:
                 try:
                     df_subs[key].reset_index(drop=True).to_parquet(fname)
@@ -786,7 +1100,9 @@ def rename_columns(df, df_subs, options):
         df_subs[sub_df_name] = sub_df  # 수정된 sub_df 저장
 
 
-def one_hot_encoding(df, table_name='MAIN', exceptions=[], max_unique_num=5):
+def one_hot_encoding(df, table_name="MAIN", exceptions=None, max_unique_num=5):
+    if exceptions is None:
+        exceptions = []
     def one_hot(df, col, exceptions):
         # Get the unique values in the column
         unique_vals = sorted(df[col].explode().unique())  # 고유 값을 정렬

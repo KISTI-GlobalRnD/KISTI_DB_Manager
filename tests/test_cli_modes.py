@@ -1,0 +1,121 @@
+import io
+import json
+import tempfile
+import unittest
+from contextlib import redirect_stdout
+from unittest.mock import patch
+
+from KISTI_DB_Manager.cli import main
+from KISTI_DB_Manager.pipeline import JsonRunResult, TabularRunResult
+from KISTI_DB_Manager.report import RunReport
+
+
+class TestCLIModes(unittest.TestCase):
+    def test_json_mode_ingest_fast_skips_index_optimize_by_default(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+            report_path = f"{td}/report.json"
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "tbl",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as mock_run:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = main(["json", "run", "--config", cfg_path, "--mode", "ingest-fast", "--report", report_path])
+
+            self.assertEqual(rc, 0)
+            _args, kwargs = mock_run.call_args
+            self.assertTrue(kwargs["create"])
+            self.assertTrue(kwargs["load"])
+            self.assertFalse(kwargs["index"])
+            self.assertFalse(kwargs["optimize"])
+
+    def test_json_mode_ingest_fast_allows_overriding_index(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+            report_path = f"{td}/report.json"
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "tbl",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as mock_run:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = main(
+                        [
+                            "json",
+                            "run",
+                            "--config",
+                            cfg_path,
+                            "--mode",
+                            "ingest-fast",
+                            "--index",
+                            "--report",
+                            report_path,
+                        ]
+                    )
+
+            self.assertEqual(rc, 0)
+            _args, kwargs = mock_run.call_args
+            self.assertTrue(kwargs["index"])
+
+    def test_tabular_mode_finalize_runs_index_optimize_only(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+            report_path = f"{td}/report.json"
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.csv",
+                    "file_type": "csv",
+                    "table_name": "tbl",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_tabular_pipeline",
+                return_value=TabularRunResult(name_map=None, report=fake_report),
+            ) as mock_run:
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = main(["tabular", "run", "--config", cfg_path, "--mode", "finalize", "--report", report_path])
+
+            self.assertEqual(rc, 0)
+            _args, kwargs = mock_run.call_args
+            self.assertFalse(kwargs["create"])
+            self.assertFalse(kwargs["load"])
+            self.assertTrue(kwargs["index"])
+            self.assertTrue(kwargs["optimize"])
+
+
+if __name__ == "__main__":
+    unittest.main()

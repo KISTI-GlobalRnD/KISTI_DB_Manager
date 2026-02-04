@@ -1,101 +1,115 @@
-# Summary
+# KISTI_DB_Manager
 
 ![Logo](Image/KISTI_DB_Manager.svg)
 
-Made by Young Jin Kim (kimyoungjin06@gmail.com)
-- Birth: 2023.02.05
+MariaDB/MySQL handling utilities for preprocessing, import/export, and management.
 
-MariaDB/MySQL Handling for All type DB.
-To preprocess, import, export and manage the DB
+## Versioning note (0.7.0)
 
----
+Starting from **0.7.0**, this repository keeps a single implementation:
+- **`KISTI_DB_Manager` is the “v2” codebase** (refactor + robustness + performance).
+- The old v1-only implementation has been removed from the working tree (available in git history).
 
-# KISTI_DB_Manager
+## Goals
 
-The `KISTI_DB_Manager` package is a comprehensive toolset designed to streamline the process of managing database operations, including creating databases, generating and optimizing tables, and efficiently managing data for analytical purposes. Focused on the needs of researchers and data analysts working with mobility footprint data, this package offers a robust solution for handling large datasets with ease.
+- Keep the “never fail the whole run” philosophy for messy/heterogeneous data
+- Make table/column naming constraints consistent across create/load/index steps
+- Make large JSON/XML ingestion fast (bulk load + streaming) and observable (RunReport timings)
 
-## Features
+## What’s in the box
 
-- **Database Management**: Simplify the creation and dropping of databases with configurable character sets and collations.
-- **Table Management**: Automated table creation and optimization based on data analysis.
-- **Data Ingestion**: Facilitate the direct insertion of data from tabular files into the database, supporting large datasets.
-- **Index Management**: Automatically set indexes on tables to improve query performance.
-- **Custom Configuration**: Support for custom data and database configurations, allowing for flexible data management strategies.
-- **Raw XML Structure & Schema Visualization**: Support for visualization of raw XML and DB schema.
+- **One-shot pipelines**
+  - `tabular run`: Description → CREATE → LOAD → INDEX → OPTIMIZE
+  - `json run`: records → flatten(main+subs) → CREATE/ALTER → LOAD → INDEX → OPTIMIZE
+- **Schema drift handling**
+  - New columns: best-effort `ALTER TABLE ADD COLUMN`
+  - Insert failures: best-effort widen/add failing column (default `LONGTEXT`) and retry
+  - Optional **schema freeze**: keep base schema stable and store unknown fields into `__extra__`
+- **Performance**
+  - `LOAD DATA LOCAL INFILE` fast path for bulk ingest (tabular + JSON streaming rows)
+  - Chunk/batch controls, parallel JSON flattening, and stage timings/throughput in `RunReport`
+- **Operational safety**
+  - `RunReport` JSON + `Quarantine` JSONL for continue-on-error ingestion
+- **Review/visualization**
+  - Review pack generation (md/html/svg) and schema diagrams (optional extras)
 
-## Outputs
-
-![Sample_Structure](Image/Structure_WoS_XML.svg)
-![Sample_Excepted Structure](Image/Structure_WoS_XML_Excepted.svg)
-![DB Schema](Image/DB_Schema.svg)
-
-## Installation
-
-To install `KISTI_DB_Manager`, ensure you have `pymysql` installed as a prerequisite, then download or clone the package repository from its source. The package can be included in your projects by importing:
+## Install
 
 ```bash
-pip install pymysql
-# Clone or download the KISTI_DB_Manager package from its repository
+pip install -e .
 ```
 
-## Quick Start Guide
+Optional extras:
 
-Here's how to get started with `KISTI_DB_Manager`:
+```bash
+pip install -e ".[db]"
+pip install -e ".[viz]"
+pip install -e ".[review]"
+pip install -e ".[db,viz]"
+pip install -e ".[db,review]"
+```
 
-1. **Configure Database and Data Paths**:
+## CLI
 
-   Define your database configuration and data paths. Customize the parameters as needed for your environment and data structure.
+```bash
+kisti-db-manager version
+kisti-db-manager modes
+kisti-db-manager report summary path/to/run_report.json
+kisti-db-manager report diff path/to/before.json path/to/after.json --out diff.md
+kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_out
+kisti-db-manager tabular run --config path/to/config.json --report run_report.json --quarantine quarantine.jsonl
+kisti-db-manager json run --config path/to/json_config.json --report json_report.json --quarantine quarantine.jsonl
+```
 
-   ```python
-   db_config = {
-       'host': 'localhost',
-       'user': 'your_username',
-       'password': 'your_password',
-       'database': 'your_database_name'
-   }
+### Modes (presets)
 
-   data_config = {
-       'PATH': 'path_to_your_data/',
-       'SEP': '\t',
-       'file_name': 'your_file_name.txt',
-       'table_name': 'your_table_name',
-       'out_path': 'path_for_sql_output/',
-       'Conv_DATETIME': False,
-   }
-   ```
+Large data (recommended flow):
 
-2. **Database and Table Management**:
+```bash
+# 1) ingest only (skip index/optimize)
+kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
 
-   Easily manage your databases and tables with a few lines of code. For example, to create a new database and set up tables based on your data files:
+# 2) build indexes + optimize after ingest
+kisti-db-manager json run --config path/to/json_config.json --mode finalize
+```
 
-   ```python
-   from KISTI_DB_Manager import manage, preview
+Schema drift heavy + ALTER is too expensive:
 
-   # Create database
-   manage.create_DB(db_config['database'], CHARACTER_SET, COLLATE, db_config)
+```bash
+kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-freeze
+```
 
-   # Process data files and create tables
-   flist = sorted([x for x in os.listdir(data_config['PATH']) if 'txt' in x])
-   for f in flist:
-       data_config = preview.update_data_config(f, data_config)
-       manage.create_table(data_config, db_config)
-       manage.fill_table_from_file(data_config, db_config)
-       manage.set_index(db_config, data_config)
-       manage.optimize_table(db_config, data_config)
-   ```
+Korean ops guide (decision rules + checklist):
+- `KISTI_DB_Manager/GUIDE_KO.md`
 
-## Advanced Usage
+## Python API (v1-style usage)
 
-Refer to the `0.1.Sample_Code.ipynb` notebook for advanced use cases, including detailed data preparation, table optimization techniques, and index management strategies for large datasets.
+Most v1-style notebooks can keep the same import:
 
-## Contributing
+```python
+from KISTI_DB_Manager import manage, preview
 
-We welcome contributions to `KISTI_DB_Manager`! Please read through our contribution guidelines for details on how to submit pull requests, report issues, or request new features.
+flist = sorted([x for x in os.listdir(data_config["PATH"]) if x.endswith(".csv")])
+for f in flist:
+    data_config = preview.update_data_config(f, data_config)
+    manage.create_table(data_config, db_config)
+    manage.fill_table_from_file(data_config, db_config)
+    manage.set_index(db_config, data_config)
+    manage.optimize_table(db_config, data_config)
+```
 
-## License
+## Smoke test (Docker MariaDB)
 
-`KISTI_DB_Manager` is licensed under the MIT License. See the LICENSE file for more details.
+We ship a reproducible smoke test under `KISTI_DB_Manager/examples/`.
 
-## Support
+```bash
+cd KISTI_DB_Manager/examples
+docker compose up --build --abort-on-container-exit smoke
+docker compose down
+```
 
-For support, questions, or more information about `KISTI_DB_Manager`, please contact us at [kimyoungjin06@kisti.re.kr].
+Or on host (requires deps installed):
+
+```bash
+bash KISTI_DB_Manager/examples/smoke.sh
+```
