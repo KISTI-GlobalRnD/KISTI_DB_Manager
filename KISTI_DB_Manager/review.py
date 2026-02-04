@@ -904,6 +904,8 @@ def _render_html(
     issues: list[dict[str, Any]] | None,
     samples_by_table: Mapping[str, list[dict[str, Any]]] | None = None,
     table_badges: Mapping[str, Mapping[str, int]] | None = None,
+    timings_ms: Mapping[str, Any] | None = None,
+    stats: Mapping[str, Any] | None = None,
 ) -> str:
     def h(x: Any) -> str:
         return html.escape(str(x))
@@ -1089,6 +1091,80 @@ def _render_html(
 
     badge_counts_json = json.dumps(badge_counts, ensure_ascii=False).replace("<", "\\u003c")
 
+    timings_section = ""
+    if timings_ms and isinstance(timings_ms, Mapping):
+        items: list[tuple[str, int]] = []
+        for k, v in timings_ms.items():
+            try:
+                ms = int(v)
+            except Exception:
+                continue
+            if ms <= 0:
+                continue
+            items.append((str(k), ms))
+        items.sort(key=lambda kv: (-kv[1], kv[0]))
+        total_ms = sum(ms for _k, ms in items)
+        max_ms = max((ms for _k, ms in items), default=0)
+
+        timing_rows = []
+        for k, ms in items[:30]:
+            pct = int(round((ms / max_ms) * 100)) if max_ms > 0 else 0
+            timing_rows.append(
+                "<tr>"
+                f"<td><code>{h(k)}</code></td>"
+                f"<td style=\"text-align:right;\">{ms}</td>"
+                f"<td style=\"text-align:right;\">{ms/1000.0:.3f}</td>"
+                "<td>"
+                "<div class=\"bar\"><div class=\"bar-fill\" style=\"width: "
+                + h(pct)
+                + "%\"></div></div>"
+                "</td>"
+                "</tr>"
+            )
+
+        body = "".join(timing_rows) if timing_rows else '<tr><td colspan="4" class="muted">(none)</td></tr>'
+        timings_section = f"""
+  <div class="card">
+    <h2>Timings</h2>
+    <p class="muted">Total: <code>{h(total_ms)}</code> ms ({total_ms/1000.0:.3f}s). Showing top {h(min(len(items), 30))}.</p>
+    <table>
+      <thead><tr><th>key</th><th style="text-align:right;">ms</th><th style="text-align:right;">sec</th><th>share</th></tr></thead>
+      <tbody>
+        {body}
+      </tbody>
+    </table>
+  </div>
+""".rstrip()
+
+    stats_section = ""
+    if stats and isinstance(stats, Mapping):
+        sitems: list[tuple[str, int]] = []
+        for k, v in stats.items():
+            try:
+                n = int(v)
+            except Exception:
+                continue
+            if n == 0:
+                continue
+            sitems.append((str(k), n))
+        sitems.sort(key=lambda kv: (-kv[1], kv[0]))
+        srows = []
+        for k, n in sitems[:40]:
+            srows.append("<tr>" f"<td><code>{h(k)}</code></td>" f"<td style=\"text-align:right;\">{n}</td>" "</tr>")
+        body = "".join(srows) if srows else '<tr><td colspan="2" class="muted">(none)</td></tr>'
+        stats_section = f"""
+  <div class="card">
+    <h2>Stats</h2>
+    <p class="muted">Showing top {h(min(len(sitems), 40))} non-zero counters.</p>
+    <table>
+      <thead><tr><th>key</th><th style="text-align:right;">value</th></tr></thead>
+      <tbody>
+        {body}
+      </tbody>
+    </table>
+  </div>
+""".rstrip()
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1105,6 +1181,8 @@ def _render_html(
     th {{ background: #f6f8fa; text-align: left; }}
     .muted {{ color: #57606a; }}
     .card {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 16px; margin: 16px 0; background: #ffffff; }}
+    .bar {{ height: 10px; border: 1px solid #d0d7de; border-radius: 999px; overflow: hidden; background: #ffffff; }}
+    .bar-fill {{ height: 100%; background: #0969da; }}
     details.details summary {{ cursor: pointer; }}
     details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
     .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }}
@@ -1135,6 +1213,10 @@ def _render_html(
       {meta_items}
     </ul>
   </div>
+
+  {timings_section}
+
+  {stats_section}
 
   <div class="card">
     <h2>Diagram</h2>
@@ -1576,6 +1658,8 @@ def generate_review_plan(
         },
         table_infos=table_infos,
         issues=[it.to_dict() for it in report.issues] if hasattr(report, "issues") else None,
+        timings_ms=getattr(report, "timings_ms", None),
+        stats=getattr(report, "stats", None),
     )
     _write_text(plan_html_path, html_text)
 
@@ -1845,6 +1929,8 @@ def generate_review_pack(
         issues=issues,
         samples_by_table=samples_by_table or None,
         table_badges=({t: {"quarantine": n} for t, n in quarantine_counts_by_table.items()} if quarantine_counts_by_table else None),
+        timings_ms=(report.get("timings_ms") if report else None),
+        stats=(report.get("stats") if report else None),
     )
     if "html" in fmt:
         _write_text(html_path, html_text)
