@@ -1007,6 +1007,24 @@ def _render_html(
             "<input id=\"schema-top-pct\" type=\"range\" min=\"1\" max=\"100\" step=\"1\" value=\"100\" />"
             "<code id=\"schema-top-pct-value\">100%</code>"
             "</span>"
+            "<span class=\"schema-option\">"
+            "<label class=\"schema-option\">"
+            "<input id=\"schema-focus\" type=\"checkbox\" />"
+            "<span class=\"muted\">Focus</span>"
+            "</label>"
+            "<select id=\"schema-focus-mode\">"
+            "<option value=\"subtree\">subtree</option>"
+            "<option value=\"khop\">k-hop</option>"
+            "<option value=\"path\">path-to-base</option>"
+            "</select>"
+            "<span class=\"muted\">hops</span>"
+            "<input id=\"schema-focus-hops\" type=\"range\" min=\"1\" max=\"6\" step=\"1\" value=\"2\" />"
+            "<code id=\"schema-focus-hops-value\">2</code>"
+            "<label class=\"schema-option\">"
+            "<input id=\"schema-focus-path\" type=\"checkbox\" checked />"
+            "<span class=\"muted\">Base path</span>"
+            "</label>"
+            "</span>"
             "<span id=\"schema-status\" class=\"muted\"></span>"
             "</div>"
             "<div id=\"schema-container\" class=\"schema-container\">"
@@ -1293,9 +1311,12 @@ def _render_html(
 	    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
 	    .schema-container .node.has-error .box {{ stroke: #cf222e; stroke-width: 2; }}
 	    .schema-container .node.has-warning .box {{ stroke: #bf8700; stroke-width: 2; }}
-    .schema-container .node.has-quarantine .box {{ stroke: #8250df; stroke-width: 2; }}
-    .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
-    .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; }}
+	    .schema-container .node.has-quarantine .box {{ stroke: #8250df; stroke-width: 2; }}
+	    .schema-container .node.focus-root .box {{ stroke: #0969da; stroke-width: 3; stroke-dasharray: none; }}
+	    .schema-container .node.focus-path .box {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: 6 3; }}
+	    .schema-container .edge.focus-path {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: 6 3; }}
+	    .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: none; }}
+	    .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: none; }}
     .schema-container .badge-text {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; font-weight: 600; }}
     .schema-container .badge-error {{ fill: #cf222e; }}
     .schema-container .badge-warning {{ fill: #bf8700; }}
@@ -1376,14 +1397,19 @@ def _render_html(
 		    const legendMetric = document.getElementById('schema-legend-metric');
 		    const legendMin = document.getElementById('schema-legend-min');
 		    const legendMax = document.getElementById('schema-legend-max');
-		    const legendCutoff = document.getElementById('schema-legend-cutoff');
-		    const joinSql = document.getElementById('schema-join-sql');
-		    const joinCopy = document.getElementById('schema-join-copy');
-		    const joinStatus = document.getElementById('schema-join-status');
+			    const legendCutoff = document.getElementById('schema-legend-cutoff');
+			    const joinSql = document.getElementById('schema-join-sql');
+			    const joinCopy = document.getElementById('schema-join-copy');
+			    const joinStatus = document.getElementById('schema-join-status');
+			    const focus = document.getElementById('schema-focus');
+			    const focusMode = document.getElementById('schema-focus-mode');
+			    const focusHops = document.getElementById('schema-focus-hops');
+			    const focusHopsValue = document.getElementById('schema-focus-hops-value');
+			    const focusBasePath = document.getElementById('schema-focus-path');
 
-	    function matchPrefix(nameSql) {{
-	      if (!nameSql || !BASE_TABLE_SQL || !KEY_SEP) return null;
-	      const candidates = [
+		    function matchPrefix(nameSql) {{
+		      if (!nameSql || !BASE_TABLE_SQL || !KEY_SEP) return null;
+		      const candidates = [
 	        BASE_TABLE_SQL + KEY_SEP,
 	        BASE_TABLE_SQL + '-SUB' + KEY_SEP,
 	        BASE_TABLE_SQL + '_SUB' + KEY_SEP,
@@ -1495,12 +1521,27 @@ def _render_html(
 	      for (const e of edges) e.classList.remove('selected');
 	    }}
 
-	    const parentByChildSql = {{}};
-	    for (const e of edges) {{
-	      const p = e.getAttribute('data-parent-sql') || '';
-	      const c = e.getAttribute('data-child-sql') || '';
-	      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
-	    }}
+		    const parentByChildSql = {{}};
+		    const childrenByParentSql = {{}};
+		    const neighborsBySql = {{}};
+		    const edgeByChildSql = {{}};
+		    function _addNeighbor(a, b) {{
+		      if (!a || !b) return;
+		      if (!neighborsBySql[a]) neighborsBySql[a] = new Set();
+		      neighborsBySql[a].add(b);
+		    }}
+		    for (const e of edges) {{
+		      const p = e.getAttribute('data-parent-sql') || '';
+		      const c = e.getAttribute('data-child-sql') || '';
+		      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
+		      if (p && c) {{
+		        if (!childrenByParentSql[p]) childrenByParentSql[p] = [];
+		        childrenByParentSql[p].push(c);
+		        if (!(c in edgeByChildSql)) edgeByChildSql[c] = e;
+		        _addNeighbor(p, c);
+		        _addNeighbor(c, p);
+		      }}
+		    }}
 
 		    function isFlagged(nodeEl) {{
 		      return (
@@ -1639,10 +1680,10 @@ def _render_html(
 		      return '#' + toHex(r) + toHex(g) + toHex(b);
 		    }}
 
-		    function applyHeatmap() {{
-		      const metric = colorBy ? String(colorBy.value || '') : '';
-		      const pct = topPct ? Number(topPct.value || 100) : 100;
-		      if (topPctValue) topPctValue.textContent = String(pct) + '%';
+			    function applyHeatmap() {{
+			      const metric = colorBy ? String(colorBy.value || '') : '';
+			      const pct = topPct ? Number(topPct.value || 100) : 100;
+			      if (topPctValue) topPctValue.textContent = String(pct) + '%';
 
 		      const enabled = (metric === 'rows' || metric === 'size');
 		      if (topPct) topPct.disabled = !enabled;
@@ -1707,23 +1748,161 @@ def _render_html(
 		        if (pct >= 100) legendCutoff.textContent = '';
 		        else if (cutoff === null) legendCutoff.textContent = 'n/a';
 		        else legendCutoff.textContent = metric === 'size' ? formatBytes(cutoff) : formatInt(cutoff);
-		      }}
-		    }}
+			      }}
+			    }}
 
-		    let visibleNodesCount = nodes.length;
-		    function recomputeVisibility() {{
-		      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
-		      if (depthValue) depthValue.textContent = String(depthLimit);
-		      const only = !!(onlyFlagged && onlyFlagged.checked);
-		      const metric = colorBy ? String(colorBy.value || '') : '';
-		      const pct = topPct ? Number(topPct.value || 100) : 100;
-		      const metricEnabled = (metric === 'rows' || metric === 'size');
-		      const metricActive = metricEnabled && pct < 100 && (sortedMetricVals[metric] || []).length > 0;
+			    let selectedTableSql = '';
+			    let focusRootSql = '';
+			    let prevFocusRootSql = '';
+			    let focusPathNodes = [];
+			    let focusPathEdges = [];
 
-		      const allow = new Set();
-		      if (only) {{
-		        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
-		        for (const n of nodes) {{
+			    function clearFocusRoot() {{
+			      if (prevFocusRootSql && nodeBySql[prevFocusRootSql]) {{
+			        nodeBySql[prevFocusRootSql].classList.remove('focus-root');
+			      }}
+			      prevFocusRootSql = '';
+			      focusRootSql = '';
+			    }}
+
+			    function setFocusRoot(sql) {{
+			      const next = String(sql || '');
+			      if (next === focusRootSql) return;
+			      if (prevFocusRootSql && nodeBySql[prevFocusRootSql]) {{
+			        nodeBySql[prevFocusRootSql].classList.remove('focus-root');
+			      }}
+			      focusRootSql = next;
+			      prevFocusRootSql = next;
+			      if (focusRootSql && nodeBySql[focusRootSql]) {{
+			        nodeBySql[focusRootSql].classList.add('focus-root');
+			      }}
+			    }}
+
+			    function clearFocusPath() {{
+			      for (const n of focusPathNodes) {{
+			        try {{ n.classList.remove('focus-path'); }} catch (_e) {{}}
+			      }}
+			      for (const e of focusPathEdges) {{
+			        try {{ e.classList.remove('focus-path'); }} catch (_e) {{}}
+			      }}
+			      focusPathNodes = [];
+			      focusPathEdges = [];
+			    }}
+
+			    function applyFocusPath(path) {{
+			      clearFocusPath();
+			      if (!path || !Array.isArray(path) || path.length < 2) return;
+			      for (const sql of path) {{
+			        const n = nodeBySql[String(sql || '')];
+			        if (n) {{
+			          n.classList.add('focus-path');
+			          focusPathNodes.push(n);
+			        }}
+			      }}
+			      // Edge mapping is child->edge for our inferred tree.
+			      for (let i = 1; i < path.length; i++) {{
+			        const child = String(path[i] || '');
+			        const e = edgeByChildSql[child];
+			        if (e) {{
+			          e.classList.add('focus-path');
+			          focusPathEdges.push(e);
+			        }}
+			      }}
+			    }}
+
+			    function subtreeAllow(root) {{
+			      const out = new Set();
+			      const stack = [String(root || '')];
+			      let safety = 0;
+			      while (stack.length && safety++ < 200000) {{
+			        const cur = stack.pop();
+			        if (!cur || out.has(cur)) continue;
+			        out.add(cur);
+			        const kids = childrenByParentSql[cur] || [];
+			        for (const c of kids) stack.push(c);
+			      }}
+			      return out;
+			    }}
+
+			    function khopAllow(root, hops) {{
+			      const h = Math.max(1, Math.min(50, Number(hops || 1)));
+			      const out = new Set();
+			      const q = [[String(root || ''), 0]];
+			      out.add(String(root || ''));
+			      let safety = 0;
+			      while (q.length && safety++ < 200000) {{
+			        const item = q.shift();
+			        if (!item) break;
+			        const cur = item[0];
+			        const d = item[1];
+			        if (d >= h) continue;
+			        const neigh = neighborsBySql[cur];
+			        if (!neigh) continue;
+			        for (const nb of neigh) {{
+			          if (!nb || out.has(nb)) continue;
+			          out.add(nb);
+			          q.push([nb, d + 1]);
+			        }}
+			      }}
+			      return out;
+			    }}
+
+			    function updateFocusControls() {{
+			      const enabled = !!(focus && focus.checked);
+			      const mode = focusMode ? String(focusMode.value || 'subtree') : 'subtree';
+			      if (focusMode) focusMode.disabled = !enabled;
+			      if (focusHops) focusHops.disabled = !enabled || mode !== 'khop';
+			      if (focusBasePath) focusBasePath.disabled = !enabled || mode === 'path';
+			      const hops = focusHops ? Number(focusHops.value || 2) : 2;
+			      if (focusHopsValue) focusHopsValue.textContent = String(hops);
+			    }}
+
+			    let visibleNodesCount = nodes.length;
+			    function recomputeVisibility() {{
+			      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
+			      if (depthValue) depthValue.textContent = String(depthLimit);
+			      const only = !!(onlyFlagged && onlyFlagged.checked);
+			      const metric = colorBy ? String(colorBy.value || '') : '';
+			      const pct = topPct ? Number(topPct.value || 100) : 100;
+			      const metricEnabled = (metric === 'rows' || metric === 'size');
+			      const metricActive = metricEnabled && pct < 100 && (sortedMetricVals[metric] || []).length > 0;
+			      const focusEnabled = !!(focus && focus.checked);
+			      const fmode = focusMode ? String(focusMode.value || 'subtree') : 'subtree';
+			      const fhops = focusHops ? Number(focusHops.value || 2) : 2;
+			      const basePathOn = focusEnabled && (fmode === 'path' || (!!focusBasePath && focusBasePath.checked));
+
+			      updateFocusControls();
+
+			      let allowFocus = null;
+			      if (focusEnabled) {{
+			        const root = focusRootSql || selectedTableSql || BASE_TABLE_SQL;
+			        if (root) {{
+			          setFocusRoot(root);
+			          if (fmode === 'khop') allowFocus = khopAllow(root, fhops);
+			          else if (fmode === 'path') {{
+			            const p = joinPathToBase(root);
+			            allowFocus = new Set(p || [root]);
+			          }} else allowFocus = subtreeAllow(root);
+
+			          const p = basePathOn ? joinPathToBase(root) : null;
+			          if (p && fmode !== 'path') {{
+			            for (const x of p) allowFocus.add(String(x || ''));
+			          }}
+			          if (p) applyFocusPath(p);
+			          else clearFocusPath();
+			        }} else {{
+			          clearFocusRoot();
+			          clearFocusPath();
+			        }}
+			      }} else {{
+			        clearFocusRoot();
+			        clearFocusPath();
+			      }}
+
+			      const allow = new Set();
+			      if (only) {{
+			        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
+			        for (const n of nodes) {{
 		          const sql = n.getAttribute('data-name-sql') || '';
 	          if (!sql) continue;
 	          if (!isFlagged(n)) continue;
@@ -1765,18 +1944,19 @@ def _render_html(
 		        }}
 		      }}
 
-		      visibleNodesCount = 0;
-		      for (const n of nodes) {{
-		        const sql = n.getAttribute('data-name-sql') || '';
-		        const d = depthBySql[sql] || 0;
-		        const withinDepth = d <= depthLimit;
-		        const visible =
-		          withinDepth &&
-		          (!only || allow.has(sql)) &&
-		          (!metricActive || allowMetric.has(sql));
-		        n.classList.toggle('hidden', !visible);
-		        if (visible) visibleNodesCount += 1;
-		      }}
+			      visibleNodesCount = 0;
+			      for (const n of nodes) {{
+			        const sql = n.getAttribute('data-name-sql') || '';
+			        const d = depthBySql[sql] || 0;
+			        const withinDepth = d <= depthLimit;
+			        const visible =
+			          withinDepth &&
+			          (!only || allow.has(sql)) &&
+			          (!metricActive || allowMetric.has(sql)) &&
+			          (!allowFocus || allowFocus.has(sql));
+			        n.classList.toggle('hidden', !visible);
+			        if (visible) visibleNodesCount += 1;
+			      }}
 
 	      for (const e of edges) {{
 	        const p = e.getAttribute('data-parent-sql') || '';
@@ -1788,37 +1968,39 @@ def _render_html(
 	      }}
 	    }}
 
-	    function applyFilter(q) {{
-	      const query = (q || '').trim().toLowerCase();
-	      let matches = 0;
-	      for (const n of nodes) {{
-	        if (n.classList.contains('hidden')) {{
-	          n.classList.remove('dim');
-	          n.classList.remove('match');
-	          continue;
-	        }}
-	        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
-	        const name = (n.getAttribute('data-name') || '').toLowerCase();
-	        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
-	        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
-        n.classList.toggle('dim', !!query && !ok);
-        n.classList.toggle('match', !!query && ok);
-	        if (ok && query) matches += 1;
-	      }}
-	      if (status) {{
-	        if (query) status.textContent = 'matches: ' + matches + ' / ' + visibleNodesCount;
-	        else if (visibleNodesCount !== nodes.length) status.textContent = 'visible: ' + visibleNodesCount + ' / ' + nodes.length;
-	        else status.textContent = '';
-	      }}
-	    }}
+		    function applyFilter(q) {{
+		      const query = (q || '').trim().toLowerCase();
+		      let matches = 0;
+		      for (const n of nodes) {{
+		        if (n.classList.contains('hidden')) {{
+		          n.classList.remove('dim');
+		          n.classList.remove('match');
+		          continue;
+		        }}
+		        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
+		        const name = (n.getAttribute('data-name') || '').toLowerCase();
+		        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
+		        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
+	        n.classList.toggle('dim', !!query && !ok);
+	        n.classList.toggle('match', !!query && ok);
+		        if (ok && query) matches += 1;
+		      }}
+		      if (status) {{
+		        const focusLabel = (focus && focus.checked) ? ('focus: ' + String(focusRootSql || selectedTableSql || BASE_TABLE_SQL || '')) : '';
+		        if (query) status.textContent = 'matches: ' + matches + ' / ' + visibleNodesCount + (focusLabel ? (' · ' + focusLabel) : '');
+		        else if (visibleNodesCount !== nodes.length) status.textContent = 'visible: ' + visibleNodesCount + ' / ' + nodes.length + (focusLabel ? (' · ' + focusLabel) : '');
+		        else status.textContent = focusLabel || '';
+		      }}
+		    }}
 
-    function selectTable(tableSql) {{
-      if (!tableSql) return;
-      clearSelection();
-      for (const n of nodes) {{
-        if ((n.getAttribute('data-name-sql') || '') === tableSql) {{
-          n.classList.add('selected');
-        }}
+	    function selectTable(tableSql) {{
+	      if (!tableSql) return;
+	      selectedTableSql = tableSql;
+	      clearSelection();
+	      for (const n of nodes) {{
+	        if ((n.getAttribute('data-name-sql') || '') === tableSql) {{
+	          n.classList.add('selected');
+	        }}
       }}
       for (const e of edges) {{
         const p = e.getAttribute('data-parent-sql') || '';
@@ -1828,12 +2010,17 @@ def _render_html(
         }}
       }}
 	      const d = detailsByTable[tableSql];
-	      if (d) {{
-	        d.open = true;
-	        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
-	      }}
-	      updateJoinSql(tableSql);
-	    }}
+		      if (d) {{
+		        d.open = true;
+		        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+		      }}
+		      updateJoinSql(tableSql);
+		      if (focus && focus.checked) {{
+		        setFocusRoot(tableSql);
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		      }}
+		    }}
 
     for (const n of nodes) {{
       n.addEventListener('click', (ev) => {{
@@ -1852,16 +2039,41 @@ def _render_html(
 	        applyFilter(search ? search.value : '');
 	      }});
 	    }}
-		    if (onlyFlagged) {{
-		      onlyFlagged.addEventListener('change', () => {{
-		        recomputeVisibility();
-		        applyFilter(search ? search.value : '');
-		      }});
-		    }}
-		    if (colorBy) {{
-		      colorBy.addEventListener('change', () => {{
-		        if (topPct) topPct.value = '100';
-		        applyHeatmap();
+			    if (onlyFlagged) {{
+			      onlyFlagged.addEventListener('change', () => {{
+			        recomputeVisibility();
+			        applyFilter(search ? search.value : '');
+			      }});
+			    }}
+			    if (focus) {{
+			      focus.addEventListener('change', () => {{
+			        recomputeVisibility();
+			        applyFilter(search ? search.value : '');
+			      }});
+			    }}
+			    if (focusMode) {{
+			      focusMode.addEventListener('change', () => {{
+			        recomputeVisibility();
+			        applyFilter(search ? search.value : '');
+			      }});
+			    }}
+			    if (focusHops) {{
+			      focusHops.addEventListener('input', () => {{
+			        if (focusHopsValue) focusHopsValue.textContent = String(focusHops.value || '');
+			        recomputeVisibility();
+			        applyFilter(search ? search.value : '');
+			      }});
+			    }}
+			    if (focusBasePath) {{
+			      focusBasePath.addEventListener('change', () => {{
+			        recomputeVisibility();
+			        applyFilter(search ? search.value : '');
+			      }});
+			    }}
+			    if (colorBy) {{
+			      colorBy.addEventListener('change', () => {{
+			        if (topPct) topPct.value = '100';
+			        applyHeatmap();
 		        recomputeVisibility();
 		        applyFilter(search ? search.value : '');
 		      }});
@@ -1883,9 +2095,13 @@ def _render_html(
 			      reset.addEventListener('click', () => {{
 			        if (search) search.value = '';
 			        if (depthInput) depthInput.value = String(maxDepth);
-		        if (onlyFlagged) onlyFlagged.checked = false;
-		        if (colorBy) colorBy.value = '';
-		        if (topPct) topPct.value = '100';
+			        if (onlyFlagged) onlyFlagged.checked = false;
+			        if (focus) focus.checked = false;
+			        if (focusMode) focusMode.value = 'subtree';
+			        if (focusHops) focusHops.value = '2';
+			        if (focusBasePath) focusBasePath.checked = true;
+			        if (colorBy) colorBy.value = '';
+			        if (topPct) topPct.value = '100';
 			        applyHeatmap();
 			        recomputeVisibility();
 			        applyFilter('');
