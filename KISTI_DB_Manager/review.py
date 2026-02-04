@@ -325,6 +325,11 @@ def _sanitize_mermaid_id(name: str) -> str:
     return re.sub(r"[^0-9A-Za-z_]", "_", name)
 
 
+def _sanitize_html_id(name: str) -> str:
+    # HTML id: allow alnum/_/-; keep it deterministic.
+    return re.sub(r"[^0-9A-Za-z_-]", "_", str(name))
+
+
 def build_table_edges(
     *,
     base_table: str,
@@ -564,6 +569,7 @@ def render_simple_svg(
     lines.append(".label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 12px; fill: #1f2328; }")
     lines.append(".meta { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #57606a; }")
     lines.append(".edge { stroke: #57606a; stroke-width: 1; fill: none; }")
+    lines.append(".node { cursor: pointer; }")
     lines.append("</style>")
 
     # Edges first (under nodes)
@@ -577,7 +583,15 @@ def render_simple_svg(
         x2 = cx
         y2 = cy + box_h // 2
         mid = (x1 + x2) // 2
-        lines.append(f'<path class="edge" d="M {x1} {y1} C {mid} {y1}, {mid} {y2}, {x2} {y2}" />')
+        p_info = name_to_info.get(parent)
+        c_info = name_to_info.get(child)
+        p_sql = p_info.name_sql if p_info is not None else parent
+        c_sql = c_info.name_sql if c_info is not None else child
+        lines.append(
+            f'<path class="edge" data-parent="{_svg_escape(parent)}" data-child="{_svg_escape(child)}" '
+            f'data-parent-sql="{_svg_escape(p_sql)}" data-child-sql="{_svg_escape(c_sql)}" '
+            f'd="M {x1} {y1} C {mid} {y1}, {mid} {y2}, {x2} {y2}" />'
+        )
 
     # Nodes
     for name in tables:
@@ -589,6 +603,26 @@ def render_simple_svg(
         cols = len(ti.columns or []) if ti and ti.columns is not None else None
         cols_label = str(cols) if cols is not None else "n/a"
 
+        name_sql = ti.name_sql if ti is not None else name
+        name_original = ti.name_original if ti is not None else None
+
+        node_id = _sanitize_html_id(f"node_{name_sql}")
+        attrs = [
+            f'id="{_svg_escape(node_id)}"',
+            'class="node"',
+            f'data-name="{_svg_escape(name)}"',
+            f'data-name-sql="{_svg_escape(name_sql)}"',
+        ]
+        if name_original:
+            attrs.append(f'data-name-original="{_svg_escape(name_original)}"')
+
+        title = f"{name_sql}"
+        if name_original and name_original != name_sql:
+            title = f"{name_original} ({name_sql})"
+        title = f"{title} · rows: {rows} · cols: {cols_label}"
+
+        lines.append(f"<g {' '.join(attrs)}>")
+        lines.append(f"<title>{_svg_escape(title)}</title>")
         lines.append(f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="{node_color(name)}" />')
         if len(label_lines) == 1:
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(label_lines[0])}</text>')
@@ -598,6 +632,7 @@ def render_simple_svg(
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 16}">{_svg_escape(label_lines[0])}</text>')
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 30}">{_svg_escape(label_lines[1])}</text>')
             lines.append(f'<text class="meta" x="{x + 10}" y="{y + 42}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
+        lines.append("</g>")
 
     lines.append("</svg>")
     return "\n".join(lines) + "\n"
@@ -839,6 +874,7 @@ def _render_html(
     title: str,
     markdown_path: str | None,
     schema_svg_path: str | None,
+    schema_svg_text: str | None = None,
     mermaid_path: str | None,
     meta: Mapping[str, Any],
     table_infos: list[TableInfo],
@@ -850,6 +886,7 @@ def _render_html(
 
     rows = []
     for ti in table_infos:
+        details_id = f"table_{_sanitize_html_id(ti.name_sql)}"
         cols_n = len(ti.columns or []) if ti.columns is not None else ""
         size = ""
         if ti.data_length is not None or ti.index_length is not None:
@@ -859,7 +896,7 @@ def _render_html(
             idx_on_id = "Y" if any(str(ix.get("column_name")).lower() == "id" for ix in ti.indexes) else ""
         rows.append(
             "<tr>"
-            f"<td><code>{h(ti.name_sql)}</code></td>"
+            f"<td><code><a href=\"#{h(details_id)}\">{h(ti.name_sql)}</a></code></td>"
             f"<td>{h(ti.rows_label())}</td>"
             f"<td>{h(cols_n)}</td>"
             f"<td>{h(size)}</td>"
@@ -891,7 +928,22 @@ def _render_html(
     links_html = " · ".join(links)
 
     svg_embed = ""
-    if schema_svg_path:
+    if schema_svg_text:
+        # Inline SVG for interactivity. Strip XML prolog for HTML embedding.
+        svg_inline = str(schema_svg_text)
+        if svg_inline.lstrip().startswith("<?xml"):
+            svg_inline = svg_inline.split("?>", 1)[-1]
+        svg_embed = (
+            "<div class=\"schema-toolbar\">"
+            "<input id=\"schema-search\" type=\"search\" placeholder=\"Search table…\" />"
+            "<button id=\"schema-reset\" type=\"button\">Reset</button>"
+            "<span id=\"schema-status\" class=\"muted\"></span>"
+            "</div>"
+            "<div id=\"schema-container\" class=\"schema-container\">"
+            + svg_inline
+            + "</div>"
+        )
+    elif schema_svg_path:
         svg_embed = f'<img src="{h(schema_svg_path)}" alt="schema" style="max-width: 100%; height: auto; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px; background: #fff;" />'
 
     details_blocks = []
@@ -943,9 +995,11 @@ def _render_html(
                 sample_text = repr(samples_by_table.get(ti.name_sql))
             samples_html = "<h4>Samples</h4>" + f"<pre>{h(sample_text)}</pre>"
 
-        if not cols_html and not idx_html and not samples_html:
-            continue
+        body_html = cols_html + idx_html + samples_html
+        if not body_html:
+            body_html = '<div class="muted">(no per-table details available)</div>'
 
+        details_id = f"table_{_sanitize_html_id(ti.name_sql)}"
         summary_bits = [f"<code>{h(ti.name_sql)}</code>"]
         if ti.name_original and ti.name_original != ti.name_sql:
             summary_bits.append(f"<span class=\"muted\">({h(ti.name_original)})</span>")
@@ -953,11 +1007,11 @@ def _render_html(
         summary = " · ".join(summary_bits)
 
         details_blocks.append(
-            "<details class=\"details\">"
+            f"<details class=\"details\" id=\"{h(details_id)}\" data-table=\"{h(ti.name_sql)}\">"
             f"<summary>{summary}</summary>"
             f"<div class=\"card\" style=\"margin-top: 12px;\">"
             f"<div class=\"muted\">engine: <code>{h(ti.engine or '')}</code> · collation: <code>{h(ti.collation or '')}</code></div>"
-            f"{cols_html}{idx_html}{samples_html}"
+            f"{body_html}"
             "</div>"
             "</details>"
         )
@@ -974,6 +1028,8 @@ def _render_html(
   <style>
     body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; color: #1f2328; }}
     code {{ background: #f6f8fa; padding: 2px 5px; border-radius: 6px; }}
+    code a {{ color: inherit; text-decoration: none; }}
+    code a:hover {{ text-decoration: underline; }}
     table {{ border-collapse: collapse; width: 100%; }}
     th, td {{ border: 1px solid #d0d7de; padding: 8px; font-size: 13px; }}
     th {{ background: #f6f8fa; text-align: left; }}
@@ -981,6 +1037,15 @@ def _render_html(
     .card {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 16px; margin: 16px 0; background: #ffffff; }}
     details.details summary {{ cursor: pointer; }}
     details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
+    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; }}
+    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
+    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
+    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
+    .schema-container svg {{ max-width: 100%; height: auto; }}
+    .schema-container .node.dim {{ opacity: 0.15; }}
+    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
+    .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
+    .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; }}
   </style>
 </head>
 <body>
@@ -1026,6 +1091,93 @@ def _render_html(
       </tbody>
     </table>
   </div>
+
+  <script>
+  (function() {{
+    const container = document.getElementById('schema-container');
+    if (!container) return;
+
+    const search = document.getElementById('schema-search');
+    const reset = document.getElementById('schema-reset');
+    const status = document.getElementById('schema-status');
+    const svg = container.querySelector('svg');
+    if (!svg) return;
+
+    const nodes = Array.from(svg.querySelectorAll('.node'));
+    const edges = Array.from(svg.querySelectorAll('.edge'));
+
+    const detailsByTable = {{}};
+    for (const d of document.querySelectorAll('details.details[data-table]')) {{
+      const t = d.getAttribute('data-table');
+      if (t) detailsByTable[t] = d;
+    }}
+
+    function clearSelection() {{
+      for (const n of nodes) n.classList.remove('selected');
+      for (const e of edges) e.classList.remove('selected');
+    }}
+
+    function applyFilter(q) {{
+      const query = (q || '').trim().toLowerCase();
+      let matches = 0;
+      for (const n of nodes) {{
+        const nameSql = (n.getAttribute('data-name-sql') || '').toLowerCase();
+        const name = (n.getAttribute('data-name') || '').toLowerCase();
+        const nameOrig = (n.getAttribute('data-name-original') || '').toLowerCase();
+        const ok = !query || nameSql.includes(query) || name.includes(query) || nameOrig.includes(query);
+        n.classList.toggle('dim', !!query && !ok);
+        n.classList.toggle('match', !!query && ok);
+        if (ok && query) matches += 1;
+      }}
+      if (status) {{
+        status.textContent = query ? ('matches: ' + matches + ' / ' + nodes.length) : '';
+      }}
+    }}
+
+    function selectTable(tableSql) {{
+      if (!tableSql) return;
+      clearSelection();
+      for (const n of nodes) {{
+        if ((n.getAttribute('data-name-sql') || '') === tableSql) {{
+          n.classList.add('selected');
+        }}
+      }}
+      for (const e of edges) {{
+        const p = e.getAttribute('data-parent-sql') || '';
+        const c = e.getAttribute('data-child-sql') || '';
+        if (p === tableSql || c === tableSql) {{
+          e.classList.add('selected');
+        }}
+      }}
+      const d = detailsByTable[tableSql];
+      if (d) {{
+        d.open = true;
+        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+      }}
+    }}
+
+    for (const n of nodes) {{
+      n.addEventListener('click', (ev) => {{
+        ev.preventDefault();
+        const tableSql = n.getAttribute('data-name-sql') || '';
+        selectTable(tableSql);
+      }});
+    }}
+
+    if (search) {{
+      search.addEventListener('input', () => applyFilter(search.value));
+    }}
+    if (reset) {{
+      reset.addEventListener('click', () => {{
+        if (search) search.value = '';
+        applyFilter('');
+        clearSelection();
+      }});
+    }}
+
+    applyFilter(search ? search.value : '');
+  }})();
+  </script>
 </body>
 </html>
 """
@@ -1286,6 +1438,7 @@ def generate_review_plan(
         title=f"Review Plan: {base_table}",
         markdown_path="PLAN.md",
         schema_svg_path="schema.svg",
+        schema_svg_text=svg_text,
         mermaid_path="schema.mmd",
         meta={
             "generated_at": generated_at,
@@ -1485,6 +1638,7 @@ def generate_review_pack(
         title=title,
         markdown_path="REVIEW.md",
         schema_svg_path="schema.svg",
+        schema_svg_text=svg_text,
         mermaid_path="schema.mmd",
         meta={
             "generated_at": generated_at,
