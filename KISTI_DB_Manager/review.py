@@ -594,9 +594,10 @@ def render_simple_svg(
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(label_lines[0])}</text>')
             lines.append(f'<text class="meta" x="{x + 10}" y="{y + 34}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
         else:
-            # Two-line label: keep diagram compact by omitting meta line.
+            # Two-line label: keep meta on a third line (still fits in box_h).
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 16}">{_svg_escape(label_lines[0])}</text>')
             lines.append(f'<text class="label" x="{x + 10}" y="{y + 30}">{_svg_escape(label_lines[1])}</text>')
+            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 42}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
 
     lines.append("</svg>")
     return "\n".join(lines) + "\n"

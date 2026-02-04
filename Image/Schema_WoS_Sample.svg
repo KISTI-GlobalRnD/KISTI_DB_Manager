@@ -34,67 +34,88 @@
 <rect class="box" x="1070" y="30" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="46">SUB/dynamic_data</text>
 <text class="label" x="1080" y="60">citation_related/SDG…</text>
+<text class="meta" x="1080" y="72">rows: n/a · cols: 3</text>
 <rect class="box" x="1330" y="30" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1340" y="46">SUB/dynamic_data</text>
 <text class="label" x="1340" y="60">citation_related…</text>
+<text class="meta" x="1340" y="72">rows: n/a · cols: 5</text>
 <rect class="box" x="1070" y="100" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="116">SUB/dynamic_data</text>
 <text class="label" x="1080" y="130">cluster_related/identifiers…</text>
+<text class="meta" x="1080" y="142">rows: n/a · cols: 4</text>
 <rect class="box" x="1070" y="170" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="186">SUB/dynamic_data/ic_related</text>
 <text class="label" x="1080" y="200">oases/oas</text>
+<text class="meta" x="1080" y="212">rows: n/a · cols: 3</text>
 <rect class="box" x="810" y="30" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="820" y="46">SUB/static_data/contributors</text>
 <text class="label" x="820" y="60">contributor</text>
+<text class="meta" x="820" y="72">rows: n/a · cols: n/a</text>
 <rect class="box" x="1070" y="240" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="256">SUB/static_data</text>
 <text class="label" x="1080" y="270">fullrecord_metadata/addresses…</text>
+<text class="meta" x="1080" y="282">rows: n/a · cols: n/a</text>
 <rect class="box" x="1330" y="100" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1340" y="116">SUB/static_data</text>
 <text class="label" x="1340" y="130">fullrecord_metadata…</text>
+<text class="meta" x="1340" y="142">rows: n/a · cols: 3</text>
 <rect class="box" x="1330" y="170" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1340" y="186">SUB/static_data</text>
 <text class="label" x="1340" y="200">fullrecord_metadata…</text>
+<text class="meta" x="1340" y="212">rows: n/a · cols: 3</text>
 <rect class="box" x="1330" y="240" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1340" y="256">SUB/static_data</text>
 <text class="label" x="1340" y="270">fullrecord_metadata…</text>
+<text class="meta" x="1340" y="282">rows: n/a · cols: 4</text>
 <rect class="box" x="1330" y="310" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1340" y="326">SUB/static_data</text>
 <text class="label" x="1340" y="340">fullrecord_metadata/fund_ack…</text>
+<text class="meta" x="1340" y="352">rows: n/a · cols: n/a</text>
 <rect class="box" x="1070" y="310" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="326">SUB/static_data</text>
 <text class="label" x="1080" y="340">fullrecord_metadata/keywords…</text>
+<text class="meta" x="1080" y="352">rows: n/a · cols: 3</text>
 <rect class="box" x="1070" y="380" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="396">SUB/static_data</text>
 <text class="label" x="1080" y="410">fullrecord_metadata…</text>
+<text class="meta" x="1080" y="422">rows: n/a · cols: 3</text>
 <rect class="box" x="1070" y="450" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="466">SUB/static_data</text>
 <text class="label" x="1080" y="480">fullrecord_metadata/reference…</text>
+<text class="meta" x="1080" y="492">rows: n/a · cols: n/a</text>
 <rect class="box" x="1070" y="520" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="536">SUB/static_data</text>
 <text class="label" x="1080" y="550">fullrecord_metadata…</text>
+<text class="meta" x="1080" y="562">rows: n/a · cols: n/a</text>
 <rect class="box" x="810" y="100" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="820" y="118">SUB/static_data/item/book_desc</text>
 <text class="meta" x="820" y="134">rows: n/a · cols: 6</text>
 <rect class="box" x="1070" y="590" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="606">SUB/static_data/item</text>
 <text class="label" x="1080" y="620">keywords_plus/keyword</text>
+<text class="meta" x="1080" y="632">rows: n/a · cols: 3</text>
 <rect class="box" x="1330" y="380" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1340" y="396">SUB/static_data/item</text>
 <text class="label" x="1340" y="410">reviewed_work/rw_authors…</text>
+<text class="meta" x="1340" y="422">rows: n/a · cols: 3</text>
 <rect class="box" x="1070" y="660" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="676">SUB/static_data/summary/EWUID</text>
 <text class="label" x="1080" y="690">edition</text>
+<text class="meta" x="1080" y="702">rows: n/a · cols: 3</text>
 <rect class="box" x="1590" y="30" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1600" y="46">SUB/static_data/summary</text>
 <text class="label" x="1600" y="60">conferences/conference…</text>
+<text class="meta" x="1600" y="72">rows: n/a · cols: 3</text>
 <rect class="box" x="1070" y="730" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="746">SUB/static_data/summary</text>
 <text class="label" x="1080" y="760">doctypes/doctype</text>
+<text class="meta" x="1080" y="772">rows: n/a · cols: 3</text>
 <rect class="box" x="1070" y="800" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="816">SUB/static_data/summary/names</text>
 <text class="label" x="1080" y="830">name</text>
+<text class="meta" x="1080" y="842">rows: n/a · cols: 18</text>
 <rect class="box" x="1070" y="870" width="240" height="44" fill="#F6F8FA" />
 <text class="label" x="1080" y="886">SUB/static_data/summary/titles</text>
 <text class="label" x="1080" y="900">title</text>
+<text class="meta" x="1080" y="912">rows: n/a · cols: 5</text>
 </svg>
