@@ -1,0 +1,92 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1400" height="1434" viewBox="0 0 1400 1434">
+<style>
+.box { stroke: #1f2328; stroke-width: 1; rx: 8; ry: 8; }
+.label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 12px; fill: #1f2328; }
+.meta { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #57606a; }
+.edge { stroke: #57606a; stroke-width: 1; fill: none; }
+</style>
+<path class="edge" d="M 270 52 C 280 52, 280 52, 290 52" />
+<path class="edge" d="M 270 52 C 280 52, 280 122, 290 122" />
+<path class="edge" d="M 270 52 C 280 52, 280 192, 290 192" />
+<path class="edge" d="M 270 52 C 280 52, 280 262, 290 262" />
+<path class="edge" d="M 270 52 C 280 52, 280 332, 290 332" />
+<path class="edge" d="M 270 52 C 280 52, 280 402, 290 402" />
+<path class="edge" d="M 270 52 C 280 52, 280 472, 290 472" />
+<path class="edge" d="M 270 52 C 280 52, 280 542, 290 542" />
+<path class="edge" d="M 270 52 C 280 52, 280 612, 290 612" />
+<path class="edge" d="M 270 52 C 280 52, 280 682, 290 682" />
+<path class="edge" d="M 270 52 C 280 52, 280 752, 290 752" />
+<path class="edge" d="M 270 52 C 280 52, 280 822, 290 822" />
+<path class="edge" d="M 270 52 C 280 52, 280 892, 290 892" />
+<path class="edge" d="M 270 52 C 280 52, 280 962, 290 962" />
+<path class="edge" d="M 270 52 C 280 52, 280 1032, 290 1032" />
+<path class="edge" d="M 270 52 C 280 52, 280 1102, 290 1102" />
+<path class="edge" d="M 270 52 C 280 52, 280 1172, 290 1172" />
+<path class="edge" d="M 270 52 C 280 52, 280 1242, 290 1242" />
+<path class="edge" d="M 270 52 C 280 52, 280 1312, 290 1312" />
+<path class="edge" d="M 270 52 C 280 52, 280 1382, 290 1382" />
+<rect class="box" x="30" y="30" width="240" height="44" fill="#E6F0FF" />
+<text class="label" x="40" y="48">kisti_v2_json_20lists</text>
+<text class="meta" x="40" y="64">rows: ~3 · cols: 3</text>
+<rect class="box" x="290" y="30" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="48">kisti_v2_json_20lists__items01</text>
+<text class="meta" x="300" y="64">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="100" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="118">kisti_v2_json_20lists__items02</text>
+<text class="meta" x="300" y="134">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="170" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="188">kisti_v2_json_20lists__items03</text>
+<text class="meta" x="300" y="204">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="240" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="258">kisti_v2_json_20lists__items04</text>
+<text class="meta" x="300" y="274">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="310" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="328">kisti_v2_json_20lists__items05</text>
+<text class="meta" x="300" y="344">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="380" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="398">kisti_v2_json_20lists__items06</text>
+<text class="meta" x="300" y="414">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="450" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="468">kisti_v2_json_20lists__items07</text>
+<text class="meta" x="300" y="484">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="520" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="538">kisti_v2_json_20lists__items08</text>
+<text class="meta" x="300" y="554">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="590" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="608">kisti_v2_json_20lists__items09</text>
+<text class="meta" x="300" y="624">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="660" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="678">kisti_v2_json_20lists__items10</text>
+<text class="meta" x="300" y="694">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="730" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="748">kisti_v2_json_20lists__items11</text>
+<text class="meta" x="300" y="764">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="800" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="818">kisti_v2_json_20lists__items12</text>
+<text class="meta" x="300" y="834">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="870" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="888">kisti_v2_json_20lists__items13</text>
+<text class="meta" x="300" y="904">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="940" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="958">kisti_v2_json_20lists__items14</text>
+<text class="meta" x="300" y="974">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="1010" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="1028">kisti_v2_json_20lists__items15</text>
+<text class="meta" x="300" y="1044">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="1080" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="1098">kisti_v2_json_20lists__items16</text>
+<text class="meta" x="300" y="1114">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="1150" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="1168">kisti_v2_json_20lists__items17</text>
+<text class="meta" x="300" y="1184">rows: ~2 · cols: 4</text>
+<rect class="box" x="290" y="1220" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="1238">kisti_v2_json_20lists__items18</text>
+<text class="meta" x="300" y="1254">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="1290" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="1308">kisti_v2_json_20lists__items19</text>
+<text class="meta" x="300" y="1324">rows: ~2 · cols: 3</text>
+<rect class="box" x="290" y="1360" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="300" y="1378">kisti_v2_json_20lists__items20</text>
+<text class="meta" x="300" y="1394">rows: ~2 · cols: 3</text>
+</svg>

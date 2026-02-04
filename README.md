@@ -113,3 +113,6 @@ Or on host (requires deps installed):
 ```bash
 bash KISTI_DB_Manager/examples/smoke.sh
 ```
+
+Output previews:
+- `KISTI_DB_Manager/examples/README.md`
