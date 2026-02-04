@@ -608,6 +608,23 @@ def render_simple_svg(
         cols = len(ti.columns or []) if ti and ti.columns is not None else None
         cols_label = str(cols) if cols is not None else "n/a"
 
+        rows_n = 0
+        if ti is not None:
+            try:
+                if ti.row_count is not None:
+                    rows_n = int(ti.row_count)
+                elif ti.table_rows_estimate is not None:
+                    rows_n = int(ti.table_rows_estimate)
+            except Exception:
+                rows_n = 0
+
+        size_n = 0
+        if ti is not None:
+            try:
+                size_n = int((ti.data_length or 0) + (ti.index_length or 0))
+            except Exception:
+                size_n = 0
+
         name_sql = ti.name_sql if ti is not None else name
         name_original = ti.name_original if ti is not None else None
 
@@ -625,7 +642,12 @@ def render_simple_svg(
             f'class="{_svg_escape(cls)}"',
             f'data-name="{_svg_escape(name)}"',
             f'data-name-sql="{_svg_escape(name_sql)}"',
+            f'data-rows="{int(rows_n)}"',
+            f'data-rows-exact="{1 if ti is not None and ti.row_count_exact else 0}"',
+            f'data-size="{int(size_n)}"',
         ]
+        if cols is not None:
+            attrs.append(f'data-cols="{int(cols)}"')
         if name_original:
             attrs.append(f'data-name-original="{_svg_escape(name_original)}"')
 
@@ -972,11 +994,42 @@ def _render_html(
             "<input id=\"schema-only-flagged\" type=\"checkbox\" />"
             "<span class=\"muted\">Only flagged</span>"
             "</label>"
+            "<span class=\"schema-option\">"
+            "<span class=\"muted\">Color</span>"
+            "<select id=\"schema-colorby\">"
+            "<option value=\"\">none</option>"
+            "<option value=\"rows\">rows</option>"
+            "<option value=\"size\">size</option>"
+            "</select>"
+            "</span>"
+            "<span class=\"schema-option\">"
+            "<span class=\"muted\">Top</span>"
+            "<input id=\"schema-top-pct\" type=\"range\" min=\"1\" max=\"100\" step=\"1\" value=\"100\" />"
+            "<code id=\"schema-top-pct-value\">100%</code>"
+            "</span>"
             "<span id=\"schema-status\" class=\"muted\"></span>"
             "</div>"
             "<div id=\"schema-container\" class=\"schema-container\">"
             + svg_inline
             + "</div>"
+            "<div id=\"schema-legend\" class=\"schema-legend\" style=\"display:none\">"
+            "<div class=\"schema-legend-row\">"
+            "<span class=\"muted\">Heatmap</span>"
+            "<code id=\"schema-legend-metric\"></code>"
+            "<span class=\"muted\">min</span><code id=\"schema-legend-min\"></code>"
+            "<span class=\"muted\">max</span><code id=\"schema-legend-max\"></code>"
+            "<span class=\"muted\">cutoff</span><code id=\"schema-legend-cutoff\"></code>"
+            "</div>"
+            "<div class=\"schema-legend-bar\"></div>"
+            "</div>"
+            "<div class=\"schema-join\">"
+            "<div class=\"schema-join-toolbar\">"
+            "<span class=\"muted\">Join SQL (via <code>id</code>)</span>"
+            "<button id=\"schema-join-copy\" type=\"button\">Copy</button>"
+            "<span id=\"schema-join-status\" class=\"muted\"></span>"
+            "</div>"
+            "<pre id=\"schema-join-sql\" class=\"sql-block\"></pre>"
+            "</div>"
         )
     elif schema_svg_path:
         svg_embed = f'<img src="{h(schema_svg_path)}" alt="schema" style="max-width: 100%; height: auto; border: 1px solid #d0d7de; border-radius: 8px; padding: 8px; background: #fff;" />'
@@ -1024,11 +1077,24 @@ def _render_html(
 
         samples_html = ""
         if samples_by_table and samples_by_table.get(ti.name_sql):
+            samples = samples_by_table.get(ti.name_sql)
+            samples_n = len(samples) if isinstance(samples, list) else ""
             try:
-                sample_text = json.dumps(samples_by_table.get(ti.name_sql), ensure_ascii=False, indent=2)
+                sample_text = json.dumps(samples, ensure_ascii=False, indent=2)
             except Exception:
-                sample_text = repr(samples_by_table.get(ti.name_sql))
-            samples_html = "<h4>Samples</h4>" + f"<pre>{h(sample_text)}</pre>"
+                sample_text = repr(samples)
+            pre_id = f"samples_{_sanitize_html_id(ti.name_sql)}"
+            samples_html = (
+                "<details class=\"subdetails\">"
+                f"<summary><b>Samples</b> <span class=\"muted\">({h(samples_n)} rows)</span></summary>"
+                "<div class=\"samples-toolbar\">"
+                f"<input class=\"samples-search\" type=\"search\" placeholder=\"Search in samples…\" data-target=\"{h(pre_id)}\" />"
+                f"<button class=\"samples-copy\" type=\"button\" data-target=\"{h(pre_id)}\">Copy</button>"
+                f"<span class=\"muted\" data-target-status=\"{h(pre_id)}\"></span>"
+                "</div>"
+                f"<pre id=\"{h(pre_id)}\" class=\"samples-pre\">{h(sample_text)}</pre>"
+                "</details>"
+            )
 
         body_html = cols_html + idx_html + samples_html
         if not body_html:
@@ -1195,19 +1261,34 @@ def _render_html(
     th {{ background: #f6f8fa; text-align: left; }}
     .muted {{ color: #57606a; }}
     .card {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 16px; margin: 16px 0; background: #ffffff; }}
-    .bar {{ height: 10px; border: 1px solid #d0d7de; border-radius: 999px; overflow: hidden; background: #ffffff; }}
-    .bar-fill {{ height: 100%; background: #0969da; }}
-    details.details summary {{ cursor: pointer; }}
-    details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
-	    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }}
-	    .schema-toolbar .schema-option {{ display: inline-flex; gap: 6px; align-items: center; }}
-	    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
-	    .schema-toolbar input[type="range"] {{ width: 140px; }}
-	    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
-	    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
-	    .schema-container svg {{ max-width: 100%; height: auto; }}
-	    .schema-container .node.hidden {{ display: none; }}
-	    .schema-container .edge.hidden {{ display: none; }}
+	    .bar {{ height: 10px; border: 1px solid #d0d7de; border-radius: 999px; overflow: hidden; background: #ffffff; }}
+	    .bar-fill {{ height: 100%; background: #0969da; }}
+	    details.details summary {{ cursor: pointer; }}
+	    details.details {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #fff; }}
+	    details.subdetails summary {{ cursor: pointer; }}
+	    details.subdetails {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; margin: 10px 0; background: #ffffff; }}
+	    .samples-toolbar {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin: 10px 0; }}
+	    .samples-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
+	    .samples-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
+	    .samples-pre {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; background: #f6f8fa; overflow: auto; max-height: 260px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; }}
+	    .samples-pre mark {{ background: #ffdf5d; }}
+		    .schema-toolbar {{ display: flex; gap: 8px; align-items: center; margin-bottom: 10px; flex-wrap: wrap; }}
+		    .schema-toolbar .schema-option {{ display: inline-flex; gap: 6px; align-items: center; }}
+		    .schema-toolbar input[type="search"] {{ flex: 1; padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; }}
+		    .schema-toolbar input[type="range"] {{ width: 140px; }}
+		    .schema-toolbar select {{ padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; background: #ffffff; }}
+		    .schema-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
+		    .schema-container {{ max-height: 70vh; overflow: auto; border: 1px solid #d0d7de; border-radius: 12px; padding: 8px; background: #fff; }}
+		    .schema-container svg {{ max-width: 100%; height: auto; }}
+		    .schema-legend {{ margin-top: 10px; }}
+		    .schema-legend-row {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }}
+		    .schema-legend-bar {{ height: 10px; border: 1px solid #d0d7de; border-radius: 999px; background: linear-gradient(90deg, #e6f0ff, #0969da); }}
+		    .schema-join {{ margin-top: 10px; }}
+		    .schema-join-toolbar {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 6px; }}
+		    .schema-join-toolbar button {{ padding: 8px 12px; border: 1px solid #d0d7de; border-radius: 10px; background: #f6f8fa; cursor: pointer; }}
+		    .sql-block {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; background: #f6f8fa; overflow: auto; max-height: 240px; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace; font-size: 12px; }}
+		    .schema-container .node.hidden {{ display: none; }}
+		    .schema-container .edge.hidden {{ display: none; }}
 	    .schema-container .node.dim {{ opacity: 0.15; }}
 	    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
 	    .schema-container .node.has-error .box {{ stroke: #cf222e; stroke-width: 2; }}
@@ -1284,10 +1365,21 @@ def _render_html(
 	    const edges = Array.from(svg.querySelectorAll('.edge'));
 	    const badgeCounts = {badge_counts_json} || {{}};
 	    const KEY_SEP = {key_sep_json};
-	    const BASE_TABLE_SQL = {base_table_sql_json};
-	    const depthInput = document.getElementById('schema-depth');
-	    const depthValue = document.getElementById('schema-depth-value');
-	    const onlyFlagged = document.getElementById('schema-only-flagged');
+		    const BASE_TABLE_SQL = {base_table_sql_json};
+		    const depthInput = document.getElementById('schema-depth');
+		    const depthValue = document.getElementById('schema-depth-value');
+		    const onlyFlagged = document.getElementById('schema-only-flagged');
+		    const colorBy = document.getElementById('schema-colorby');
+		    const topPct = document.getElementById('schema-top-pct');
+		    const topPctValue = document.getElementById('schema-top-pct-value');
+		    const legend = document.getElementById('schema-legend');
+		    const legendMetric = document.getElementById('schema-legend-metric');
+		    const legendMin = document.getElementById('schema-legend-min');
+		    const legendMax = document.getElementById('schema-legend-max');
+		    const legendCutoff = document.getElementById('schema-legend-cutoff');
+		    const joinSql = document.getElementById('schema-join-sql');
+		    const joinCopy = document.getElementById('schema-join-copy');
+		    const joinStatus = document.getElementById('schema-join-status');
 
 	    function matchPrefix(nameSql) {{
 	      if (!nameSql || !BASE_TABLE_SQL || !KEY_SEP) return null;
@@ -1312,17 +1404,33 @@ def _render_html(
 	      return Math.max(1, parts.length);
 	    }}
 
-	    const depthBySql = {{}};
-	    let maxDepth = 0;
-	    const nodeBySql = {{}};
-	    for (const n of nodes) {{
-	      const sql = n.getAttribute('data-name-sql') || '';
-	      if (!sql) continue;
-	      nodeBySql[sql] = n;
-	      const d = nodeDepth(sql);
-	      depthBySql[sql] = d;
-	      if (d > maxDepth) maxDepth = d;
-	    }}
+		    const depthBySql = {{}};
+		    let maxDepth = 0;
+		    const nodeBySql = {{}};
+		    const rectBySql = {{}};
+		    const metricBySql = {{rows: {{}}, size: {{}}}};
+		    const sortedMetricVals = {{rows: [], size: []}};
+		    for (const n of nodes) {{
+		      const sql = n.getAttribute('data-name-sql') || '';
+		      if (!sql) continue;
+		      nodeBySql[sql] = n;
+		      const rect = n.querySelector('rect.box');
+		      if (rect) {{
+		        rectBySql[sql] = rect;
+		        if (!rect.dataset.origFill) rect.dataset.origFill = rect.getAttribute('fill') || '';
+		      }}
+		      const rowsVal = Number(n.getAttribute('data-rows') || 0) || 0;
+		      const sizeVal = Number(n.getAttribute('data-size') || 0) || 0;
+		      metricBySql.rows[sql] = rowsVal;
+		      metricBySql.size[sql] = sizeVal;
+		      if (sql !== BASE_TABLE_SQL && rowsVal > 0) sortedMetricVals.rows.push(rowsVal);
+		      if (sql !== BASE_TABLE_SQL && sizeVal > 0) sortedMetricVals.size.push(sizeVal);
+		      const d = nodeDepth(sql);
+		      depthBySql[sql] = d;
+		      if (d > maxDepth) maxDepth = d;
+		    }}
+		    sortedMetricVals.rows.sort((a, b) => a - b);
+		    sortedMetricVals.size.sort((a, b) => a - b);
 
 	    if (depthInput) {{
 	      depthInput.max = String(maxDepth);
@@ -1394,28 +1502,229 @@ def _render_html(
 	      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
 	    }}
 
-	    function isFlagged(nodeEl) {{
-	      return (
-	        nodeEl.classList.contains('has-error') ||
-	        nodeEl.classList.contains('has-warning') ||
-	        nodeEl.classList.contains('has-quarantine') ||
-	        nodeEl.classList.contains('diff-added') ||
-	        nodeEl.classList.contains('diff-removed') ||
-	        nodeEl.classList.contains('diff-changed')
-	      );
-	    }}
+		    function isFlagged(nodeEl) {{
+		      return (
+		        nodeEl.classList.contains('has-error') ||
+		        nodeEl.classList.contains('has-warning') ||
+		        nodeEl.classList.contains('has-quarantine') ||
+		        nodeEl.classList.contains('diff-added') ||
+		        nodeEl.classList.contains('diff-removed') ||
+		        nodeEl.classList.contains('diff-changed')
+		      );
+		    }}
 
-	    let visibleNodesCount = nodes.length;
-	    function recomputeVisibility() {{
-	      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
-	      if (depthValue) depthValue.textContent = String(depthLimit);
-	      const only = !!(onlyFlagged && onlyFlagged.checked);
+		    function clamp01(x) {{
+		      return Math.max(0, Math.min(1, Number(x)));
+		    }}
 
-	      const allow = new Set();
-	      if (only) {{
-	        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
-	        for (const n of nodes) {{
-	          const sql = n.getAttribute('data-name-sql') || '';
+		    function formatInt(n) {{
+		      const x = Number(n || 0);
+		      if (!isFinite(x)) return String(n);
+		      try {{
+		        return x.toLocaleString();
+		      }} catch (_e) {{
+		        return String(x);
+		      }}
+		    }}
+
+		    function formatBytes(bytes) {{
+		      const x = Number(bytes || 0);
+		      if (!isFinite(x) || x <= 0) return '0 B';
+		      const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+		      let v = x;
+		      let u = 0;
+		      while (v >= 1024 && u < units.length - 1) {{
+		        v = v / 1024;
+		        u += 1;
+		      }}
+		      const digits = v >= 100 ? 0 : (v >= 10 ? 1 : 2);
+		      return v.toFixed(digits) + ' ' + units[u];
+		    }}
+
+		    async function copyText(text) {{
+		      const t = String(text || '');
+		      if (!t) return false;
+		      try {{
+		        if (navigator.clipboard && navigator.clipboard.writeText) {{
+		          await navigator.clipboard.writeText(t);
+		          return true;
+		        }}
+		      }} catch (_e) {{}}
+		      try {{
+		        const ta = document.createElement('textarea');
+		        ta.value = t;
+		        ta.setAttribute('readonly', 'readonly');
+		        ta.style.position = 'fixed';
+		        ta.style.left = '-1000px';
+		        ta.style.top = '-1000px';
+		        document.body.appendChild(ta);
+		        ta.select();
+		        const ok = document.execCommand('copy');
+		        document.body.removeChild(ta);
+		        return !!ok;
+		      }} catch (_e) {{
+		        return false;
+		      }}
+		    }}
+
+		    let joinTimer = null;
+		    function flashJoinStatus(msg) {{
+		      if (!joinStatus) return;
+		      joinStatus.textContent = String(msg || '');
+		      if (joinTimer) clearTimeout(joinTimer);
+		      joinTimer = setTimeout(() => {{
+		        joinStatus.textContent = '';
+		      }}, 1400);
+		    }}
+
+		    function joinPathToBase(tableSql) {{
+		      if (!tableSql || !BASE_TABLE_SQL) return null;
+		      const path = [];
+		      let cur = tableSql;
+		      let safety = 0;
+		      while (cur && safety++ < 1000) {{
+		        path.push(cur);
+		        if (cur === BASE_TABLE_SQL) break;
+		        cur = parentByChildSql[cur];
+		      }}
+		      if (!path.length) return null;
+		      if (path[path.length - 1] !== BASE_TABLE_SQL) return null;
+		      path.reverse();
+		      return path;
+		    }}
+
+		    function renderJoinSql(tableSql) {{
+		      const t = String(tableSql || '');
+		      if (!t) return '';
+		      if (!BASE_TABLE_SQL) return 'SELECT *\\nFROM `' + t + '`\\nLIMIT 5;';
+		      if (t === BASE_TABLE_SQL) return 'SELECT *\\nFROM `' + BASE_TABLE_SQL + '`\\nLIMIT 5;';
+		      const path = joinPathToBase(t);
+		      if (!path) return 'SELECT *\\nFROM `' + t + '`\\nLIMIT 5;';
+		      let sql = 'SELECT\\n  b.*';
+		      for (let i = 1; i < path.length; i++) {{
+		        sql += `,\\n  t${{i}}.*`;
+		      }}
+		      sql += `\\nFROM \\`${{BASE_TABLE_SQL}}\\` b`;
+		      for (let i = 1; i < path.length; i++) {{
+		        sql += `\\nLEFT JOIN \\`${{path[i]}}\\` t${{i}} ON b.id = t${{i}}.id`;
+		      }}
+		      sql += '\\nLIMIT 5;';
+		      return sql;
+		    }}
+
+		    function updateJoinSql(tableSql) {{
+		      if (!joinSql) return;
+		      const txt = renderJoinSql(tableSql || BASE_TABLE_SQL);
+		      joinSql.textContent = txt;
+		    }}
+
+		    function cutoffFor(metric, pct) {{
+		      const arr = (sortedMetricVals[metric] || []);
+		      if (!arr.length) return null;
+		      const p = Number(pct);
+		      if (!isFinite(p)) return arr[0];
+		      const q = 1 - (Math.max(1, Math.min(100, p)) / 100);
+		      const idx = Math.floor(q * (arr.length - 1));
+		      return arr[Math.max(0, Math.min(arr.length - 1, idx))];
+		    }}
+
+		    const HEAT_MIN = [230, 240, 255]; // #e6f0ff
+		    const HEAT_MAX = [9, 105, 218];  // #0969da
+		    function heatColor(t) {{
+		      const tt = clamp01(t);
+		      const r = Math.round(HEAT_MIN[0] + (HEAT_MAX[0] - HEAT_MIN[0]) * tt);
+		      const g = Math.round(HEAT_MIN[1] + (HEAT_MAX[1] - HEAT_MIN[1]) * tt);
+		      const b = Math.round(HEAT_MIN[2] + (HEAT_MAX[2] - HEAT_MIN[2]) * tt);
+		      const toHex = (x) => x.toString(16).padStart(2, '0');
+		      return '#' + toHex(r) + toHex(g) + toHex(b);
+		    }}
+
+		    function applyHeatmap() {{
+		      const metric = colorBy ? String(colorBy.value || '') : '';
+		      const pct = topPct ? Number(topPct.value || 100) : 100;
+		      if (topPctValue) topPctValue.textContent = String(pct) + '%';
+
+		      const enabled = (metric === 'rows' || metric === 'size');
+		      if (topPct) topPct.disabled = !enabled;
+
+		      if (!enabled) {{
+		        if (legend) legend.style.display = 'none';
+		        if (legendMetric) legendMetric.textContent = '';
+		        if (legendMin) legendMin.textContent = '';
+		        if (legendMax) legendMax.textContent = '';
+		        if (legendCutoff) legendCutoff.textContent = '';
+		        for (const sql in rectBySql) {{
+		          const rect = rectBySql[sql];
+		          if (!rect) continue;
+		          rect.setAttribute('fill', rect.dataset.origFill || rect.getAttribute('fill') || '');
+		        }}
+		        return;
+		      }}
+
+		      const arr = (sortedMetricVals[metric] || []);
+		      if (!arr.length) {{
+		        if (legend) legend.style.display = '';
+		        if (legendMetric) legendMetric.textContent = metric;
+		        if (legendMin) legendMin.textContent = 'n/a';
+		        if (legendMax) legendMax.textContent = 'n/a';
+		        if (legendCutoff) legendCutoff.textContent = pct < 100 ? 'n/a' : '';
+		        for (const sql in rectBySql) {{
+		          const rect = rectBySql[sql];
+		          if (!rect) continue;
+		          rect.setAttribute('fill', rect.dataset.origFill || rect.getAttribute('fill') || '');
+		        }}
+		        return;
+		      }}
+
+		      const minV = arr[0];
+		      const maxV = arr[arr.length - 1];
+		      const minLog = Math.log10(minV + 1);
+		      const maxLog = Math.log10(maxV + 1);
+		      const denom = (maxLog - minLog) || 1;
+
+		      for (const sql in rectBySql) {{
+		        const rect = rectBySql[sql];
+		        if (!rect) continue;
+		        if (sql === BASE_TABLE_SQL) {{
+		          rect.setAttribute('fill', rect.dataset.origFill || rect.getAttribute('fill') || '');
+		          continue;
+		        }}
+		        const v = Number((metricBySql[metric] || {{}})[sql] || 0);
+		        if (!isFinite(v) || v <= 0) {{
+		          rect.setAttribute('fill', '#f6f8fa');
+		          continue;
+		        }}
+		        const t = (Math.log10(v + 1) - minLog) / denom;
+		        rect.setAttribute('fill', heatColor(t));
+		      }}
+
+		      if (legend) legend.style.display = '';
+		      if (legendMetric) legendMetric.textContent = metric;
+		      if (legendMin) legendMin.textContent = metric === 'size' ? formatBytes(minV) : formatInt(minV);
+		      if (legendMax) legendMax.textContent = metric === 'size' ? formatBytes(maxV) : formatInt(maxV);
+		      const cutoff = pct < 100 ? cutoffFor(metric, pct) : null;
+		      if (legendCutoff) {{
+		        if (pct >= 100) legendCutoff.textContent = '';
+		        else if (cutoff === null) legendCutoff.textContent = 'n/a';
+		        else legendCutoff.textContent = metric === 'size' ? formatBytes(cutoff) : formatInt(cutoff);
+		      }}
+		    }}
+
+		    let visibleNodesCount = nodes.length;
+		    function recomputeVisibility() {{
+		      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
+		      if (depthValue) depthValue.textContent = String(depthLimit);
+		      const only = !!(onlyFlagged && onlyFlagged.checked);
+		      const metric = colorBy ? String(colorBy.value || '') : '';
+		      const pct = topPct ? Number(topPct.value || 100) : 100;
+		      const metricEnabled = (metric === 'rows' || metric === 'size');
+		      const metricActive = metricEnabled && pct < 100 && (sortedMetricVals[metric] || []).length > 0;
+
+		      const allow = new Set();
+		      if (only) {{
+		        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
+		        for (const n of nodes) {{
+		          const sql = n.getAttribute('data-name-sql') || '';
 	          if (!sql) continue;
 	          if (!isFlagged(n)) continue;
 	          if ((depthBySql[sql] || 0) > depthLimit) continue;
@@ -1428,19 +1737,46 @@ def _render_html(
 	            allow.add(p);
 	            if (p === BASE_TABLE_SQL) break;
 	            cur = p;
-	          }}
-	        }}
-	      }}
+		          }}
+		        }}
+		      }}
 
-	      visibleNodesCount = 0;
-	      for (const n of nodes) {{
-	        const sql = n.getAttribute('data-name-sql') || '';
-	        const d = depthBySql[sql] || 0;
-	        const withinDepth = d <= depthLimit;
-	        const visible = withinDepth && (!only || allow.has(sql));
-	        n.classList.toggle('hidden', !visible);
-	        if (visible) visibleNodesCount += 1;
-	      }}
+		      const allowMetric = new Set();
+		      if (metricActive) {{
+		        const cutoff = cutoffFor(metric, pct);
+		        if (cutoff !== null && BASE_TABLE_SQL) allowMetric.add(BASE_TABLE_SQL);
+		        for (const n of nodes) {{
+		          const sql = n.getAttribute('data-name-sql') || '';
+		          if (!sql) continue;
+		          if (sql === BASE_TABLE_SQL) continue;
+		          if ((depthBySql[sql] || 0) > depthLimit) continue;
+		          const v = Number((metricBySql[metric] || {{}})[sql] || 0);
+		          if (!isFinite(v) || cutoff === null || v < cutoff) continue;
+		          allowMetric.add(sql);
+		          let cur = sql;
+		          let safety = 0;
+		          while (safety++ < 1000) {{
+		            const p = parentByChildSql[cur];
+		            if (!p) break;
+		            allowMetric.add(p);
+		            if (p === BASE_TABLE_SQL) break;
+		            cur = p;
+		          }}
+		        }}
+		      }}
+
+		      visibleNodesCount = 0;
+		      for (const n of nodes) {{
+		        const sql = n.getAttribute('data-name-sql') || '';
+		        const d = depthBySql[sql] || 0;
+		        const withinDepth = d <= depthLimit;
+		        const visible =
+		          withinDepth &&
+		          (!only || allow.has(sql)) &&
+		          (!metricActive || allowMetric.has(sql));
+		        n.classList.toggle('hidden', !visible);
+		        if (visible) visibleNodesCount += 1;
+		      }}
 
 	      for (const e of edges) {{
 	        const p = e.getAttribute('data-parent-sql') || '';
@@ -1491,12 +1827,13 @@ def _render_html(
           e.classList.add('selected');
         }}
       }}
-      const d = detailsByTable[tableSql];
-      if (d) {{
-        d.open = true;
-        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
-      }}
-    }}
+	      const d = detailsByTable[tableSql];
+	      if (d) {{
+	        d.open = true;
+	        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+	      }}
+	      updateJoinSql(tableSql);
+	    }}
 
     for (const n of nodes) {{
       n.addEventListener('click', (ev) => {{
@@ -1515,26 +1852,123 @@ def _render_html(
 	        applyFilter(search ? search.value : '');
 	      }});
 	    }}
-	    if (onlyFlagged) {{
-	      onlyFlagged.addEventListener('change', () => {{
-	        recomputeVisibility();
-	        applyFilter(search ? search.value : '');
-	      }});
-	    }}
-	    if (reset) {{
-	      reset.addEventListener('click', () => {{
-	        if (search) search.value = '';
-	        if (depthInput) depthInput.value = String(maxDepth);
-	        if (onlyFlagged) onlyFlagged.checked = false;
-	        recomputeVisibility();
-	        applyFilter('');
-	        clearSelection();
-	      }});
-	    }}
+		    if (onlyFlagged) {{
+		      onlyFlagged.addEventListener('change', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		      }});
+		    }}
+		    if (colorBy) {{
+		      colorBy.addEventListener('change', () => {{
+		        if (topPct) topPct.value = '100';
+		        applyHeatmap();
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		      }});
+		    }}
+			    if (topPct) {{
+			      topPct.addEventListener('input', () => {{
+			        applyHeatmap();
+			        recomputeVisibility();
+			        applyFilter(search ? search.value : '');
+			      }});
+			    }}
+			    if (joinCopy) {{
+			      joinCopy.addEventListener('click', async () => {{
+			        const ok = await copyText(joinSql ? joinSql.textContent : '');
+			        flashJoinStatus(ok ? 'copied' : 'copy failed');
+			      }});
+			    }}
+			    if (reset) {{
+			      reset.addEventListener('click', () => {{
+			        if (search) search.value = '';
+			        if (depthInput) depthInput.value = String(maxDepth);
+		        if (onlyFlagged) onlyFlagged.checked = false;
+		        if (colorBy) colorBy.value = '';
+		        if (topPct) topPct.value = '100';
+			        applyHeatmap();
+			        recomputeVisibility();
+			        applyFilter('');
+			        clearSelection();
+			        updateJoinSql(BASE_TABLE_SQL);
+			      }});
+			    }}
 
-	    applyBadges(badgeCounts);
-	    recomputeVisibility();
-	    applyFilter(search ? search.value : '');
+			    applyBadges(badgeCounts);
+			    applyHeatmap();
+			    updateJoinSql(BASE_TABLE_SQL);
+			    recomputeVisibility();
+			    applyFilter(search ? search.value : '');
+
+			    // Samples UX: collapse/search/copy (best-effort).
+			    const samplePres = Array.from(document.querySelectorAll('pre.samples-pre'));
+			    for (const p of samplePres) {{
+			      if (!p.dataset.raw) p.dataset.raw = p.textContent || '';
+			    }}
+
+			    function escapeHtml(text) {{
+			      return String(text || '')
+			        .replace(/&/g, '&amp;')
+			        .replace(/</g, '&lt;')
+			        .replace(/>/g, '&gt;');
+			    }}
+
+			    function highlightHtml(text, query) {{
+			      const t = String(text || '');
+			      const q = String(query || '').trim();
+			      if (!q) return {{ html: escapeHtml(t), count: 0 }};
+			      const tl = t.toLowerCase();
+			      const ql = q.toLowerCase();
+			      let idx = 0;
+			      let count = 0;
+			      let out = '';
+			      while (true) {{
+			        const pos = tl.indexOf(ql, idx);
+			        if (pos === -1) break;
+			        out += escapeHtml(t.slice(idx, pos));
+			        out += '<mark>' + escapeHtml(t.slice(pos, pos + q.length)) + '</mark>';
+			        idx = pos + q.length;
+			        count += 1;
+			        if (count > 5000) break;
+			      }}
+			      out += escapeHtml(t.slice(idx));
+			      return {{ html: out, count }};
+			    }}
+
+			    function flashStatus(el, msg) {{
+			      if (!el) return;
+			      const text = String(msg || '');
+			      el.textContent = text;
+			      setTimeout(() => {{
+			        if (el.textContent === text) el.textContent = '';
+			      }}, 1400);
+			    }}
+
+			    for (const inp of document.querySelectorAll('input.samples-search[data-target]')) {{
+			      inp.addEventListener('input', () => {{
+			        const targetId = inp.getAttribute('data-target') || '';
+			        const pre = targetId ? document.getElementById(targetId) : null;
+			        if (!pre) return;
+			        const raw = pre.dataset.raw || pre.textContent || '';
+			        const q = inp.value || '';
+			        const r = highlightHtml(raw, q);
+			        pre.innerHTML = r.html;
+			        const st = document.querySelector('[data-target-status=\"' + targetId + '\"]');
+			        if (st) st.textContent = q.trim() ? ('matches: ' + r.count) : '';
+			      }});
+			    }}
+
+			    for (const btn of document.querySelectorAll('button.samples-copy[data-target]')) {{
+			      btn.addEventListener('click', async () => {{
+			        const targetId = btn.getAttribute('data-target') || '';
+			        const pre = targetId ? document.getElementById(targetId) : null;
+			        if (!pre) return;
+			        const raw = pre.dataset.raw || pre.textContent || '';
+			        const ok = await copyText(raw);
+			        const st = document.querySelector('[data-target-status=\"' + targetId + '\"]');
+			        flashStatus(st, ok ? 'copied' : 'copy failed');
+			      }});
+			    }}
 	  }})();
 	  </script>
 </body>
