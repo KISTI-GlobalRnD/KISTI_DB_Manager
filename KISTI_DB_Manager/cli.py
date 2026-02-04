@@ -308,6 +308,7 @@ def _cmd_review_pack(args: argparse.Namespace) -> int:
     res = generate_review_pack(
         config_path=args.config,
         report_path=args.report,
+        quarantine_path=getattr(args, "quarantine", None),
         out_dir=out_dir,
         formats=args.formats,
         db_enabled=not bool(args.no_db),
@@ -579,6 +580,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_pack = review_sub.add_parser("pack", help="Generate a review pack (md/html/svg) from config (+ optional report)")
     p_pack.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")
     p_pack.add_argument("--report", help="Optional RunReport JSON to enrich mapping/issues")
+    p_pack.add_argument("--quarantine", help="Optional Quarantine JSONL to overlay per-table counts")
     p_pack.add_argument("--out", help="Output directory (default: <config/report>_review)")
     p_pack.add_argument(
         "--formats",

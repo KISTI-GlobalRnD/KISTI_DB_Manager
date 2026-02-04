@@ -903,6 +903,7 @@ def _render_html(
     table_infos: list[TableInfo],
     issues: list[dict[str, Any]] | None,
     samples_by_table: Mapping[str, list[dict[str, Any]]] | None = None,
+    table_badges: Mapping[str, Mapping[str, int]] | None = None,
 ) -> str:
     def h(x: Any) -> str:
         return html.escape(str(x))
@@ -1042,6 +1043,52 @@ def _render_html(
     details_html = "".join(details_blocks) if details_blocks else '<div class="muted">(no per-table details available)</div>'
     issue_table_body = "".join(issue_rows) if issue_rows else '<tr><td colspan="3" class="muted">(none)</td></tr>'
 
+    # Badge counts for SVG overlay (errors/warnings/quarantine).
+    known_tables = {ti.name_sql for ti in table_infos}
+    badge_counts: dict[str, dict[str, int]] = {}
+
+    for it in issues or []:
+        if not isinstance(it, Mapping):
+            continue
+        lvl = str(it.get("level") or "").strip().lower()
+        if lvl not in {"error", "warning"}:
+            continue
+        ctx = it.get("context") or {}
+        table = None
+        if isinstance(ctx, Mapping):
+            for k in ("table", "table_name", "table_sql"):
+                v = ctx.get(k)
+                if v:
+                    table = str(v)
+                    break
+        if not table or table not in known_tables:
+            continue
+        badge_counts.setdefault(table, {}).setdefault(lvl, 0)
+        badge_counts[table][lvl] += 1
+
+    if table_badges:
+        for t, counts in table_badges.items():
+            if not t:
+                continue
+            table = str(t)
+            if table not in known_tables:
+                continue
+            if not isinstance(counts, Mapping):
+                continue
+            for k, v in counts.items():
+                if not k:
+                    continue
+                try:
+                    n = int(v)
+                except Exception:
+                    continue
+                if n <= 0:
+                    continue
+                badge_counts.setdefault(table, {}).setdefault(str(k), 0)
+                badge_counts[table][str(k)] += n
+
+    badge_counts_json = json.dumps(badge_counts, ensure_ascii=False).replace("<", "\\u003c")
+
     return f"""<!doctype html>
 <html lang="en">
 <head>
@@ -1067,8 +1114,15 @@ def _render_html(
     .schema-container svg {{ max-width: 100%; height: auto; }}
     .schema-container .node.dim {{ opacity: 0.15; }}
     .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
+    .schema-container .node.has-error .box {{ stroke: #cf222e; stroke-width: 2; }}
+    .schema-container .node.has-warning .box {{ stroke: #bf8700; stroke-width: 2; }}
+    .schema-container .node.has-quarantine .box {{ stroke: #8250df; stroke-width: 2; }}
     .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
     .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; }}
+    .schema-container .badge-text {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; font-weight: 600; }}
+    .schema-container .badge-error {{ fill: #cf222e; }}
+    .schema-container .badge-warning {{ fill: #bf8700; }}
+    .schema-container .badge-quarantine {{ fill: #8250df; }}
   </style>
 </head>
 <body>
@@ -1128,11 +1182,56 @@ def _render_html(
 
     const nodes = Array.from(svg.querySelectorAll('.node'));
     const edges = Array.from(svg.querySelectorAll('.edge'));
+    const badgeCounts = {badge_counts_json} || {{}};
 
     const detailsByTable = {{}};
     for (const d of document.querySelectorAll('details.details[data-table]')) {{
       const t = d.getAttribute('data-table');
       if (t) detailsByTable[t] = d;
+    }}
+
+    function applyBadges(counts) {{
+      if (!counts) return;
+      const ns = 'http://www.w3.org/2000/svg';
+      for (const n of nodes) {{
+        const tableSql = n.getAttribute('data-name-sql') || '';
+        if (!tableSql) continue;
+        const c = counts[tableSql];
+        if (!c) continue;
+
+        const err = Number(c.error || 0);
+        const warn = Number(c.warning || 0);
+        const quar = Number(c.quarantine || 0);
+
+        if (err > 0) n.classList.add('has-error');
+        else if (warn > 0) n.classList.add('has-warning');
+        if (quar > 0) n.classList.add('has-quarantine');
+
+        let text = '';
+        if (err > 0) text += ('E' + err);
+        else if (warn > 0) text += ('W' + warn);
+        if (quar > 0) text += (text ? ' ' : '') + ('Q' + quar);
+        if (!text) continue;
+
+        const rect = n.querySelector('rect.box');
+        if (!rect) continue;
+        const x = Number(rect.getAttribute('x') || 0);
+        const y = Number(rect.getAttribute('y') || 0);
+        const w = Number(rect.getAttribute('width') || 0);
+        const tx = x + w - 10;
+        const ty = y + 16;
+
+        const t = document.createElementNS(ns, 'text');
+        t.setAttribute('x', String(tx));
+        t.setAttribute('y', String(ty));
+        t.setAttribute('text-anchor', 'end');
+        t.setAttribute('class', 'badge-text');
+        if (err > 0) t.classList.add('badge-error');
+        else if (warn > 0) t.classList.add('badge-warning');
+        else if (quar > 0) t.classList.add('badge-quarantine');
+        t.textContent = text;
+        n.appendChild(t);
+      }}
     }}
 
     function clearSelection() {{
@@ -1198,6 +1297,7 @@ def _render_html(
       }});
     }}
 
+    applyBadges(badgeCounts);
     applyFilter(search ? search.value : '');
   }})();
   </script>
@@ -1529,6 +1629,7 @@ def generate_review_pack(
     config_path: str,
     out_dir: str,
     report_path: str | None = None,
+    quarantine_path: str | None = None,
     formats: str | None = None,
     db_enabled: bool = True,
     exact_counts: bool = False,
@@ -1605,6 +1706,67 @@ def generate_review_pack(
     use_original_names = any(ti.name_original for ti in table_infos)
     base_table_graph = base_table if use_original_names else base_table_sql
 
+    # Optional: quarantine overlay counts (best-effort).
+    quarantine_counts_by_table: dict[str, int] = {}
+    quarantine_total = 0
+    quarantine_error: str | None = None
+    if quarantine_path:
+        sql_by_original: dict[str, str] = {}
+        try:
+            artifacts = (report or {}).get("artifacts") or {}
+            nm_by_table = artifacts.get("name_maps_json") or {}
+            if isinstance(nm_by_table, Mapping):
+                for _k, nm in nm_by_table.items():
+                    if isinstance(nm, Mapping) and nm.get("table_original") and nm.get("table_sql"):
+                        sql_by_original[str(nm.get("table_original"))] = str(nm.get("table_sql"))
+        except Exception:
+            sql_by_original = {}
+
+        known_sql = {ti.name_sql for ti in table_infos}
+        try:
+            with open(quarantine_path, encoding="utf-8") as f:
+                for line in f:
+                    raw = line.strip()
+                    if not raw:
+                        continue
+                    try:
+                        entry = json.loads(raw)
+                    except Exception:
+                        continue
+                    quarantine_total += 1
+                    table = None
+                    ctx = entry.get("context") or {}
+                    rec = entry.get("record") or {}
+                    if isinstance(ctx, Mapping):
+                        for k in ("table", "table_name", "table_sql"):
+                            v = ctx.get(k)
+                            if v:
+                                table = str(v)
+                                break
+                    if table is None and isinstance(rec, Mapping):
+                        for k in ("table", "table_name", "table_sql"):
+                            v = rec.get(k)
+                            if v:
+                                table = str(v)
+                                break
+                    if not table:
+                        continue
+
+                    # Normalize to SQL table name where possible.
+                    if table in known_sql:
+                        table_sql = table
+                    elif table in sql_by_original and sql_by_original[table] in known_sql:
+                        table_sql = sql_by_original[table]
+                    else:
+                        # Best-effort: try truncation to 64.
+                        table_sql = truncate_table_name(table, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+                        if table_sql not in known_sql:
+                            continue
+
+                    quarantine_counts_by_table[table_sql] = int(quarantine_counts_by_table.get(table_sql, 0)) + 1
+        except Exception as e:
+            quarantine_error = str(e)
+
     generated_at = _utc_now_iso()
     out_path = Path(out_dir)
     out_path.mkdir(parents=True, exist_ok=True)
@@ -1667,6 +1829,9 @@ def generate_review_pack(
             "generated_at": generated_at,
             "config": config_path,
             "report": report_path or "",
+            "quarantine": quarantine_path or "",
+            "quarantine_entries": int(quarantine_total) if quarantine_path else "",
+            "quarantine_error": quarantine_error or "",
             "base_table": base_table,
             "base_table_sql": base_table_sql,
             "key_sep": key_sep,
@@ -1679,6 +1844,7 @@ def generate_review_pack(
         table_infos=table_infos,
         issues=issues,
         samples_by_table=samples_by_table or None,
+        table_badges=({t: {"quarantine": n} for t, n in quarantine_counts_by_table.items()} if quarantine_counts_by_table else None),
     )
     if "html" in fmt:
         _write_text(html_path, html_text)
