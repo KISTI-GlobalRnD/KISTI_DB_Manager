@@ -1,0 +1,100 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="2120" height="944" viewBox="0 0 2120 944">
+<style>
+.box { stroke: #1f2328; stroke-width: 1; rx: 8; ry: 8; }
+.label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 12px; fill: #1f2328; }
+.meta { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #57606a; }
+.edge { stroke: #57606a; stroke-width: 1; fill: none; }
+</style>
+<path class="edge" d="M 270 52 C 670 52, 670 52, 1070 52" />
+<path class="edge" d="M 270 52 C 800 52, 800 52, 1330 52" />
+<path class="edge" d="M 270 52 C 670 52, 670 122, 1070 122" />
+<path class="edge" d="M 270 52 C 670 52, 670 192, 1070 192" />
+<path class="edge" d="M 270 52 C 540 52, 540 52, 810 52" />
+<path class="edge" d="M 270 52 C 670 52, 670 262, 1070 262" />
+<path class="edge" d="M 270 52 C 800 52, 800 122, 1330 122" />
+<path class="edge" d="M 270 52 C 800 52, 800 192, 1330 192" />
+<path class="edge" d="M 270 52 C 800 52, 800 262, 1330 262" />
+<path class="edge" d="M 270 52 C 800 52, 800 332, 1330 332" />
+<path class="edge" d="M 270 52 C 670 52, 670 332, 1070 332" />
+<path class="edge" d="M 270 52 C 670 52, 670 402, 1070 402" />
+<path class="edge" d="M 270 52 C 670 52, 670 472, 1070 472" />
+<path class="edge" d="M 270 52 C 670 52, 670 542, 1070 542" />
+<path class="edge" d="M 270 52 C 540 52, 540 122, 810 122" />
+<path class="edge" d="M 270 52 C 670 52, 670 612, 1070 612" />
+<path class="edge" d="M 270 52 C 800 52, 800 402, 1330 402" />
+<path class="edge" d="M 270 52 C 670 52, 670 682, 1070 682" />
+<path class="edge" d="M 270 52 C 930 52, 930 52, 1590 52" />
+<path class="edge" d="M 270 52 C 670 52, 670 752, 1070 752" />
+<path class="edge" d="M 270 52 C 670 52, 670 822, 1070 822" />
+<path class="edge" d="M 270 52 C 670 52, 670 892, 1070 892" />
+<rect class="box" x="30" y="30" width="240" height="44" fill="#E6F0FF" />
+<text class="label" x="40" y="48">WoS_Sample__MN</text>
+<text class="meta" x="40" y="64">rows: n/a · cols: 85</text>
+<rect class="box" x="1070" y="30" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="46">SUB/dynamic_data</text>
+<text class="label" x="1080" y="60">citation_related/SDG…</text>
+<rect class="box" x="1330" y="30" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1340" y="46">SUB/dynamic_data</text>
+<text class="label" x="1340" y="60">citation_related…</text>
+<rect class="box" x="1070" y="100" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="116">SUB/dynamic_data</text>
+<text class="label" x="1080" y="130">cluster_related/identifiers…</text>
+<rect class="box" x="1070" y="170" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="186">SUB/dynamic_data/ic_related</text>
+<text class="label" x="1080" y="200">oases/oas</text>
+<rect class="box" x="810" y="30" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="820" y="46">SUB/static_data/contributors</text>
+<text class="label" x="820" y="60">contributor</text>
+<rect class="box" x="1070" y="240" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="256">SUB/static_data</text>
+<text class="label" x="1080" y="270">fullrecord_metadata/addresses…</text>
+<rect class="box" x="1330" y="100" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1340" y="116">SUB/static_data</text>
+<text class="label" x="1340" y="130">fullrecord_metadata…</text>
+<rect class="box" x="1330" y="170" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1340" y="186">SUB/static_data</text>
+<text class="label" x="1340" y="200">fullrecord_metadata…</text>
+<rect class="box" x="1330" y="240" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1340" y="256">SUB/static_data</text>
+<text class="label" x="1340" y="270">fullrecord_metadata…</text>
+<rect class="box" x="1330" y="310" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1340" y="326">SUB/static_data</text>
+<text class="label" x="1340" y="340">fullrecord_metadata/fund_ack…</text>
+<rect class="box" x="1070" y="310" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="326">SUB/static_data</text>
+<text class="label" x="1080" y="340">fullrecord_metadata/keywords…</text>
+<rect class="box" x="1070" y="380" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="396">SUB/static_data</text>
+<text class="label" x="1080" y="410">fullrecord_metadata…</text>
+<rect class="box" x="1070" y="450" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="466">SUB/static_data</text>
+<text class="label" x="1080" y="480">fullrecord_metadata/reference…</text>
+<rect class="box" x="1070" y="520" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="536">SUB/static_data</text>
+<text class="label" x="1080" y="550">fullrecord_metadata…</text>
+<rect class="box" x="810" y="100" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="820" y="118">SUB/static_data/item/book_desc</text>
+<text class="meta" x="820" y="134">rows: n/a · cols: 6</text>
+<rect class="box" x="1070" y="590" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="606">SUB/static_data/item</text>
+<text class="label" x="1080" y="620">keywords_plus/keyword</text>
+<rect class="box" x="1330" y="380" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1340" y="396">SUB/static_data/item</text>
+<text class="label" x="1340" y="410">reviewed_work/rw_authors…</text>
+<rect class="box" x="1070" y="660" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="676">SUB/static_data/summary/EWUID</text>
+<text class="label" x="1080" y="690">edition</text>
+<rect class="box" x="1590" y="30" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1600" y="46">SUB/static_data/summary</text>
+<text class="label" x="1600" y="60">conferences/conference…</text>
+<rect class="box" x="1070" y="730" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="746">SUB/static_data/summary</text>
+<text class="label" x="1080" y="760">doctypes/doctype</text>
+<rect class="box" x="1070" y="800" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="816">SUB/static_data/summary/names</text>
+<text class="label" x="1080" y="830">name</text>
+<rect class="box" x="1070" y="870" width="240" height="44" fill="#F6F8FA" />
+<text class="label" x="1080" y="886">SUB/static_data/summary/titles</text>
+<text class="label" x="1080" y="900">title</text>
+</svg>

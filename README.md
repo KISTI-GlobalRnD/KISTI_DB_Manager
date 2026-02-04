@@ -33,6 +33,12 @@ Starting from **0.7.0**, this repository keeps a single implementation:
 - **Review/visualization**
   - Review pack generation (md/html/svg) and schema diagrams (optional extras)
 
+## Schema visualization (Data_Sample)
+
+Representative schema graph generated from `Data_Sample/`:
+
+![WoS sample schema](Image/Schema_WoS_Sample.png)
+
 ## Install
 
 ```bash

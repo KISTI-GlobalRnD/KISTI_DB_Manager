@@ -342,12 +342,25 @@ def build_table_edges(
     table_set = {str(t) for t in tables if str(t)}
     table_set.add(base)
 
+    def _match_prefix(name: str) -> str | None:
+        # Support common legacy naming variants (ex: "<base>-SUB__...").
+        candidates = [
+            f"{base}{key_sep}",
+            f"{base}-SUB{key_sep}",
+            f"{base}_SUB{key_sep}",
+        ]
+        for p in candidates:
+            if name.startswith(p):
+                return p
+        return None
+
     edges: list[tuple[str, str, str]] = []
     for child in sorted(table_set):
         if child == base:
             continue
-        prefix = f"{base}{key_sep}"
-        if not child.startswith(prefix):
+
+        prefix = _match_prefix(child)
+        if prefix is None:
             continue
 
         # Find nearest existing ancestor that is also a table name.
@@ -355,12 +368,19 @@ def build_table_edges(
         parts = [p for p in suffix.split(key_sep) if p]
         parent = base
         for i in range(len(parts) - 1, 0, -1):
-            cand = f"{base}{key_sep}{key_sep.join(parts[:i])}"
+            cand = f"{prefix}{key_sep.join(parts[:i])}"
             if cand in table_set:
                 parent = cand
                 break
 
-        label = suffix[len(parent[len(prefix) :]) :].lstrip(key_sep) if parent != base else suffix
+        if parent == base:
+            label = suffix
+        else:
+            parent_suffix = parent[len(prefix) :] if parent.startswith(prefix) else ""
+            label = suffix[len(parent_suffix) :]
+            if label.startswith(key_sep):
+                label = label[len(key_sep) :]
+
         edges.append((parent, child, label or suffix))
 
     return edges
@@ -421,11 +441,82 @@ def render_simple_svg(
     name_to_info = {ti.name_original or ti.name_sql: ti for ti in table_infos}
     tables = sorted(name_to_info.keys())
 
+    def _match_prefix(name: str) -> str | None:
+        candidates = [
+            f"{base_table}{key_sep}",
+            f"{base_table}-SUB{key_sep}",
+            f"{base_table}_SUB{key_sep}",
+        ]
+        for p in candidates:
+            if name.startswith(p):
+                return p
+        return None
+
+    def _display_label(name: str) -> str:
+        if name == base_table:
+            return name
+        prefix = _match_prefix(name)
+        if prefix is None:
+            return name
+        suffix = name[len(prefix) :]
+        if not suffix:
+            return name
+        # For legacy "<base>-SUB__..." style, show a "SUB/" prefix for readability.
+        if prefix.startswith(f"{base_table}-SUB") or prefix.startswith(f"{base_table}_SUB"):
+            suffix = f"SUB{key_sep}{suffix}"
+        return suffix.replace(key_sep, "/")
+
+    def _wrap_path(text: str, *, max_chars: int = 30, max_lines: int = 2) -> list[str]:
+        """
+        Wrap a path-like string (delimited by "/") into up to max_lines.
+        Adds an ellipsis when truncated.
+        """
+        text = str(text)
+        if len(text) <= max_chars:
+            return [text]
+
+        parts = text.split("/")
+        lines: list[str] = []
+        i = 0
+        while i < len(parts) and len(lines) < max_lines:
+            line = parts[i]
+            i += 1
+            while i < len(parts):
+                cand = f"{line}/{parts[i]}"
+                if len(cand) <= max_chars:
+                    line = cand
+                    i += 1
+                else:
+                    break
+            lines.append(line)
+
+        truncated = i < len(parts)
+        # Also treat overlong final line as truncated.
+        if lines and len(lines[-1]) > max_chars:
+            truncated = True
+            lines[-1] = lines[-1][: max(0, max_chars - 1)]
+
+        if truncated and lines:
+            if len(lines[-1]) >= max_chars:
+                lines[-1] = lines[-1][: max(0, max_chars - 1)] + "…"
+            else:
+                lines[-1] = lines[-1] + "…"
+
+        # Final safety truncation
+        out: list[str] = []
+        for l in lines:
+            l = str(l)
+            if len(l) <= max_chars:
+                out.append(l)
+            else:
+                out.append(l[: max(0, max_chars - 1)] + "…")
+        return out or [text[: max(0, max_chars - 1)] + "…"]
+
     def depth(name: str) -> int:
-        prefix = f"{base_table}{key_sep}"
         if name == base_table:
             return 0
-        if not name.startswith(prefix):
+        prefix = _match_prefix(name)
+        if prefix is None:
             return 0
         suffix = name[len(prefix) :]
         parts = [p for p in suffix.split(key_sep) if p]
@@ -492,14 +583,20 @@ def render_simple_svg(
     for name in tables:
         x, y = pos.get(name, (30, 30))
         ti = name_to_info.get(name)
-        label = ti.label() if ti else name
+        label = _display_label(ti.label() if ti else name)
+        label_lines = _wrap_path(label, max_chars=30, max_lines=2)
         rows = ti.rows_label() if ti else "n/a"
         cols = len(ti.columns or []) if ti and ti.columns is not None else None
         cols_label = str(cols) if cols is not None else "n/a"
 
         lines.append(f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="{node_color(name)}" />')
-        lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(label)}</text>')
-        lines.append(f'<text class="meta" x="{x + 10}" y="{y + 34}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
+        if len(label_lines) == 1:
+            lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(label_lines[0])}</text>')
+            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 34}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
+        else:
+            # Two-line label: keep diagram compact by omitting meta line.
+            lines.append(f'<text class="label" x="{x + 10}" y="{y + 16}">{_svg_escape(label_lines[0])}</text>')
+            lines.append(f'<text class="label" x="{x + 10}" y="{y + 30}">{_svg_escape(label_lines[1])}</text>')
 
     lines.append("</svg>")
     return "\n".join(lines) + "\n"

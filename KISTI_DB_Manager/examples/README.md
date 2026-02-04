@@ -28,3 +28,16 @@ These are **representative snapshots**. Regenerate locally with the smoke test a
 
 ![Review preview](assets/json_20lists_review.png)
 
+## Data_Sample schema (WoS)
+
+We also ship a real-ish multi-table sample under `Data_Sample/` (repo root).
+
+Generate/update the schema image:
+
+```bash
+python3 KISTI_DB_Manager/examples/generate_data_sample_schema.py
+```
+
+Result:
+
+![WoS sample schema](../../Image/Schema_WoS_Sample.png)
