@@ -34,13 +34,18 @@ These are **representative snapshots**. Regenerate locally with the smoke test a
 
 ### Raw vs Flatten preview (HTML)
 
-This helps validate whether flattening matches the raw record structure (missing/extra keys).
+This helps validate whether flattening matches the raw record structure (missing/extra keys), and also provides a **union view**
+to spot low-coverage / type-drift branches across sampled records.
 
 ```bash
 kisti-db-manager review preview --config examples/configs/json_preview_20lists.json --out preview_out
 ```
 
 ![Raw vs Flatten preview](assets/json_20lists_preview.png)
+
+Union structure (scrolled to `#union` in the same page):
+
+![Union structure preview](assets/json_20lists_preview_union.png)
 
 ## Data_Sample schema (WoS)
 

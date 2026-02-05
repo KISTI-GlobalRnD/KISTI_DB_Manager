@@ -563,12 +563,216 @@ def _compute_diff(
     }
 
 
-def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[str, Any]]) -> str:
+def _compute_union_view(
+    previews: list[dict[str, Any]],
+    *,
+    key_sep: str,
+    except_keys: set[str],
+    max_union_nodes: int = 20000,
+) -> dict[str, Any]:
+    total = len(previews)
+    if total <= 0:
+        return {"records": 0, "nodes": [], "counts": {"nodes": 0, "exceptions": 0}, "truncated": False}
+
+    def is_excepted_path(path: str) -> bool:
+        if not except_keys:
+            return False
+        if path in except_keys:
+            return True
+        for ek in except_keys:
+            if ek and path.startswith(ek + key_sep):
+                return True
+        return False
+
+    def parent_of(path: str) -> str:
+        if path == "root":
+            return ""
+        if key_sep in path:
+            return path.rsplit(key_sep, 1)[0]
+        return "root"
+
+    stats_by_path: dict[str, dict[str, Any]] = {}
+    any_truncated = False
+
+    def bump(d: dict[str, int], k: str) -> None:
+        try:
+            d[k] = int(d.get(k, 0)) + 1
+        except Exception:
+            d[k] = 1
+
+    for rec_i, pv in enumerate(previews):
+        any_truncated = any_truncated or bool(pv.get("raw_truncated"))
+        raw_nodes = pv.get("raw_nodes") or []
+        if not isinstance(raw_nodes, list):
+            continue
+        for n in raw_nodes:
+            if not isinstance(n, Mapping):
+                continue
+            path = str(n.get("path") or "")
+            if not path:
+                continue
+            st = stats_by_path.get(path)
+            if st is None:
+                st = {
+                    "records": set(),
+                    "kind_counts": {},
+                    "branch_type_counts": {},
+                    "dtype_counts": {},
+                    "samples": [],
+                    "list_len_min": None,
+                    "list_len_max": None,
+                    "list_len_sum": 0,
+                    "list_len_count": 0,
+                }
+                stats_by_path[path] = st
+
+            try:
+                st["records"].add(int(rec_i))
+            except Exception:
+                st["records"].add(rec_i)
+
+            kind = str(n.get("kind") or "")
+            branch_type = str(n.get("branch_type") or "")
+            dtype = str(n.get("dtype") or "")
+
+            if kind:
+                bump(st["kind_counts"], kind)
+            if branch_type:
+                bump(st["branch_type_counts"], branch_type)
+            if dtype:
+                bump(st["dtype_counts"], dtype)
+
+            sample = n.get("sample")
+            if isinstance(sample, str) and sample and len(st["samples"]) < 3 and sample not in st["samples"]:
+                st["samples"].append(sample)
+
+            list_len = n.get("list_len")
+            try:
+                list_len_int = int(list_len) if list_len is not None else None
+            except Exception:
+                list_len_int = None
+            if list_len_int is not None and list_len_int >= 0:
+                st["list_len_count"] = int(st["list_len_count"]) + 1
+                st["list_len_sum"] = int(st["list_len_sum"]) + int(list_len_int)
+                st["list_len_min"] = list_len_int if st["list_len_min"] is None else min(int(st["list_len_min"]), list_len_int)
+                st["list_len_max"] = list_len_int if st["list_len_max"] is None else max(int(st["list_len_max"]), list_len_int)
+
+    def mode_of(counter: Mapping[str, int], default: str = "") -> str:
+        if not counter:
+            return default
+        try:
+            # Stable tie-break by key
+            return sorted(counter.items(), key=lambda kv: (-int(kv[1]), str(kv[0])))[0][0]
+        except Exception:
+            return next(iter(counter.keys()), default)
+
+    # Build nodes
+    union_nodes: list[dict[str, Any]] = []
+    for path, st in stats_by_path.items():
+        present = len(st.get("records") or [])
+        coverage = float(present) / float(total) if total else 0.0
+        kind_counts = dict(st.get("kind_counts") or {})
+        branch_counts = dict(st.get("branch_type_counts") or {})
+        dtype_counts = dict(st.get("dtype_counts") or {})
+        kind_mode = mode_of(kind_counts)
+        branch_mode = mode_of(branch_counts)
+        dtype_mode = mode_of(dtype_counts)
+
+        type_drift = False
+        try:
+            type_drift = len(kind_counts.keys()) > 1 or len(branch_counts.keys()) > 1 or (kind_mode == "value" and len(dtype_counts.keys()) > 1)
+        except Exception:
+            type_drift = False
+
+        cov_drift = coverage < 0.999999
+        exception = bool(type_drift or cov_drift)
+
+        ll_count = int(st.get("list_len_count") or 0)
+        ll_avg = None
+        if ll_count > 0:
+            try:
+                ll_avg = float(st.get("list_len_sum") or 0) / float(ll_count)
+            except Exception:
+                ll_avg = None
+
+        union_nodes.append(
+            {
+                "path": path,
+                "parent": parent_of(path),
+                "label": "root" if path == "root" else path.split(key_sep)[-1],
+                "kind": kind_mode,
+                "branch_type": branch_mode,
+                "dtype": dtype_mode,
+                "coverage": coverage,
+                "present": int(present),
+                "total": int(total),
+                "kind_counts": kind_counts,
+                "branch_type_counts": branch_counts,
+                "dtype_counts": dtype_counts,
+                "type_drift": bool(type_drift),
+                "cov_drift": bool(cov_drift),
+                "exception": bool(exception),
+                "excepted": bool(is_excepted_path(path)),
+                "samples": list(st.get("samples") or []),
+                "list_len": (
+                    {
+                        "min": st.get("list_len_min"),
+                        "max": st.get("list_len_max"),
+                        "avg": ll_avg,
+                        "count": ll_count,
+                    }
+                    if ll_count > 0
+                    else None
+                ),
+            }
+        )
+
+    # Compute children counts
+    children_by_parent: dict[str, set[str]] = {}
+    for n in union_nodes:
+        p = str(n.get("parent") or "")
+        c = str(n.get("path") or "")
+        children_by_parent.setdefault(p, set()).add(c)
+    for n in union_nodes:
+        n["n_children"] = len(children_by_parent.get(str(n.get("path") or ""), set()))
+        try:
+            if str(n.get("path")) == "root":
+                n["depth"] = 0
+            else:
+                n["depth"] = len(str(n.get("path") or "").split(key_sep))
+        except Exception:
+            n["depth"] = 0
+
+    union_nodes.sort(key=lambda n: (int(n.get("depth") or 0), str(n.get("path") or "")))
+
+    # Optional truncation
+    truncated = False
+    if max_union_nodes is not None:
+        try:
+            max_union_nodes = int(max_union_nodes)
+        except Exception:
+            max_union_nodes = None
+    if max_union_nodes is not None and max_union_nodes > 0 and len(union_nodes) > max_union_nodes:
+        truncated = True
+        union_nodes = union_nodes[:max_union_nodes]
+
+    exceptions = sum(1 for n in union_nodes if n.get("exception"))
+
+    return {
+        "records": int(total),
+        "nodes": union_nodes,
+        "counts": {"nodes": len(union_nodes), "exceptions": int(exceptions)},
+        "truncated": bool(truncated or any_truncated),
+    }
+
+
+def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[str, Any]], union: Mapping[str, Any] | None = None) -> str:
     def h(x: Any) -> str:
         return html.escape(str(x))
 
     meta_json = json.dumps(meta, ensure_ascii=False).replace("<", "\\u003c")
     previews_json = json.dumps(previews, ensure_ascii=False).replace("<", "\\u003c")
+    union_json = json.dumps(union or {}, ensure_ascii=False).replace("<", "\\u003c")
 
     return f"""<!doctype html>
 <html lang="en">
@@ -600,6 +804,14 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     .node.dim {{ opacity: 0.2; }}
     .node.missing {{ outline: 1px solid #cf222e; }}
     .node.excepted {{ opacity: 0.75; }}
+
+    .u-node {{ display: inline-flex; gap: 8px; align-items: center; cursor: pointer; padding: 2px 6px; border-radius: 8px; }}
+    .u-node:hover {{ background: #f6f8fa; }}
+    .u-node.selected {{ outline: 2px solid #0969da; background: #eff6ff; }}
+    .u-node.u-exc {{ outline: 1px solid #bf8700; }}
+    .u-node.u-cov {{ outline: 1px solid #bf8700; }}
+    .u-node.u-drift {{ outline: 1px solid #cf222e; }}
+    .u-node.u-excepted {{ opacity: 0.75; }}
 
     .badge {{ display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #d0d7de; background: #f6f8fa; }}
     .b-value {{ border-color: #8250df; background: #fbefff; }}
@@ -639,6 +851,28 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     </div>
   </div>
 
+  <div class="card" id="union">
+    <h2>Union structure (across sampled records)</h2>
+    <p class="muted">Shows coverage and type drift across the previewed records. Use this to spot “exception” branches.</p>
+    <div class="toolbar">
+      <input id="union-q" type="search" placeholder="Search union path…" />
+      <label><input id="union-only-exc" type="checkbox" checked /> only exceptions</label>
+      <span class="muted">coverage ≤</span>
+      <input id="union-cov" type="range" min="0" max="100" step="1" value="100" />
+      <code id="union-cov-value">100</code>
+      <span id="union-status" class="muted"></span>
+    </div>
+    <div class="row" style="margin-top: 10px;">
+      <div>
+        <div id="union-tree"></div>
+      </div>
+      <div>
+        <h3>Details</h3>
+        <div id="union-detail" class="muted">(click a union node)</div>
+      </div>
+    </div>
+  </div>
+
   <div class="row">
     <div class="card">
       <h2>Raw structure</h2>
@@ -667,6 +901,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
   <script>
     const META = {meta_json};
     const PREVIEWS = {previews_json};
+    const UNION = {union_json};
 
     const sel = document.getElementById('record-select');
     const q = document.getElementById('q');
@@ -675,10 +910,21 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     const rawTree = document.getElementById('raw-tree');
     const flatView = document.getElementById('flat-view');
     const diffEl = document.getElementById('diff');
+    const unionQ = document.getElementById('union-q');
+    const unionOnlyExc = document.getElementById('union-only-exc');
+    const unionCov = document.getElementById('union-cov');
+    const unionCovValue = document.getElementById('union-cov-value');
+    const unionStatus = document.getElementById('union-status');
+    const unionTree = document.getElementById('union-tree');
+    const unionDetail = document.getElementById('union-detail');
 
     let currentIndex = 0;
     let flatIndex = new Map(); // key -> array of elements
     let rawIndex = new Map(); // path -> element
+    let unionIndex = new Map(); // path -> element
+    let unionLiIndex = new Map(); // path -> <li>
+    let unionNodeByPath = new Map();
+    let unionParentByPath = new Map();
 
     function badgeClass(branchType) {{
       const t = String(branchType || '');
@@ -696,6 +942,12 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
 
     function clearSelection() {{
       for (const el of document.querySelectorAll('.node.selected, .flat-key.selected')) {{
+        el.classList.remove('selected');
+      }}
+    }}
+
+    function clearUnionSelection() {{
+      for (const el of document.querySelectorAll('.u-node.selected')) {{
         el.classList.remove('selected');
       }}
     }}
@@ -736,6 +988,166 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       if (el) {{
         el.classList.add('selected');
         el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
+      }}
+    }}
+
+    function renderUnion() {{
+      unionIndex = new Map();
+      unionLiIndex = new Map();
+      unionNodeByPath = new Map();
+      unionParentByPath = new Map();
+
+      const nodes = (UNION && UNION.nodes) ? UNION.nodes : [];
+      if (!Array.isArray(nodes) || nodes.length === 0) {{
+        if (unionTree) unionTree.innerHTML = '<div class=\"muted\">(no union nodes)</div>';
+        return;
+      }}
+
+      for (const n of nodes) {{
+        if (!n || typeof n !== 'object') continue;
+        const p = String(n.path || '');
+        unionNodeByPath.set(p, n);
+        unionParentByPath.set(p, String(n.parent || ''));
+      }}
+
+      const byParent = new Map();
+      for (const n of nodes) {{
+        const parent = String(n.parent || '');
+        if (!byParent.has(parent)) byParent.set(parent, []);
+        byParent.get(parent).push(n);
+      }}
+      for (const [p, arr] of byParent.entries()) {{
+        arr.sort((a, b) => String(a.path || '').localeCompare(String(b.path || '')));
+      }}
+
+      function covLabel(n) {{
+        const present = Number(n.present || 0);
+        const total = Number(n.total || 0);
+        const cov = (total > 0) ? (present / total) : 0;
+        const pct = Math.round(cov * 1000) / 10;
+        return pct + '% (' + present + '/' + total + ')';
+      }}
+
+      function driftLabel(counts) {{
+        if (!counts || typeof counts !== 'object') return '';
+        const keys = Object.keys(counts);
+        if (keys.length <= 1) return '';
+        keys.sort((a, b) => String(a).localeCompare(String(b)));
+        const parts = [];
+        for (const k of keys) {{
+          parts.push(k + ':' + String(counts[k] || 0));
+        }}
+        return parts.join(', ');
+      }}
+
+      function renderNode(n) {{
+        const kids = byParent.get(String(n.path || '')) || [];
+        const b = '<span class=\"' + badgeClass(n.branch_type) + '\">' + String(n.branch_type || '') + '</span>';
+        const cov = '<span class=\"pill\">cov <code>' + covLabel(n) + '</code></span>';
+        const drift = n.type_drift ? ('<span class=\"pill\" style=\"border-color:#cf222e;background:#ffebe9;\">drift</span>') : '';
+        const exc = n.exception ? ' u-exc' : '';
+        const driftCls = n.type_drift ? ' u-drift' : '';
+        const covCls = (n.cov_drift && !n.type_drift) ? ' u-cov' : '';
+        const exptCls = n.excepted ? ' u-excepted' : '';
+        const head =
+          '<span class=\"u-node' + exc + driftCls + covCls + exptCls + '\" data-path=\"' + String(n.path || '') + '\">' +
+            '<code>' + String(n.label || '') + '</code> ' + b + ' ' + cov + ' ' + drift +
+          '</span>';
+
+        const liAttr = ' data-path=\"' + String(n.path || '') + '\"';
+        if (!kids.length) {{
+          return '<li' + liAttr + '>' + head + '</li>';
+        }}
+        const open = String(n.path || '') === 'root';
+        return '<li' + liAttr + '><details ' + (open ? 'open' : '') + '><summary>' + head + '</summary>' +
+          '<ul class=\"tree\">' + kids.map(renderNode).join('') + '</ul></details></li>';
+      }}
+
+      const root = nodes.find(x => String(x.path || '') === 'root') || nodes[0];
+      const html = '<ul class=\"tree\">' + renderNode(root) + '</ul>';
+      if (unionTree) unionTree.innerHTML = html;
+
+      for (const li of Array.from(unionTree ? unionTree.querySelectorAll('li[data-path]') : [])) {{
+        const p = String(li.getAttribute('data-path') || '');
+        unionLiIndex.set(p, li);
+      }}
+      for (const el of Array.from(unionTree ? unionTree.querySelectorAll('.u-node[data-path]') : [])) {{
+        const p = String(el.getAttribute('data-path') || '');
+        unionIndex.set(p, el);
+        el.addEventListener('click', (ev) => {{
+          ev.preventDefault();
+          clearUnionSelection();
+          el.classList.add('selected');
+          const n = unionNodeByPath.get(p);
+          if (unionDetail) {{
+            const info = n ? n : {{ path: p }};
+            const kinds = driftLabel(info.kind_counts);
+            const btypes = driftLabel(info.branch_type_counts);
+            const dtypes = driftLabel(info.dtype_counts);
+            const ll = info.list_len ? JSON.stringify(info.list_len) : '';
+            const samples = Array.isArray(info.samples) ? info.samples.join('\\n') : '';
+            unionDetail.innerHTML =
+              '<div><code>' + String(info.path || '') + '</code></div>' +
+              '<div class=\"muted\">coverage: <code>' + covLabel(info) + '</code></div>' +
+              (info.exception ? '<div class=\"muted\">exception: <code>true</code></div>' : '') +
+              (kinds ? '<div class=\"muted\">kinds: <code>' + kinds + '</code></div>' : '') +
+              (btypes ? '<div class=\"muted\">branch types: <code>' + btypes + '</code></div>' : '') +
+              (dtypes ? '<div class=\"muted\">dtypes: <code>' + dtypes + '</code></div>' : '') +
+              (ll ? '<div class=\"muted\">list_len: <code>' + ll + '</code></div>' : '') +
+              (samples ? '<div class=\"muted\">samples:</div><pre>' + samples + '</pre>' : '');
+          }}
+        }});
+      }}
+
+      if (unionCovValue && unionCov) unionCovValue.textContent = String(unionCov.value || '100');
+      applyUnionFilter();
+    }}
+
+    function applyUnionFilter() {{
+      const query = String(unionQ && unionQ.value ? unionQ.value : '').trim().toLowerCase();
+      const onlyExc = !!(unionOnlyExc && unionOnlyExc.checked);
+      const covMax = unionCov ? Number(unionCov.value || 100) : 100;
+      if (unionCovValue) unionCovValue.textContent = String(covMax);
+
+      const visible = new Set();
+      let matches = 0;
+
+      for (const [p, n] of unionNodeByPath.entries()) {{
+        const path = String(p || '');
+        const okQ = !query || path.toLowerCase().includes(query);
+        const okExc = !onlyExc || !!n.exception;
+        const covPct = Number(n.coverage || 0) * 100.0;
+        const okCov = covMax >= 100 || covPct <= covMax || !!n.type_drift;
+        if (okQ && okExc && okCov) {{
+          visible.add(path);
+          matches += 1;
+        }}
+      }}
+
+      // Ensure context: add ancestors of visible nodes.
+      for (const p of Array.from(visible)) {{
+        let cur = p;
+        let safety = 0;
+        while (cur && safety++ < 2000) {{
+          visible.add(cur);
+          const parent = unionParentByPath.get(cur) || '';
+          if (!parent) break;
+          cur = parent;
+        }}
+      }}
+      visible.add('root');
+
+      let shown = 0;
+      for (const [p, li] of unionLiIndex.entries()) {{
+        const show = visible.has(p);
+        li.style.display = show ? '' : 'none';
+        if (show) shown += 1;
+      }}
+
+      if (unionStatus) {{
+        const total = (UNION && UNION.counts) ? Number(UNION.counts.nodes || 0) : unionLiIndex.size;
+        const exc = (UNION && UNION.counts) ? Number(UNION.counts.exceptions || 0) : 0;
+        unionStatus.textContent = 'shown: ' + shown + ' / ' + total + ' · matches: ' + matches + ' · exceptions: ' + exc + (UNION && UNION.truncated ? ' · truncated' : '');
       }}
     }}
 
@@ -940,7 +1352,11 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       sel.addEventListener('change', () => renderAll(sel.value));
       if (q) q.addEventListener('input', applyQuery);
       if (onlyMissing) onlyMissing.addEventListener('change', applyQuery);
+      if (unionQ) unionQ.addEventListener('input', applyUnionFilter);
+      if (unionOnlyExc) unionOnlyExc.addEventListener('change', applyUnionFilter);
+      if (unionCov) unionCov.addEventListener('input', applyUnionFilter);
       renderAll(0);
+      renderUnion();
     }}
 
     init();
@@ -956,6 +1372,7 @@ def write_review_preview_report(
     out_dir: str,
     max_records: int = 3,
     max_nodes: int = 5000,
+    max_union_nodes: int = 20000,
 ) -> dict[str, str]:
     cfg = _load_json(config_path)
     data_config = coerce_data_config(cfg.get("data_config") or cfg.get("data") or {})
@@ -1035,13 +1452,16 @@ def write_review_preview_report(
         "except_keys": except_keys,
         "max_records": int(max_records),
         "max_nodes": int(max_nodes),
+        "max_union_nodes": int(max_union_nodes),
     }
+
+    union = _compute_union_view(previews, key_sep=key_sep, except_keys=except_set, max_union_nodes=int(max_union_nodes))
 
     json_path = out_path / "preview.json"
     html_path = out_path / "preview.html"
 
-    _write_text(json_path, json.dumps({"meta": meta, "previews": previews}, ensure_ascii=False, indent=2))
-    _write_text(html_path, render_review_preview_html(meta=meta, previews=previews))
+    _write_text(json_path, json.dumps({"meta": meta, "previews": previews, "union": union}, ensure_ascii=False, indent=2))
+    _write_text(html_path, render_review_preview_html(meta=meta, previews=previews, union=union))
 
     return {
         "out_dir": str(out_path),

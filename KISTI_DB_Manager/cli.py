@@ -371,6 +371,7 @@ def _cmd_review_preview(args: argparse.Namespace) -> int:
         out_dir=out_dir,
         max_records=int(args.max_records),
         max_nodes=int(args.max_nodes),
+        max_union_nodes=int(getattr(args, "max_union_nodes", 20000)),
     )
 
     print(f"out_dir: {res['out_dir']}")
@@ -631,6 +632,7 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("--out", help="Output directory (default: <config>_preview)")
     p_preview.add_argument("--max-records", type=int, default=3, help="Max records to preview (default: 3)")
     p_preview.add_argument("--max-nodes", type=int, default=5000, help="Max raw nodes per record (default: 5000)")
+    p_preview.add_argument("--max-union-nodes", type=int, default=20000, help="Max union nodes in HTML/JSON (default: 20000)")
     p_preview.set_defaults(func=_cmd_review_preview)
 
     p_rdiff = review_sub.add_parser("diff", help="Diff two review/plan JSON outputs (review.json/plan.json)")
