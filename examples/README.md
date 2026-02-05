@@ -50,10 +50,24 @@ Union structure (scrolled to `#union` in the same page):
 Expanded view (new tab):
 
 ```bash
-open preview_out/preview.html?view=expanded&record=0
+# macOS:
+open "preview_out/preview.html?view=expanded&record=0"
+# Linux:
+xdg-open "preview_out/preview.html?view=expanded&record=0"
 ```
 
 ![Raw vs Flatten expanded view](assets/json_20lists_preview_expanded.png)
+
+Diagram view (new tab, overview):
+
+```bash
+# macOS:
+open "preview_out/preview.html?view=diagram&record=0"
+# Linux:
+xdg-open "preview_out/preview.html?view=diagram&record=0"
+```
+
+![Raw vs Flatten diagram view](assets/json_20lists_preview_diagram.png)
 
 ### Raw vs Flatten preview (schema drift / complex)
 
@@ -70,6 +84,8 @@ kisti-db-manager review preview --config examples/configs/json_preview_wos_like.
 ![Union structure preview (wos-like)](assets/json_wos_like_preview_union.png)
 
 ![Raw vs Flatten expanded view (wos-like)](assets/json_wos_like_preview_expanded.png)
+
+![Raw vs Flatten diagram view (wos-like)](assets/json_wos_like_preview_diagram.png)
 
 ## Data_Sample schema (WoS)
 

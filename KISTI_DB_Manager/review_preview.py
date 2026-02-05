@@ -811,6 +811,23 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     .schema-title {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
     .schema-meta {{ margin-top: 6px; font-size: 12px; color: #57606a; }}
 
+    #diagram-card {{ display: none; }}
+    body.diagram-mode #diagram-card {{ display: block; }}
+    body.diagram-mode #union {{ display: none; }}
+    body.diagram-mode #detail-row {{ display: none; }}
+    body.diagram-mode #diff-card {{ display: none; }}
+    body.diagram-mode #q, body.diagram-mode #only-missing, body.diagram-mode #status {{ display: none; }}
+    body.diagram-mode .toolbar label {{ display: none; }}
+    body.diagram-mode #open-diagram {{ display: none; }}
+
+    .diagram-row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
+    @media (max-width: 1200px) {{ .diagram-row {{ grid-template-columns: 1fr; }} }}
+    .diagram-pane {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 12px; background: #fff; overflow: auto; max-height: 72vh; }}
+    .diagram-pane svg {{ width: 100%; height: auto; }}
+    .diag-node {{ cursor: pointer; }}
+    .diag-node:hover rect {{ filter: brightness(0.98); }}
+    .diag-node.selected rect {{ stroke: #0969da; stroke-width: 3; }}
+
     details {{ border: 1px solid #d0d7de; border-radius: 10px; padding: 8px 10px; background: #fff; margin: 6px 0; }}
     details.table-split {{ border-color: #0969da; background: #ddf4ff33; }}
     details > summary {{ cursor: pointer; }}
@@ -867,6 +884,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     <div style="margin-top: 10px;" class="toolbar">
       <select id="record-select"></select>
       <button id="open-expanded" class="btn" type="button">Open expanded view</button>
+      <button id="open-diagram" class="btn" type="button">Open diagram view</button>
       <input id="q" type="search" placeholder="Search path/key…" />
       <label><input id="only-missing" type="checkbox" /> only missing</label>
       <span id="status" class="muted"></span>
@@ -895,7 +913,30 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     </div>
   </div>
 
-  <div class="row">
+  <div class="card" id="diagram-card">
+    <h2>Diagram view (overview)</h2>
+    <p class="muted">One-glance view: left = raw structure (table split points), right = resulting table schema.</p>
+    <div class="muted" id="diagram-status" style="margin: 6px 0 10px 0;"></div>
+    <div class="diagram-row">
+      <div class="diagram-pane">
+        <div class="muted" style="margin-bottom: 6px;">
+          Raw structure diagram
+          <span class="badge b-dict">Dict</span>
+          <span class="badge b-listdict">List of Dict</span>
+          <span class="badge b-listval">List of Value</span>
+          <span class="badge b-value">Value</span>
+          <span class="badge b-vld">Value in List of Dict</span>
+        </div>
+        <div id="diagram-raw"></div>
+      </div>
+      <div class="diagram-pane">
+        <div class="muted" style="margin-bottom: 6px;">Table schema diagram</div>
+        <div id="diagram-schema"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="row" id="detail-row">
     <div class="card">
       <h2>Raw structure</h2>
       <div class="muted" style="margin-bottom: 8px;">
@@ -915,7 +956,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     </div>
   </div>
 
-  <div class="card">
+  <div class="card" id="diff-card">
     <h2>Diff summary</h2>
     <div id="diff"></div>
   </div>
@@ -930,6 +971,10 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     const onlyMissing = document.getElementById('only-missing');
     const status = document.getElementById('status');
     const openExpanded = document.getElementById('open-expanded');
+    const openDiagram = document.getElementById('open-diagram');
+    const diagramStatus = document.getElementById('diagram-status');
+    const diagramRaw = document.getElementById('diagram-raw');
+    const diagramSchema = document.getElementById('diagram-schema');
     const rawTree = document.getElementById('raw-tree');
     const flatView = document.getElementById('flat-view');
     const diffEl = document.getElementById('diff');
@@ -954,6 +999,9 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     let schemaWrapEl = null;
     let schemaLinesEl = null;
     let isExpandedView = false;
+    let isDiagramView = false;
+    let diagRawIndex = new Map(); // path -> <g>
+    let diagSchemaIndex = new Map(); // sub_key -> <g>
 
     function badgeClass(branchType) {{
       const t = String(branchType || '');
@@ -1084,6 +1132,18 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         // Fallback: best-effort open same path with query params.
         const rec = String(currentIndex || 0);
         window.open(String(window.location.href).split('#')[0] + '?view=expanded&record=' + encodeURIComponent(rec), '_blank');
+      }}
+    }}
+
+    function openDiagramView() {{
+      try {{
+        const url = new URL(window.location.href);
+        url.searchParams.set('view', 'diagram');
+        url.searchParams.set('record', String(currentIndex || 0));
+        window.open(url.toString(), '_blank');
+      }} catch (e) {{
+        const rec = String(currentIndex || 0);
+        window.open(String(window.location.href).split('#')[0] + '?view=diagram&record=' + encodeURIComponent(rec), '_blank');
       }}
     }}
 
@@ -1569,9 +1629,415 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       diffEl.innerHTML = html;
     }}
 
+    function escXml(text) {{
+      return String(text || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/\"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+    }}
+
+    function wrapPath(text, maxChars, maxLines) {{
+      const s = String(text || '');
+      if (s.length <= maxChars) return [s];
+      const parts = s.split('/');
+      const lines = [];
+      let i = 0;
+      while (i < parts.length && lines.length < maxLines) {{
+        let line = parts[i];
+        i += 1;
+        while (i < parts.length) {{
+          const cand = line + '/' + parts[i];
+          if (cand.length <= maxChars) {{
+            line = cand;
+            i += 1;
+          }} else {{
+            break;
+          }}
+        }}
+        lines.push(line);
+      }}
+      if (!lines.length) return [s.slice(0, Math.max(0, maxChars - 1)) + '…'];
+      if (i < parts.length) {{
+        lines[lines.length - 1] = lines[lines.length - 1] + '…';
+      }}
+      for (let j = 0; j < lines.length; j++) {{
+        if (String(lines[j]).length > maxChars) {{
+          lines[j] = String(lines[j]).slice(0, Math.max(0, maxChars - 1)) + '…';
+        }}
+      }}
+      return lines;
+    }}
+
+    function branchColors(branchType) {{
+      const t = String(branchType || '');
+      if (t === 'Dict') return {{fill: '#ddf4ff', stroke: '#0969da'}};
+      if (t === 'List of Dict') return {{fill: '#dafbe1', stroke: '#1a7f37'}};
+      if (t === 'List of Value') return {{fill: '#fff8c5', stroke: '#bf8700'}};
+      if (t === 'Value in List of Dict') return {{fill: '#f6f8fa', stroke: '#6e7781'}};
+      return {{fill: '#fbefff', stroke: '#8250df'}};
+    }}
+
+    function buildSchemaDiagramSvg(flat) {{
+      const sep = String(META.key_sep || '__');
+      const baseName = String((flat && (flat.base_table_sql || flat.base_table_original)) || (META.base_table || 'base'));
+      const idxKey = String((flat && flat.index_key) || (META.index_key || 'id'));
+      const baseCols = (flat && flat.base_row) ? Object.keys(flat.base_row).length : 0;
+      const subs = (flat && Array.isArray(flat.subtables)) ? flat.subtables : [];
+
+      const margin = 20;
+      const baseW = 320;
+      const baseH = 70;
+      const subW = 460;
+      const subH = 78;
+      const gapY = 14;
+
+      const subCount = subs.length;
+      const totalSubH = subCount ? (subCount * subH + (subCount - 1) * gapY) : baseH;
+      const contentH = Math.max(totalSubH, baseH);
+
+      const baseX = margin;
+      const subX = margin + baseW + 140;
+      const baseY = margin + (contentH - baseH) / 2;
+      const subY0 = margin + (contentH - totalSubH) / 2;
+
+      const svgW = subX + subW + margin;
+      const svgH = margin * 2 + contentH;
+
+      function edgePath(x1, y1, x2, y2) {{
+        const dist = x2 - x1;
+        const dx = Math.max(60, dist * 0.55);
+        const mx = x1 + dx;
+        return 'M ' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2;
+      }}
+
+      let svg = '';
+      svg += '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ' + svgW + ' ' + svgH + '\" role=\"img\">';
+      svg += '<style>' +
+        '.edge{{stroke:#0969da;stroke-opacity:0.35;stroke-width:2;fill:none;}}' +
+        '.box{{fill:#fff;stroke:#d0d7de;stroke-width:1.5;}}' +
+        '.label{{font-size:12px;fill:#1f2328;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}}' +
+        '.meta{{font-size:11px;fill:#57606a;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}}' +
+        '</style>';
+
+      const bx1 = baseX + baseW;
+      const by1 = baseY + baseH / 2;
+      for (let i = 0; i < subs.length; i++) {{
+        const y = subY0 + i * (subH + gapY) + subH / 2;
+        svg += '<path class=\"edge\" d=\"' + edgePath(bx1, by1, subX, y) + '\"></path>';
+      }}
+
+      const baseTitle = baseName.length > 42 ? (baseName.slice(0, 41) + '…') : baseName;
+      svg += '<g class=\"diag-node\" data-subkey=\"\">' +
+        '<rect class=\"box\" x=\"' + baseX + '\" y=\"' + baseY + '\" width=\"' + baseW + '\" height=\"' + baseH + '\" rx=\"12\" ry=\"12\"></rect>' +
+        '<text class=\"label\" x=\"' + (baseX + 12) + '\" y=\"' + (baseY + 26) + '\">BASE</text>' +
+        '<text class=\"label\" x=\"' + (baseX + 62) + '\" y=\"' + (baseY + 26) + '\">' + escXml(baseTitle) + '</text>' +
+        '<text class=\"meta\" x=\"' + (baseX + 12) + '\" y=\"' + (baseY + 50) + '\">index: ' + escXml(idxKey) + ' · cols: ' + String(baseCols) + '</text>' +
+      '</g>';
+
+      for (let i = 0; i < subs.length; i++) {{
+        const st = subs[i] || {{}};
+        const subKey = String(st.sub_key || '');
+        const title = String(st.table_sql || st.table_original || subKey || '');
+        const rows = Number(st.n_rows || 0);
+        const cols = Array.isArray(st.columns) ? st.columns.length : 0;
+
+        const disp = 'SUB/' + (subKey ? subKey.split(sep).join('/') : title);
+        const lines = wrapPath(disp, 40, 2);
+
+        const x = subX;
+        const y = subY0 + i * (subH + gapY);
+
+        svg += '<g class=\"diag-node\" data-subkey=\"' + escXml(subKey) + '\">';
+        svg += '<title>' + escXml(title || subKey) + '</title>';
+        svg += '<rect class=\"box\" x=\"' + x + '\" y=\"' + y + '\" width=\"' + subW + '\" height=\"' + subH + '\" rx=\"12\" ry=\"12\"></rect>';
+        svg += '<text class=\"label\" x=\"' + (x + 12) + '\" y=\"' + (y + 24) + '\">' + escXml(lines[0] || '') + '</text>';
+        if (lines.length > 1) {{
+          svg += '<text class=\"label\" x=\"' + (x + 12) + '\" y=\"' + (y + 40) + '\">' + escXml(lines[1] || '') + '</text>';
+          svg += '<text class=\"meta\" x=\"' + (x + 12) + '\" y=\"' + (y + 64) + '\">rows: ' + String(rows) + ' · cols: ' + String(cols) + '</text>';
+        }} else {{
+          svg += '<text class=\"meta\" x=\"' + (x + 12) + '\" y=\"' + (y + 48) + '\">rows: ' + String(rows) + ' · cols: ' + String(cols) + '</text>';
+          svg += '<text class=\"meta\" x=\"' + (x + 12) + '\" y=\"' + (y + 64) + '\">index: ' + escXml(idxKey) + '</text>';
+        }}
+        svg += '</g>';
+      }}
+
+      svg += '</svg>';
+      return svg;
+    }}
+
+    function buildRawDiagramSvg(nodes, flat) {{
+      const sep = String(META.key_sep || '__');
+      const all = Array.isArray(nodes) ? nodes : [];
+      const total = all.length || 0;
+      const subs = (flat && Array.isArray(flat.subtables)) ? flat.subtables : [];
+
+      const splitPaths = new Set();
+      for (const st of subs) {{
+        const sk = String(st && st.sub_key ? st.sub_key : '');
+        if (sk) splitPaths.add(sk);
+      }}
+
+      const nodeBy = new Map();
+      const children = new Map();
+      for (const n of all) {{
+        if (!n || typeof n !== 'object') continue;
+        const p = String(n.path || '');
+        const par = String(n.parent || '');
+        nodeBy.set(p, n);
+        if (par) {{
+          if (!children.has(par)) children.set(par, []);
+          children.get(par).push(p);
+        }}
+      }}
+      for (const [k, arr] of children.entries()) {{
+        arr.sort((a, b) => String(a).localeCompare(String(b)));
+      }}
+
+      const keep = new Set();
+      keep.add('root');
+      for (const c of (children.get('root') || [])) keep.add(c);
+
+      for (const sk of splitPaths) {{
+        keep.add(sk);
+        let cur = sk;
+        let safety = 0;
+        while (cur && safety++ < 2000) {{
+          const nn = nodeBy.get(cur);
+          if (!nn) break;
+          const par = String(nn.parent || '');
+          if (!par) break;
+          keep.add(par);
+          cur = par;
+        }}
+      }}
+
+      const maxNodes = 350;
+      if (total <= maxNodes) {{
+        for (const n of all) keep.add(String(n.path || ''));
+      }} else {{
+        const q = ['root'];
+        const seen = new Set(q);
+        while (q.length && keep.size < maxNodes) {{
+          const p = String(q.shift() || '');
+          const kids = children.get(p) || [];
+          for (const c of kids) {{
+            if (keep.size >= maxNodes) break;
+            if (!keep.has(c)) keep.add(c);
+            if (!seen.has(c)) {{
+              q.push(c);
+              seen.add(c);
+            }}
+          }}
+        }}
+      }}
+
+      const kidsBy = new Map();
+      for (const p of keep) {{
+        const kids = children.get(String(p)) || [];
+        const out = [];
+        for (const c of kids) {{
+          if (keep.has(c)) out.push(c);
+        }}
+        out.sort((a, b) => String(a).localeCompare(String(b)));
+        kidsBy.set(String(p), out);
+      }}
+
+      const yPos = new Map();
+      let leaf = 0;
+      const visiting = new Set();
+      const yStep = 26;
+      function assignY(p) {{
+        const key = String(p || '');
+        if (yPos.has(key)) return yPos.get(key);
+        if (visiting.has(key)) {{
+          const y = leaf * yStep;
+          leaf += 1;
+          yPos.set(key, y);
+          return y;
+        }}
+        visiting.add(key);
+        const kids = kidsBy.get(key) || [];
+        let y = 0;
+        if (!kids.length) {{
+          y = leaf * yStep;
+          leaf += 1;
+        }} else {{
+          let sum = 0;
+          for (const c of kids) sum += assignY(c);
+          y = sum / kids.length;
+        }}
+        visiting.delete(key);
+        yPos.set(key, y);
+        return y;
+      }}
+      assignY('root');
+
+      function depth(p) {{
+        const key = String(p || '');
+        if (!key || key === 'root') return 0;
+        return key.split(sep).length;
+      }}
+
+      let maxDepth = 0;
+      for (const p of keep) {{
+        maxDepth = Math.max(maxDepth, depth(p));
+      }}
+
+      const margin = 20;
+      const boxW = 150;
+      const boxH = 22;
+      const xStep = 180;
+      const svgW = margin * 2 + (maxDepth + 1) * xStep + boxW;
+      const svgH = margin * 2 + Math.max(1, leaf) * yStep + boxH;
+
+      function nodeXY(p) {{
+        const d = depth(p);
+        const x = margin + d * xStep;
+        const y = margin + (yPos.get(String(p)) || 0);
+        return {{x: x, y: y}};
+      }}
+
+      function edgePath(x1, y1, x2, y2) {{
+        const dist = x2 - x1;
+        const dx = Math.max(40, dist * 0.55);
+        const mx = x1 + dx;
+        return 'M ' + x1 + ' ' + y1 + ' C ' + mx + ' ' + y1 + ', ' + mx + ' ' + y2 + ', ' + x2 + ' ' + y2;
+      }}
+
+      let svg = '';
+      svg += '<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 ' + svgW + ' ' + svgH + '\" role=\"img\">';
+      svg += '<style>' +
+        '.edge{{stroke:#6e7781;stroke-opacity:0.35;stroke-width:1;fill:none;}}' +
+        '.lbl{{font-size:12px;fill:#1f2328;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}}' +
+        '.tag{{font-size:11px;fill:#1f2328;font-family:ui-sans-serif,system-ui,-apple-system,Segoe UI,Roboto,Helvetica,Arial;}}' +
+        '</style>';
+
+      // edges
+      for (const p of keep) {{
+        const kids = kidsBy.get(String(p)) || [];
+        if (!kids.length) continue;
+        const a = nodeXY(p);
+        for (const c of kids) {{
+          const b = nodeXY(c);
+          svg += '<path class=\"edge\" d=\"' + edgePath(a.x + boxW, a.y + boxH / 2, b.x, b.y + boxH / 2) + '\"></path>';
+        }}
+      }}
+
+      const drawOrder = Array.from(keep).sort((a, b) => {{
+        const da = depth(a);
+        const db = depth(b);
+        if (da !== db) return da - db;
+        return String(a).localeCompare(String(b));
+      }});
+
+      for (const p of drawOrder) {{
+        const n = nodeBy.get(String(p)) || {{}};
+        const a = nodeXY(p);
+        const colors = branchColors(n.branch_type);
+        const isSplit = splitPaths.has(String(p));
+        const strokeW = isSplit ? 2.5 : 1.5;
+        const fill = colors.fill;
+        let stroke = colors.stroke;
+        if (String(n.status || '') === 'missing') stroke = '#cf222e';
+        const opacity = n.excepted ? 0.75 : 1.0;
+        const label = (n.label != null) ? String(n.label) : String(p);
+        const text = label.length > 18 ? (label.slice(0, 17) + '…') : label;
+
+        svg += '<g class=\"diag-node\" data-path=\"' + escXml(String(p)) + '\" opacity=\"' + String(opacity) + '\">';
+        svg += '<title>' + escXml(String(p)) + '</title>';
+        svg += '<rect x=\"' + a.x + '\" y=\"' + a.y + '\" width=\"' + boxW + '\" height=\"' + boxH + '\" rx=\"8\" ry=\"8\" fill=\"' + fill + '\" stroke=\"' + stroke + '\" stroke-width=\"' + strokeW + '\"></rect>';
+        svg += '<text class=\"lbl\" x=\"' + (a.x + 8) + '\" y=\"' + (a.y + 15) + '\">' + escXml(text) + '</text>';
+        if (isSplit) {{
+          svg += '<text class=\"tag\" x=\"' + (a.x + boxW - 46) + '\" y=\"' + (a.y + 15) + '\">TABLE</text>';
+        }}
+        svg += '</g>';
+      }}
+
+      svg += '</svg>';
+      return {{svg: svg, shown: keep.size, total: total, pruned: keep.size < total}};
+    }}
+
+    function clearDiagramSelection() {{
+      for (const el of document.querySelectorAll('#diagram-card .diag-node.selected')) {{
+        el.classList.remove('selected');
+      }}
+    }}
+
+    function selectDiagramRaw(path) {{
+      const sep = String(META.key_sep || '__');
+      clearDiagramSelection();
+      const p = String(path || '');
+      const el = diagRawIndex.get(p);
+      if (el) el.classList.add('selected');
+      for (const [sk, it] of diagSchemaIndex.entries()) {{
+        if (!sk || !it) continue;
+        if (sk === p || sk.startsWith(p + sep) || p.startsWith(sk + sep)) {{
+          it.classList.add('selected');
+        }}
+      }}
+    }}
+
+    function selectDiagramSchema(subKey) {{
+      clearDiagramSelection();
+      const sk = String(subKey || '');
+      const el = diagSchemaIndex.get(sk);
+      if (el) el.classList.add('selected');
+      const rawEl = diagRawIndex.get(sk);
+      if (rawEl) {{
+        rawEl.classList.add('selected');
+        try {{ rawEl.scrollIntoView({{behavior: 'smooth', block: 'center'}}); }} catch (e) {{}}
+      }}
+    }}
+
+    function renderDiagram(pv) {{
+      if (!diagramRaw || !diagramSchema) return;
+      diagRawIndex = new Map();
+      diagSchemaIndex = new Map();
+      clearDiagramSelection();
+
+      const rawNodes = (pv && pv.raw_nodes) ? pv.raw_nodes : [];
+      const flat = (pv && pv.flatten) ? pv.flatten : {{}};
+
+      const rr = buildRawDiagramSvg(rawNodes, flat);
+      diagramRaw.innerHTML = rr && rr.svg ? rr.svg : '<div class=\"muted\">(no raw diagram)</div>';
+      diagramSchema.innerHTML = buildSchemaDiagramSvg(flat);
+
+      if (diagramStatus) {{
+        const extra = rr && rr.pruned ? ' · pruned' : '';
+        const trunc = pv && pv.raw_truncated ? ' · raw truncated' : '';
+        diagramStatus.textContent = 'raw nodes shown: ' + String(rr && rr.shown ? rr.shown : 0) + ' / ' + String(rr && rr.total ? rr.total : 0) + extra + trunc;
+      }}
+
+      for (const el of Array.from(diagramRaw.querySelectorAll('.diag-node[data-path]'))) {{
+        const p = String(el.getAttribute('data-path') || '');
+        if (p) diagRawIndex.set(p, el);
+        el.addEventListener('click', (ev) => {{
+          ev.preventDefault();
+          const path = el.getAttribute('data-path') || '';
+          selectDiagramRaw(path);
+        }});
+      }}
+      for (const el of Array.from(diagramSchema.querySelectorAll('.diag-node[data-subkey]'))) {{
+        const sk = String(el.getAttribute('data-subkey') || '');
+        if (!sk) continue;
+        diagSchemaIndex.set(sk, el);
+        el.addEventListener('click', (ev) => {{
+          ev.preventDefault();
+          const subKey = el.getAttribute('data-subkey') || '';
+          selectDiagramSchema(subKey);
+        }});
+      }}
+    }}
+
     function renderAll(i) {{
       currentIndex = Math.max(0, Math.min(PREVIEWS.length - 1, Number(i || 0)));
       const pv = PREVIEWS[currentIndex] || {{}};
+      if (isDiagramView) {{
+        renderDiagram(pv);
+        return;
+      }}
       renderRaw(pv.raw_nodes || [], pv.flatten || {{}});
       renderFlat(pv.flatten || {{}}, pv.diff || null);
       renderDiff(pv.diff || null);
@@ -1582,8 +2048,13 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     function init() {{
       if (!sel) return;
       const params = new URLSearchParams(window.location.search || '');
-      isExpandedView = String(params.get('view') || '') === 'expanded';
+      const viewMode = String(params.get('view') || '');
+      isExpandedView = viewMode === 'expanded';
+      isDiagramView = viewMode === 'diagram';
       const initialRecord = params.get('record');
+      if (isDiagramView) {{
+        try {{ document.body.classList.add('diagram-mode'); }} catch (e) {{}}
+      }}
       sel.innerHTML = '';
       for (let i = 0; i < PREVIEWS.length; i++) {{
         const pv = PREVIEWS[i] || {{}};
@@ -1601,11 +2072,12 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       if (unionCov) unionCov.addEventListener('input', applyUnionFilter);
       window.addEventListener('resize', () => requestAnimationFrame(drawSchemaLines));
       if (openExpanded) openExpanded.addEventListener('click', openExpandedView);
+      if (openDiagram) openDiagram.addEventListener('click', openDiagramView);
       renderAll(initialRecord != null ? initialRecord : 0);
       try {{
         if (initialRecord != null) sel.value = String(initialRecord);
       }} catch (e) {{}}
-      renderUnion();
+      if (!isDiagramView) renderUnion();
       if (isExpandedView) {{
         setTimeout(() => {{
           applyExpandedView();
