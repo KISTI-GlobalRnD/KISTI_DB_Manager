@@ -792,11 +792,22 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     .toolbar select {{ padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; background: #fff; }}
     .toolbar label {{ display: inline-flex; gap: 6px; align-items: center; }}
     .pill {{ display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border: 1px solid #d0d7de; border-radius: 999px; background: #f6f8fa; font-size: 12px; }}
+    .pill.pill-table {{ border-color: #0969da; background: #ddf4ff; }}
+
+    .schema-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }}
+    @media (max-width: 1200px) {{ .schema-grid {{ grid-template-columns: 1fr; }} }}
+    .schema-box {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; background: #fff; cursor: pointer; }}
+    .schema-box:hover {{ background: #f6f8fa; }}
+    .schema-box.selected {{ outline: 2px solid #0969da; background: #eff6ff; }}
+    .schema-title {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+    .schema-meta {{ margin-top: 6px; font-size: 12px; color: #57606a; }}
 
     details {{ border: 1px solid #d0d7de; border-radius: 10px; padding: 8px 10px; background: #fff; margin: 6px 0; }}
+    details.table-split {{ border-color: #0969da; background: #ddf4ff33; }}
     details > summary {{ cursor: pointer; }}
     ul.tree {{ list-style: none; padding-left: 16px; margin: 6px 0; }}
     ul.tree li {{ margin: 3px 0; }}
+    li.table-split-leaf {{ border: 1px dashed #0969da; border-radius: 10px; padding: 6px 8px; margin: 6px 0; }}
 
     .node {{ display: inline-flex; gap: 8px; align-items: center; cursor: pointer; padding: 2px 6px; border-radius: 8px; }}
     .node:hover {{ background: #f6f8fa; }}
@@ -804,6 +815,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     .node.dim {{ opacity: 0.2; }}
     .node.missing {{ outline: 1px solid #cf222e; }}
     .node.excepted {{ opacity: 0.75; }}
+    .node.table-root {{ font-weight: 600; }}
 
     .u-node {{ display: inline-flex; gap: 8px; align-items: center; cursor: pointer; padding: 2px 6px; border-radius: 8px; }}
     .u-node:hover {{ background: #f6f8fa; }}
@@ -925,6 +937,9 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     let unionLiIndex = new Map(); // path -> <li>
     let unionNodeByPath = new Map();
     let unionParentByPath = new Map();
+    let schemaBaseKeys = [];
+    let schemaBaseBox = null;
+    let schemaSubBoxes = [];
 
     function badgeClass(branchType) {{
       const t = String(branchType || '');
@@ -944,6 +959,41 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       for (const el of document.querySelectorAll('.node.selected, .flat-key.selected')) {{
         el.classList.remove('selected');
       }}
+    }}
+
+    function clearSchemaSelection() {{
+      for (const el of document.querySelectorAll('.schema-box.selected')) {{
+        el.classList.remove('selected');
+      }}
+    }}
+
+    function highlightSchemaForPath(path) {{
+      clearSchemaSelection();
+      const p = String(path || '');
+      if (!p) return 0;
+      const sep = String(META.key_sep || '__');
+
+      let hits = 0;
+      if (schemaBaseBox && Array.isArray(schemaBaseKeys) && schemaBaseKeys.length) {{
+        for (const k of schemaBaseKeys) {{
+          const ks = String(k || '');
+          if (ks === p || ks.startsWith(p + sep)) {{
+            schemaBaseBox.classList.add('selected');
+            hits += 1;
+            break;
+          }}
+        }}
+      }}
+
+      for (const it of schemaSubBoxes || []) {{
+        const sk = String(it.sub_key || '');
+        if (!sk || !it.el) continue;
+        if (sk === p || sk.startsWith(p + sep) || p.startsWith(sk + sep)) {{
+          it.el.classList.add('selected');
+          hits += 1;
+        }}
+      }}
+      return hits;
     }}
 
     function clearUnionSelection() {{
@@ -976,6 +1026,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         }}
       }}
       setStatus(hits ? ('matches: ' + hits) : 'no matching flattened keys');
+      highlightSchemaForPath(p);
     }}
 
     function selectFlatKey(key) {{
@@ -989,6 +1040,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         el.classList.add('selected');
         el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
       }}
+      highlightSchemaForPath(k);
     }}
 
     function renderUnion() {{
@@ -1180,8 +1232,22 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       }}
     }}
 
-    function renderRaw(nodes) {{
+    function renderRaw(nodes, flat) {{
       rawIndex = new Map();
+      const split = new Map();
+      try {{
+        const subtables = (flat && flat.subtables) ? flat.subtables : [];
+        if (Array.isArray(subtables)) {{
+          for (const st of subtables) {{
+            if (!st || typeof st !== 'object') continue;
+            const sk = String(st.sub_key || '');
+            if (!sk) continue;
+            const tn = String(st.table_sql || st.table_original || st.sub_key || '');
+            split.set(sk, tn);
+          }}
+        }}
+      }} catch (e) {{}}
+
       const byParent = new Map();
       for (const n of nodes || []) {{
         const parent = String(n.parent || '');
@@ -1195,6 +1261,12 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       function renderNode(n) {{
         const kids = byParent.get(String(n.path || '')) || [];
         const badge = '<span class=\"' + badgeClass(n.branch_type) + '\">' + String(n.branch_type || '') + '</span>';
+        const p = String(n.path || '');
+        const splitTable = split.get(p) || '';
+        const isSplit = !!splitTable;
+        const splitPill = isSplit
+          ? (' <span class=\"pill pill-table\" title=\"subtable: ' + String(splitTable).replace(/\"/g, '&quot;') + '\">TABLE</span>')
+          : '';
         const meta = [];
         if (n.kind === 'dict') meta.push('<span class=\"muted\">keys=' + (n.n_children || 0) + '</span>');
         if (n.kind === 'list') meta.push('<span class=\"muted\">len=' + (n.list_len == null ? '?' : n.list_len) + '</span>');
@@ -1202,15 +1274,17 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         const classes = ['node'];
         if (n.excepted) classes.push('excepted');
         if (n.status === 'missing') classes.push('missing');
+        if (isSplit) classes.push('table-root');
         const head =
           '<span class=\"' + classes.join(' ') + '\" data-path=\"' + String(n.path || '') + '\">' +
-            '<code>' + String(n.label || '') + '</code> ' + badge + ' ' + meta.join(' ') +
+            '<code>' + String(n.label || '') + '</code> ' + badge + splitPill + ' ' + meta.join(' ') +
           '</span>';
         if (!kids.length) {{
-          return '<li>' + head + '</li>';
+          return '<li' + (isSplit ? ' class=\"table-split-leaf\"' : '') + '>' + head + '</li>';
         }}
         const open = String(n.path || '') === 'root';
-        return '<li><details ' + (open ? 'open' : '') + '><summary>' + head + '</summary>' +
+        const dCls = isSplit ? ' class=\"table-split\"' : '';
+        return '<li><details' + dCls + ' ' + (open ? 'open' : '') + '><summary>' + head + '</summary>' +
           '<ul class=\"tree\">' + kids.map(renderNode).join('') + '</ul></details></li>';
       }}
 
@@ -1235,6 +1309,10 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
 
     function renderFlat(flat, diff) {{
       flatIndex = new Map();
+      schemaBaseKeys = [];
+      schemaBaseBox = null;
+      schemaSubBoxes = [];
+
       function addKeyEl(key, el) {{
         const k = String(key || '');
         if (!flatIndex.has(k)) flatIndex.set(k, []);
@@ -1245,8 +1323,41 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       const subtables = flat && flat.subtables ? flat.subtables : [];
       const excepted = flat && flat.excepted ? flat.excepted : {{}};
       const extraSet = new Set((diff && diff.extra) ? diff.extra : []);
+      const baseTableSql = String((flat && (flat.base_table_sql || flat.base_table_original)) || '');
+      const baseTableOrig = String((flat && flat.base_table_original) || '');
+      const indexKey = String((flat && flat.index_key) || (META && META.index_key) || '');
 
       let html = '';
+      html += '<h3>Schema (tables)</h3>';
+      html += '<div class=\"schema-grid\">';
+      html += '<div class=\"schema-box\" data-schema-type=\"base\" title=\"' + String(baseTableOrig || baseTableSql).replace(/\"/g, '&quot;') + '\">' +
+        '<div class=\"schema-title\"><span class=\"pill\">BASE</span> <code>' + String(baseTableSql || '(base)').replace(/</g, '&lt;') + '</code></div>' +
+        (baseTableOrig && baseTableOrig !== baseTableSql ? ('<div class=\"schema-meta\">orig: <code>' + String(baseTableOrig).replace(/</g, '&lt;') + '</code></div>') : '') +
+        '<div class=\"schema-meta\">join key: <code>' + String(indexKey).replace(/</g, '&lt;') + '</code> · cols: <code>' + String(Object.keys(base || {{}}).length) + '</code></div>' +
+      '</div>';
+
+      html += '<div>';
+      if (!subtables.length) {{
+        html += '<div class=\"muted\">(no subtables)</div>';
+      }} else {{
+        for (let i = 0; i < subtables.length; i++) {{
+          const st = subtables[i] || {{}};
+          const cols = Array.isArray(st.columns) ? st.columns : [];
+          const subKey = String(st.sub_key || '');
+          const tSql = String(st.table_sql || st.table_original || st.sub_key || '');
+          const tOrig = String(st.table_original || '');
+          const nRows = String(st.n_rows || 0);
+          html += '<div class=\"schema-box\" data-schema-type=\"sub\" data-subkey=\"' + subKey.replace(/\"/g, '&quot;') + '\" data-st-index=\"' + String(i) + '\" title=\"' + subKey.replace(/\"/g, '&quot;') + '\">' +
+            '<div class=\"schema-title\"><span class=\"pill\">SUB</span> <code>' + tSql.replace(/</g, '&lt;') + '</code></div>' +
+            (tOrig && tOrig !== tSql ? ('<div class=\"schema-meta\">orig: <code>' + tOrig.replace(/</g, '&lt;') + '</code></div>') : '') +
+            (subKey ? ('<div class=\"schema-meta\">sub_key: <code>' + subKey.replace(/</g, '&lt;') + '</code></div>') : '') +
+            '<div class=\"schema-meta\">join: <code>' + String(indexKey).replace(/</g, '&lt;') + '</code> · rows: <code>' + nRows + '</code> · cols: <code>' + String(cols.length) + '</code></div>' +
+          '</div>';
+        }}
+      }}
+      html += '</div>';
+      html += '</div>';
+
       html += '<h3>Base row</h3>';
       html += '<table><thead><tr><th>key</th><th>value</th></tr></thead><tbody>';
       const keys = Object.keys(base || {{}}).sort();
@@ -1260,9 +1371,10 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       if (!subtables.length) {{
         html += '<div class=\"muted\">(none)</div>';
       }} else {{
-        for (const st of subtables) {{
+        for (let i = 0; i < subtables.length; i++) {{
+          const st = subtables[i];
           const cols = Array.isArray(st.columns) ? st.columns : [];
-          html += '<details><summary><code>' + String(st.table_sql || st.table_original || st.sub_key || '') + '</code>' +
+          html += '<details id=\"st-' + String(i) + '\"><summary><code>' + String(st.table_sql || st.table_original || st.sub_key || '') + '</code>' +
             ' <span class=\"muted\">rows=' + String(st.n_rows || 0) + '</span></summary>';
           html += '<div style=\"margin-top: 8px;\">columns:</div><div>';
           html += cols.map(c => '<span class=\"flat-key' + (extraSet.has(String(c)) ? ' extra' : '') + '\" data-key=\"' + String(c) + '\"><code>' + String(c) + '</code></span>').join(' ');
@@ -1285,6 +1397,39 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       }}
 
       flatView.innerHTML = html;
+
+      schemaBaseKeys = keys;
+      schemaBaseBox = document.querySelector('.schema-box[data-schema-type=\"base\"]');
+      schemaSubBoxes = [];
+      for (const el of Array.from(document.querySelectorAll('.schema-box[data-schema-type=\"sub\"][data-subkey]'))) {{
+        schemaSubBoxes.push({{sub_key: String(el.getAttribute('data-subkey') || ''), el: el}});
+      }}
+      if (schemaBaseBox) {{
+        schemaBaseBox.addEventListener('click', (ev) => {{
+          ev.preventDefault();
+          if (indexKey && base && Object.prototype.hasOwnProperty.call(base, indexKey)) {{
+            selectFlatKey(indexKey);
+          }} else {{
+            clearSelection();
+            clearSchemaSelection();
+            schemaBaseBox.classList.add('selected');
+          }}
+        }});
+      }}
+      for (const it of schemaSubBoxes) {{
+        if (!it || !it.el) continue;
+        it.el.addEventListener('click', (ev) => {{
+          ev.preventDefault();
+          const sk = String(it.el.getAttribute('data-subkey') || '');
+          const idx = String(it.el.getAttribute('data-st-index') || '');
+          if (sk) selectRawPath(sk);
+          const det = document.getElementById('st-' + idx);
+          if (det && det.tagName && String(det.tagName).toLowerCase() === 'details') {{
+            det.open = true;
+            det.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+          }}
+        }});
+      }}
 
       for (const el of Array.from(document.querySelectorAll('.flat-key[data-key]'))) {{
         addKeyEl(el.getAttribute('data-key') || '', el);
@@ -1332,7 +1477,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     function renderAll(i) {{
       currentIndex = Math.max(0, Math.min(PREVIEWS.length - 1, Number(i || 0)));
       const pv = PREVIEWS[currentIndex] || {{}};
-      renderRaw(pv.raw_nodes || []);
+      renderRaw(pv.raw_nodes || [], pv.flatten || {{}});
       renderFlat(pv.flatten || {{}}, pv.diff || null);
       renderDiff(pv.diff || null);
       applyQuery();
