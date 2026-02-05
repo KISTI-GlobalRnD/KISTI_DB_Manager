@@ -358,6 +358,27 @@ def _cmd_review_plan(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_review_preview(args: argparse.Namespace) -> int:
+    from .review_preview import write_review_preview_report
+
+    out_dir = args.out
+    if not out_dir:
+        stem_src = Path(args.config)
+        out_dir = str(stem_src.with_suffix("")) + "_preview"
+
+    res = write_review_preview_report(
+        config_path=args.config,
+        out_dir=out_dir,
+        max_records=int(args.max_records),
+        max_nodes=int(args.max_nodes),
+    )
+
+    print(f"out_dir: {res['out_dir']}")
+    print(f"preview_html: {res['preview_html']}")
+    print(f"preview_json: {res['preview_json']}")
+    return 0
+
+
 def _cmd_review_diff(args: argparse.Namespace) -> int:
     from .review_diff import diff_review_files, render_review_diff_markdown, write_review_diff_report
 
@@ -604,6 +625,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_plan.add_argument("--max-records", type=int, default=1000, help="Stop after N records when previewing JSON inputs")
     p_plan.add_argument("--generate-desc", action="store_true", help="(tabular) generate desc CSV first (can be slow)")
     p_plan.set_defaults(func=_cmd_review_plan)
+
+    p_preview = review_sub.add_parser("preview", help="Preview raw structure vs flattened rows (HTML/JSON)")
+    p_preview.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")
+    p_preview.add_argument("--out", help="Output directory (default: <config>_preview)")
+    p_preview.add_argument("--max-records", type=int, default=3, help="Max records to preview (default: 3)")
+    p_preview.add_argument("--max-nodes", type=int, default=5000, help="Max raw nodes per record (default: 5000)")
+    p_preview.set_defaults(func=_cmd_review_preview)
 
     p_rdiff = review_sub.add_parser("diff", help="Diff two review/plan JSON outputs (review.json/plan.json)")
     p_rdiff.add_argument("before", help="Path to before review.json (or plan.json)")

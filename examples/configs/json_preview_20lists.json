@@ -1,0 +1,13 @@
+{
+  "data_config": {
+    "PATH": "examples/data",
+    "file_name": "sample_20lists.jsonl",
+    "file_type": "jsonl",
+    "table_name": "kisti_v2_json_20lists",
+    "KEY_SEP": "__",
+    "index_key": "id",
+    "except_keys": []
+  },
+  "db_config": {}
+}
+

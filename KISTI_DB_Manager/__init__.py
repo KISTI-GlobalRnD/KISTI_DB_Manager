@@ -28,6 +28,7 @@ __all__ = [
     "report",
     "review",
     "review_diff",
+    "review_preview",
 ]
 
 
@@ -48,6 +49,7 @@ def __getattr__(name: str) -> Any:
         "report",
         "review",
         "review_diff",
+        "review_preview",
     }:
         return import_module(f"{__name__}.{name}")
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

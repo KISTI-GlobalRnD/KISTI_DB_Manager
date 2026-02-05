@@ -32,6 +32,16 @@ These are **representative snapshots**. Regenerate locally with the smoke test a
 
 ![Review diff preview](assets/json_20lists_review_diff.png)
 
+### Raw vs Flatten preview (HTML)
+
+This helps validate whether flattening matches the raw record structure (missing/extra keys).
+
+```bash
+kisti-db-manager review preview --config examples/configs/json_preview_20lists.json --out preview_out
+```
+
+![Raw vs Flatten preview](assets/json_20lists_preview.png)
+
 ## Data_Sample schema (WoS)
 
 We also ship a real-ish multi-table sample under `Data_Sample/` (repo root).
