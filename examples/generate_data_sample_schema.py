@@ -6,14 +6,14 @@ import re
 import sys
 from pathlib import Path
 
-ROOT = Path(__file__).resolve().parents[2]
+ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from KISTI_DB_Manager.review import TableInfo, render_mermaid, render_simple_svg  # noqa: E402
 
 
 def _repo_root() -> Path:
-    # KISTI_DB_Manager/examples/<this_file>
+    # examples/<this_file>
     return ROOT
 
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-EXAMPLES="$ROOT/KISTI_DB_Manager/examples"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+EXAMPLES="$ROOT/examples"
 OUT="$EXAMPLES/out"
 
 mkdir -p "$OUT"

@@ -1,9 +1,9 @@
 {
   "data_config": {
-    "PATH": "KISTI_DB_Manager/examples/data",
-    "file_name": "sample_20lists.jsonl",
+    "PATH": "examples/data",
+    "file_name": "sample.jsonl",
     "file_type": "jsonl",
-    "table_name": "kisti_v2_json_20lists",
+    "table_name": "kisti_v2_json_sample",
     "KEY_SEP": "__",
     "index_key": "id",
     "except_keys": [],
@@ -12,16 +12,13 @@
     "fallback_on_insert_error": true,
     "fallback_column_type": "LONGTEXT",
     "insert_retry_max": 5,
-    "index_prefix_len": 191,
-    "to_sql_method": "executemany",
-    "sanitize_nan_strings": false,
-    "convert_nan_to_none": false
+    "index_prefix_len": 191
   },
   "db_config": {
-    "host": "mariadb",
+    "host": "127.0.0.1",
     "user": "root",
     "password": "rootpass",
     "database": "kisti_smoke",
-    "port": 3306
+    "port": 3307
   }
 }

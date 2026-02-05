@@ -1,6 +1,6 @@
 {
   "data_config": {
-    "PATH": "KISTI_DB_Manager/examples/data",
+    "PATH": "examples/data",
     "file_name": "sample.csv",
     "file_type": "csv",
     "table_name": "kisti_v2_tabular_sample",
@@ -17,10 +17,10 @@
     "chunksize": 1000
   },
   "db_config": {
-    "host": "127.0.0.1",
+    "host": "mariadb",
     "user": "root",
     "password": "rootpass",
     "database": "kisti_smoke",
-    "port": 3307
+    "port": 3306
   }
 }

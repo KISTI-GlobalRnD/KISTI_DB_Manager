@@ -5,7 +5,7 @@
 Docker (recommended):
 
 ```bash
-cd KISTI_DB_Manager/examples
+cd examples
 docker compose up --build --abort-on-container-exit smoke
 docker compose down
 ```
@@ -13,12 +13,12 @@ docker compose down
 Host (requires deps + docker):
 
 ```bash
-bash KISTI_DB_Manager/examples/smoke.sh
+bash examples/smoke.sh
 ```
 
 ## Output previews
 
-These are **representative snapshots**. Regenerate locally with the smoke test and check `KISTI_DB_Manager/examples/out/`.
+These are **representative snapshots**. Regenerate locally with the smoke test and check `examples/out/`.
 
 ### JSON 20-lists schema diagram
 
@@ -39,9 +39,9 @@ We also ship a real-ish multi-table sample under `Data_Sample/` (repo root).
 Generate/update the schema image:
 
 ```bash
-python3 KISTI_DB_Manager/examples/generate_data_sample_schema.py
+python3 examples/generate_data_sample_schema.py
 ```
 
 Result:
 
-![WoS sample schema](../../Image/Schema_WoS_Sample.png)
+![WoS sample schema](../Image/Schema_WoS_Sample.png)

@@ -109,10 +109,10 @@ for f in flist:
 
 ## Smoke test (Docker MariaDB)
 
-We ship a reproducible smoke test under `KISTI_DB_Manager/examples/`.
+We ship a reproducible smoke test under `examples/`.
 
 ```bash
-cd KISTI_DB_Manager/examples
+cd examples
 docker compose up --build --abort-on-container-exit smoke
 docker compose down
 ```
@@ -120,8 +120,8 @@ docker compose down
 Or on host (requires deps installed):
 
 ```bash
-bash KISTI_DB_Manager/examples/smoke.sh
+bash examples/smoke.sh
 ```
 
 Output previews:
-- `KISTI_DB_Manager/examples/README.md`
+- `examples/README.md`

@@ -1,6 +1,6 @@
 {
   "data_config": {
-    "PATH": "KISTI_DB_Manager/examples/data",
+    "PATH": "examples/data",
     "file_name": "sample.jsonl",
     "file_type": "jsonl",
     "table_name": "kisti_v2_json_sample",
