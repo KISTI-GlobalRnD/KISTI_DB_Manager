@@ -47,6 +47,14 @@ Union structure (scrolled to `#union` in the same page):
 
 ![Union structure preview](assets/json_20lists_preview_union.png)
 
+Expanded view (new tab):
+
+```bash
+open preview_out/preview.html?view=expanded&record=0
+```
+
+![Raw vs Flatten expanded view](assets/json_20lists_preview_expanded.png)
+
 ### Raw vs Flatten preview (schema drift / complex)
 
 This is a **synthetic WoS-like JSONL** sample intentionally containing:
@@ -60,6 +68,8 @@ kisti-db-manager review preview --config examples/configs/json_preview_wos_like.
 ![Raw vs Flatten preview (wos-like)](assets/json_wos_like_preview.png)
 
 ![Union structure preview (wos-like)](assets/json_wos_like_preview_union.png)
+
+![Raw vs Flatten expanded view (wos-like)](assets/json_wos_like_preview_expanded.png)
 
 ## Data_Sample schema (WoS)
 

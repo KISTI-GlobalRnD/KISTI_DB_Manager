@@ -794,11 +794,20 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     .pill {{ display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border: 1px solid #d0d7de; border-radius: 999px; background: #f6f8fa; font-size: 12px; }}
     .pill.pill-table {{ border-color: #0969da; background: #ddf4ff; }}
 
-    .schema-grid {{ display: grid; grid-template-columns: 1fr 1fr; gap: 14px; align-items: start; }}
+    .schema-wrap {{ position: relative; }}
+    .schema-lines {{ position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }}
+    .schema-line {{ stroke: #0969da; stroke-opacity: 0.6; stroke-width: 2; fill: none; }}
+
+    .btn {{ padding: 8px 10px; border: 1px solid #d0d7de; border-radius: 10px; background: #fff; cursor: pointer; }}
+    .btn:hover {{ background: #f6f8fa; }}
+
+    .schema-grid {{ display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 14px 40px; align-items: start; }}
+    .schema-grid > * {{ min-width: 0; }}
     @media (max-width: 1200px) {{ .schema-grid {{ grid-template-columns: 1fr; }} }}
     .schema-box {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 10px 12px; background: #fff; cursor: pointer; }}
     .schema-box:hover {{ background: #f6f8fa; }}
     .schema-box.selected {{ outline: 2px solid #0969da; background: #eff6ff; }}
+    .schema-box code {{ white-space: normal; overflow-wrap: anywhere; }}
     .schema-title {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
     .schema-meta {{ margin-top: 6px; font-size: 12px; color: #57606a; }}
 
@@ -857,6 +866,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     </div>
     <div style="margin-top: 10px;" class="toolbar">
       <select id="record-select"></select>
+      <button id="open-expanded" class="btn" type="button">Open expanded view</button>
       <input id="q" type="search" placeholder="Search path/key…" />
       <label><input id="only-missing" type="checkbox" /> only missing</label>
       <span id="status" class="muted"></span>
@@ -919,6 +929,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     const q = document.getElementById('q');
     const onlyMissing = document.getElementById('only-missing');
     const status = document.getElementById('status');
+    const openExpanded = document.getElementById('open-expanded');
     const rawTree = document.getElementById('raw-tree');
     const flatView = document.getElementById('flat-view');
     const diffEl = document.getElementById('diff');
@@ -940,6 +951,9 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     let schemaBaseKeys = [];
     let schemaBaseBox = null;
     let schemaSubBoxes = [];
+    let schemaWrapEl = null;
+    let schemaLinesEl = null;
+    let isExpandedView = false;
 
     function badgeClass(branchType) {{
       const t = String(branchType || '');
@@ -994,6 +1008,83 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         }}
       }}
       return hits;
+    }}
+
+    function drawSchemaLines() {{
+      try {{
+        const wrap = schemaWrapEl || document.getElementById('schema-wrap');
+        const svg = schemaLinesEl || document.getElementById('schema-lines');
+        schemaWrapEl = wrap;
+        schemaLinesEl = svg;
+        if (!wrap || !svg) return;
+        svg.innerHTML = '';
+        if (!schemaBaseBox || !schemaSubBoxes || !schemaSubBoxes.length) return;
+
+        const subs = (schemaSubBoxes || []).map(x => x && x.el).filter(x => x && x.getBoundingClientRect);
+        if (!subs.length) return;
+
+        const wrapRect = wrap.getBoundingClientRect();
+        const baseRect = schemaBaseBox.getBoundingClientRect();
+        const minSubLeft = Math.min.apply(null, subs.map(el => el.getBoundingClientRect().left));
+
+        // Only draw connectors in 2-column layout (base left, subs right).
+        if (!(baseRect.right < (minSubLeft - 10))) return;
+
+        const w = Math.max(1, Math.round(wrapRect.width));
+        const h = Math.max(1, Math.round(wrapRect.height));
+        svg.setAttribute('viewBox', '0 0 ' + w + ' ' + h);
+        svg.setAttribute('width', String(w));
+        svg.setAttribute('height', String(h));
+
+        const sx0 = baseRect.right - wrapRect.left;
+        const sy = baseRect.top - wrapRect.top + baseRect.height / 2;
+
+        function addPath(d) {{
+          const p = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+          p.setAttribute('d', d);
+          p.setAttribute('class', 'schema-line');
+          svg.appendChild(p);
+        }}
+
+        for (const el of subs) {{
+          const r = el.getBoundingClientRect();
+          const ex0 = r.left - wrapRect.left;
+          const ey = r.top - wrapRect.top + r.height / 2;
+          const dist0 = ex0 - sx0;
+          if (!(dist0 > 0)) continue;
+          const margin = Math.min(12, Math.max(2, dist0 * 0.15));
+          const sx = sx0 + margin;
+          const ex = ex0 - margin;
+          const dist = ex - sx;
+          if (!(dist > 0)) continue;
+          const x1 = sx + dist * 0.4;
+          const x2 = sx + dist * 0.6;
+          const d = 'M ' + sx + ' ' + sy + ' C ' + x1 + ' ' + sy + ', ' + x2 + ' ' + ey + ', ' + ex + ' ' + ey;
+          addPath(d);
+        }}
+      }} catch (e) {{
+        return;
+      }}
+    }}
+
+    function applyExpandedView() {{
+      // Keep union as-is (it can be large); focus on raw + subtables.
+      for (const d of document.querySelectorAll('#raw-tree details')) d.open = true;
+      for (const d of document.querySelectorAll('#flat-view details')) d.open = true;
+      for (const d of document.querySelectorAll('#diff details')) d.open = true;
+    }}
+
+    function openExpandedView() {{
+      try {{
+        const url = new URL(window.location.href);
+        url.searchParams.set('view', 'expanded');
+        url.searchParams.set('record', String(currentIndex || 0));
+        window.open(url.toString(), '_blank');
+      }} catch (e) {{
+        // Fallback: best-effort open same path with query params.
+        const rec = String(currentIndex || 0);
+        window.open(String(window.location.href).split('#')[0] + '?view=expanded&record=' + encodeURIComponent(rec), '_blank');
+      }}
     }}
 
     function clearUnionSelection() {{
@@ -1329,6 +1420,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
 
       let html = '';
       html += '<h3>Schema (tables)</h3>';
+      html += '<div class=\"schema-wrap\" id=\"schema-wrap\"><svg class=\"schema-lines\" id=\"schema-lines\"></svg>';
       html += '<div class=\"schema-grid\">';
       html += '<div class=\"schema-box\" data-schema-type=\"base\" title=\"' + String(baseTableOrig || baseTableSql).replace(/\"/g, '&quot;') + '\">' +
         '<div class=\"schema-title\"><span class=\"pill\">BASE</span> <code>' + String(baseTableSql || '(base)').replace(/</g, '&lt;') + '</code></div>' +
@@ -1355,6 +1447,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
           '</div>';
         }}
       }}
+      html += '</div>';
       html += '</div>';
       html += '</div>';
 
@@ -1430,6 +1523,8 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
           }}
         }});
       }}
+      drawSchemaLines();
+      setTimeout(drawSchemaLines, 0);
 
       for (const el of Array.from(document.querySelectorAll('.flat-key[data-key]'))) {{
         addKeyEl(el.getAttribute('data-key') || '', el);
@@ -1481,10 +1576,14 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       renderFlat(pv.flatten || {{}}, pv.diff || null);
       renderDiff(pv.diff || null);
       applyQuery();
+      if (isExpandedView) applyExpandedView();
     }}
 
     function init() {{
       if (!sel) return;
+      const params = new URLSearchParams(window.location.search || '');
+      isExpandedView = String(params.get('view') || '') === 'expanded';
+      const initialRecord = params.get('record');
       sel.innerHTML = '';
       for (let i = 0; i < PREVIEWS.length; i++) {{
         const pv = PREVIEWS[i] || {{}};
@@ -1500,8 +1599,19 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       if (unionQ) unionQ.addEventListener('input', applyUnionFilter);
       if (unionOnlyExc) unionOnlyExc.addEventListener('change', applyUnionFilter);
       if (unionCov) unionCov.addEventListener('input', applyUnionFilter);
-      renderAll(0);
+      window.addEventListener('resize', () => requestAnimationFrame(drawSchemaLines));
+      if (openExpanded) openExpanded.addEventListener('click', openExpandedView);
+      renderAll(initialRecord != null ? initialRecord : 0);
+      try {{
+        if (initialRecord != null) sel.value = String(initialRecord);
+      }} catch (e) {{}}
       renderUnion();
+      if (isExpandedView) {{
+        setTimeout(() => {{
+          applyExpandedView();
+          drawSchemaLines();
+        }}, 0);
+      }}
     }}
 
     init();
