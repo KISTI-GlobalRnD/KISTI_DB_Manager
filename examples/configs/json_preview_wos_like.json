@@ -1,0 +1,12 @@
+{
+  "data_config": {
+    "PATH": "examples/data",
+    "file_name": "sample_wos_like.jsonl",
+    "file_type": "jsonl",
+    "table_name": "kisti_v2_json_wos_like",
+    "KEY_SEP": "__",
+    "index_key": "UID",
+    "except_keys": []
+  },
+  "db_config": {}
+}
