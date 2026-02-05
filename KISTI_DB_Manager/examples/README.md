@@ -28,6 +28,10 @@ These are **representative snapshots**. Regenerate locally with the smoke test a
 
 ![Review preview](assets/json_20lists_review.png)
 
+### Review Diff HTML (rendered)
+
+![Review diff preview](assets/json_20lists_review_diff.png)
+
 ## Data_Sample schema (WoS)
 
 We also ship a real-ish multi-table sample under `Data_Sample/` (repo root).

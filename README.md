@@ -32,6 +32,7 @@ Starting from **0.7.0**, this repository keeps a single implementation:
   - `RunReport` JSON + `Quarantine` JSONL for continue-on-error ingestion
 - **Review/visualization**
   - Review pack generation (md/html/svg) and schema diagrams (optional extras)
+  - HTML UI (search/depth/focus + SVG/PNG export) for `review pack` and `review diff`
 
 ## Schema visualization (Data_Sample)
 

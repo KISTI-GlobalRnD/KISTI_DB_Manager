@@ -544,8 +544,11 @@ def render_review_diff_html(
 	    .schema-container .edge.hidden {{ display: none; }}
 	    .schema-container .node.dim {{ opacity: 0.15; }}
 	    .schema-container .node.match .box {{ stroke: #fb8c00; stroke-width: 2; }}
+	    .schema-container .node.focus-root .box {{ stroke: #0969da; stroke-width: 3; stroke-dasharray: none; }}
+	    .schema-container .node.focus-path .box {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: 6 3; }}
+	    .schema-container .edge.focus-path {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: 6 3; }}
 	    .schema-container .node.selected .box {{ stroke: #0969da; stroke-width: 2; }}
-    .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; }}
+	    .schema-container .edge.selected {{ stroke: #0969da; stroke-width: 2; stroke-dasharray: none; }}
     .badge {{ display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; border: 1px solid #d0d7de; background: #f6f8fa; }}
     .badge.added {{ border-color: #1a7f37; background: #dafbe1; }}
     .badge.removed {{ border-color: #cf222e; background: #ffebe9; }}
@@ -568,21 +571,41 @@ def render_review_diff_html(
 
   <div class="card">
     <h2>Diagram</h2>
-	    <div class="schema-toolbar">
-	      <input id="schema-search" type="search" placeholder="Search table…" />
-	      <button id="schema-reset" type="button">Reset</button>
-	      <span class="schema-option">
-	        <span class="muted">Depth</span>
-	        <input id="schema-depth" type="range" min="0" max="0" step="1" />
-	        <code id="schema-depth-value">0</code>
-	      </span>
-	      <label class="schema-option">
-	        <input id="schema-only-flagged" type="checkbox" />
-	        <span class="muted">Only changed</span>
-	      </label>
-	      <span id="schema-status" class="muted"></span>
-	    </div>
-	    <div id="schema-container" class="schema-container">
+		    <div class="schema-toolbar">
+		      <input id="schema-search" type="search" placeholder="Search table…" />
+		      <button id="schema-reset" type="button">Reset</button>
+		      <button id="schema-download-svg" type="button">SVG</button>
+		      <button id="schema-download-png" type="button">PNG</button>
+		      <span class="schema-option">
+		        <span class="muted">Depth</span>
+		        <input id="schema-depth" type="range" min="0" max="0" step="1" />
+		        <code id="schema-depth-value">0</code>
+		      </span>
+		      <label class="schema-option">
+		        <input id="schema-only-flagged" type="checkbox" />
+		        <span class="muted">Only changed</span>
+		      </label>
+		      <span class="schema-option">
+		        <label class="schema-option">
+		          <input id="schema-focus" type="checkbox" />
+		          <span class="muted">Focus</span>
+		        </label>
+		        <select id="schema-focus-mode">
+		          <option value="subtree">subtree</option>
+		          <option value="khop">k-hop</option>
+		          <option value="path">path-to-base</option>
+		        </select>
+		        <span class="muted">hops</span>
+		        <input id="schema-focus-hops" type="range" min="1" max="6" step="1" value="2" />
+		        <code id="schema-focus-hops-value">2</code>
+		        <label class="schema-option">
+		          <input id="schema-focus-path" type="checkbox" checked />
+		          <span class="muted">Base path</span>
+		        </label>
+		      </span>
+		      <span id="schema-status" class="muted"></span>
+		    </div>
+		    <div id="schema-container" class="schema-container">
 	      {svg_inline}
     </div>
     <p class="muted">Legend: {badge('added')} {badge('removed')} {badge('changed')} {badge('unchanged')}</p>
@@ -618,19 +641,26 @@ def render_review_diff_html(
     const container = document.getElementById('schema-container');
     if (!container) return;
 
-	    const search = document.getElementById('schema-search');
-	    const reset = document.getElementById('schema-reset');
-	    const status = document.getElementById('schema-status');
-	    const svg = container.querySelector('svg');
-	    if (!svg) return;
+		    const search = document.getElementById('schema-search');
+		    const reset = document.getElementById('schema-reset');
+		    const dlSvg = document.getElementById('schema-download-svg');
+		    const dlPng = document.getElementById('schema-download-png');
+		    const status = document.getElementById('schema-status');
+		    const svg = container.querySelector('svg');
+		    if (!svg) return;
 
 	    const nodes = Array.from(svg.querySelectorAll('.node'));
 	    const edges = Array.from(svg.querySelectorAll('.edge'));
-	    const KEY_SEP = {key_sep_json};
-	    const BASE_TABLE_SQL = {base_json};
-	    const depthInput = document.getElementById('schema-depth');
-	    const depthValue = document.getElementById('schema-depth-value');
-	    const onlyFlagged = document.getElementById('schema-only-flagged');
+		    const KEY_SEP = {key_sep_json};
+		    const BASE_TABLE_SQL = {base_json};
+		    const depthInput = document.getElementById('schema-depth');
+		    const depthValue = document.getElementById('schema-depth-value');
+		    const onlyFlagged = document.getElementById('schema-only-flagged');
+		    const focus = document.getElementById('schema-focus');
+		    const focusMode = document.getElementById('schema-focus-mode');
+		    const focusHops = document.getElementById('schema-focus-hops');
+		    const focusHopsValue = document.getElementById('schema-focus-hops-value');
+		    const focusBasePath = document.getElementById('schema-focus-path');
 
 	    function matchPrefix(nameSql) {{
 	      if (!nameSql || !BASE_TABLE_SQL || !KEY_SEP) return null;
@@ -681,17 +711,371 @@ def render_review_diff_html(
       if (t) detailsByTable[t] = d;
     }}
 
-	    function clearSelection() {{
-	      for (const n of nodes) n.classList.remove('selected');
-	      for (const e of edges) e.classList.remove('selected');
-	    }}
+		    function clearSelection() {{
+		      for (const n of nodes) n.classList.remove('selected');
+		      for (const e of edges) e.classList.remove('selected');
+		    }}
 
-	    const parentByChildSql = {{}};
-	    for (const e of edges) {{
-	      const p = e.getAttribute('data-parent-sql') || '';
-	      const c = e.getAttribute('data-child-sql') || '';
-	      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
-	    }}
+		    const parentByChildSql = {{}};
+		    const childrenByParentSql = {{}};
+		    const neighborsBySql = {{}};
+		    const edgeByChildSql = {{}};
+		    function _addNeighbor(a, b) {{
+		      if (!a || !b) return;
+		      if (!neighborsBySql[a]) neighborsBySql[a] = new Set();
+		      neighborsBySql[a].add(b);
+		    }}
+		    for (const e of edges) {{
+		      const p = e.getAttribute('data-parent-sql') || '';
+		      const c = e.getAttribute('data-child-sql') || '';
+		      if (p && c && !(c in parentByChildSql)) parentByChildSql[c] = p;
+		      if (p && c) {{
+		        if (!childrenByParentSql[p]) childrenByParentSql[p] = [];
+		        childrenByParentSql[p].push(c);
+		        if (!(c in edgeByChildSql)) edgeByChildSql[c] = e;
+		        _addNeighbor(p, c);
+		        _addNeighbor(c, p);
+		      }}
+		    }}
+
+		    function joinPathToBase(tableSql) {{
+		      if (!tableSql || !BASE_TABLE_SQL) return null;
+		      const path = [];
+		      let cur = tableSql;
+		      let safety = 0;
+		      while (cur && safety++ < 1000) {{
+		        path.push(cur);
+		        if (cur === BASE_TABLE_SQL) break;
+		        cur = parentByChildSql[cur];
+		      }}
+		      if (!path.length) return null;
+		      if (path[path.length - 1] !== BASE_TABLE_SQL) return null;
+		      path.reverse();
+		      return path;
+		    }}
+
+		    let selectedTableSql = '';
+		    let focusRootSql = '';
+		    let prevFocusRootSql = '';
+		    let focusPathNodes = [];
+		    let focusPathEdges = [];
+
+		    function clearFocusRoot() {{
+		      if (prevFocusRootSql && nodeBySql[prevFocusRootSql]) {{
+		        nodeBySql[prevFocusRootSql].classList.remove('focus-root');
+		      }}
+		      prevFocusRootSql = '';
+		      focusRootSql = '';
+		    }}
+
+		    function setFocusRoot(sql) {{
+		      const next = String(sql || '');
+		      if (next === focusRootSql) return;
+		      if (prevFocusRootSql && nodeBySql[prevFocusRootSql]) {{
+		        nodeBySql[prevFocusRootSql].classList.remove('focus-root');
+		      }}
+		      focusRootSql = next;
+		      prevFocusRootSql = next;
+		      if (focusRootSql && nodeBySql[focusRootSql]) {{
+		        nodeBySql[focusRootSql].classList.add('focus-root');
+		      }}
+		    }}
+
+		    function clearFocusPath() {{
+		      for (const n of focusPathNodes) {{
+		        try {{ n.classList.remove('focus-path'); }} catch (_e) {{}}
+		      }}
+		      for (const e of focusPathEdges) {{
+		        try {{ e.classList.remove('focus-path'); }} catch (_e) {{}}
+		      }}
+		      focusPathNodes = [];
+		      focusPathEdges = [];
+		    }}
+
+		    function applyFocusPath(path) {{
+		      clearFocusPath();
+		      if (!path || !Array.isArray(path) || path.length < 2) return;
+		      for (const sql of path) {{
+		        const n = nodeBySql[String(sql || '')];
+		        if (n) {{
+		          n.classList.add('focus-path');
+		          focusPathNodes.push(n);
+		        }}
+		      }}
+		      for (let i = 1; i < path.length; i++) {{
+		        const child = String(path[i] || '');
+		        const e = edgeByChildSql[child];
+		        if (e) {{
+		          e.classList.add('focus-path');
+		          focusPathEdges.push(e);
+		        }}
+		      }}
+		    }}
+
+		    function subtreeAllow(root) {{
+		      const out = new Set();
+		      const stack = [String(root || '')];
+		      let safety = 0;
+		      while (stack.length && safety++ < 200000) {{
+		        const cur = stack.pop();
+		        if (!cur || out.has(cur)) continue;
+		        out.add(cur);
+		        const kids = childrenByParentSql[cur] || [];
+		        for (const c of kids) stack.push(c);
+		      }}
+		      return out;
+		    }}
+
+		    function khopAllow(root, hops) {{
+		      const h = Math.max(1, Math.min(50, Number(hops || 1)));
+		      const out = new Set();
+		      const q = [[String(root || ''), 0]];
+		      out.add(String(root || ''));
+		      let safety = 0;
+		      while (q.length && safety++ < 200000) {{
+		        const item = q.shift();
+		        if (!item) break;
+		        const cur = item[0];
+		        const d = item[1];
+		        if (d >= h) continue;
+		        const neigh = neighborsBySql[cur];
+		        if (!neigh) continue;
+		        for (const nb of neigh) {{
+		          if (!nb || out.has(nb)) continue;
+		          out.add(nb);
+		          q.push([nb, d + 1]);
+		        }}
+		      }}
+		      return out;
+		    }}
+
+		    function updateFocusControls() {{
+		      const enabled = !!(focus && focus.checked);
+		      const mode = focusMode ? String(focusMode.value || 'subtree') : 'subtree';
+		      if (focusMode) focusMode.disabled = !enabled;
+		      if (focusHops) focusHops.disabled = !enabled || mode !== 'khop';
+		      if (focusBasePath) focusBasePath.disabled = !enabled || mode === 'path';
+		      const hops = focusHops ? Number(focusHops.value || 2) : 2;
+		      if (focusHopsValue) focusHopsValue.textContent = String(hops);
+		    }}
+
+		    function parseBool(v) {{
+		      const s = String(v || '').toLowerCase();
+		      return s === '1' || s === 'true' || s === 'yes' || s === 'y' || s === 'on';
+		    }}
+
+		    function buildUiState() {{
+		      return {{
+		        q: search ? String(search.value || '') : '',
+		        depth: depthInput ? Number(depthInput.value || maxDepth) : maxDepth,
+		        only: !!(onlyFlagged && onlyFlagged.checked),
+		        focus: !!(focus && focus.checked),
+		        fmode: focusMode ? String(focusMode.value || 'subtree') : 'subtree',
+		        hops: focusHops ? Number(focusHops.value || 2) : 2,
+		        bpath: !!(focusBasePath && focusBasePath.checked),
+		        sel: String(selectedTableSql || ''),
+		        froot: String(focusRootSql || ''),
+		      }};
+		    }}
+
+		    const STORAGE_KEY = 'kisti-review:diff:' + String(BASE_TABLE_SQL || '');
+		    let persistTimer = null;
+		    let persistSuppressed = false;
+
+		    function readStateFromUrl() {{
+		      try {{
+		        const params = new URLSearchParams(window.location.search || '');
+		        const keys = ['q','depth','only','focus','fmode','hops','bpath','sel','froot'];
+		        let has = false;
+		        for (const k of keys) {{
+		          if (params.has(k)) {{ has = true; break; }}
+		        }}
+		        if (!has) return null;
+		        return {{
+		          q: params.get('q') || '',
+		          depth: params.get('depth'),
+		          only: params.get('only'),
+		          focus: params.get('focus'),
+		          fmode: params.get('fmode') || '',
+		          hops: params.get('hops'),
+		          bpath: params.get('bpath'),
+		          sel: params.get('sel') || '',
+		          froot: params.get('froot') || '',
+		        }};
+		      }} catch (_e) {{
+		        return null;
+		      }}
+		    }}
+
+		    function readStateFromStorage() {{
+		      try {{
+		        if (!window.localStorage) return null;
+		        const raw = localStorage.getItem(STORAGE_KEY);
+		        if (!raw) return null;
+		        return JSON.parse(raw);
+		      }} catch (_e) {{
+		        return null;
+		      }}
+		    }}
+
+		    function applyState(st) {{
+		      if (!st || typeof st !== 'object') return;
+		      if (search && typeof st.q === 'string') search.value = st.q;
+		      if (depthInput && st.depth != null) {{
+		        const v = Number(st.depth);
+		        if (isFinite(v)) depthInput.value = String(Math.max(0, Math.min(maxDepth, v)));
+		      }}
+		      if (onlyFlagged && st.only != null) onlyFlagged.checked = parseBool(st.only);
+		      if (focus && st.focus != null) focus.checked = parseBool(st.focus);
+		      if (focusMode && typeof st.fmode === 'string') {{
+		        const m = String(st.fmode || '');
+		        if (m === 'subtree' || m === 'khop' || m === 'path') focusMode.value = m;
+		      }}
+		      if (focusHops && st.hops != null) {{
+		        const v = Number(st.hops);
+		        if (isFinite(v)) focusHops.value = String(Math.max(1, Math.min(6, v)));
+		      }}
+		      if (focusBasePath && st.bpath != null) focusBasePath.checked = parseBool(st.bpath);
+		      if (typeof st.sel === 'string') selectedTableSql = st.sel;
+		      if (typeof st.froot === 'string') focusRootSql = st.froot;
+		      updateFocusControls();
+		      if (focusHopsValue && focusHops) focusHopsValue.textContent = String(focusHops.value || '');
+		    }}
+
+		    function writeStateToStorage(st) {{
+		      try {{
+		        if (!window.localStorage) return;
+		        localStorage.setItem(STORAGE_KEY, JSON.stringify(st));
+		      }} catch (_e) {{}}
+		    }}
+
+		    function writeStateToUrl(st) {{
+		      try {{
+		        const url = new URL(window.location.href);
+		        const params = url.searchParams;
+		        function setOrDel(k, v, def) {{
+		          const sv = String(v == null ? '' : v);
+		          const sd = String(def == null ? '' : def);
+		          if (sv === sd || sv === '') params.delete(k);
+		          else params.set(k, sv);
+		        }}
+		        setOrDel('q', st.q || '', '');
+		        setOrDel('depth', String(st.depth), String(maxDepth));
+		        setOrDel('only', st.only ? '1' : '', '');
+		        setOrDel('focus', st.focus ? '1' : '', '');
+		        setOrDel('fmode', st.fmode || '', 'subtree');
+		        setOrDel('hops', String(st.hops), '2');
+		        setOrDel('bpath', st.bpath ? '1' : '0', '1');
+		        setOrDel('sel', st.sel || '', '');
+		        setOrDel('froot', st.froot || '', '');
+		        url.search = params.toString();
+		        window.history.replaceState(null, '', url.toString());
+		      }} catch (_e) {{}}
+		    }}
+
+		    function schedulePersist() {{
+		      if (persistSuppressed) return;
+		      if (persistTimer) clearTimeout(persistTimer);
+		      persistTimer = setTimeout(() => {{
+		        persistTimer = null;
+		        const st = buildUiState();
+		        writeStateToStorage(st);
+		        writeStateToUrl(st);
+		      }}, 200);
+		    }}
+
+		    function safeFileName(text) {{
+		      const t = String(text || 'schema_diff');
+		      const s = t.replace(/[^0-9A-Za-z_.-]+/g, '_');
+		      return (s.length > 120 ? s.slice(0, 120) : s) || 'schema_diff';
+		    }}
+
+		    function downloadBlob(blob, filename) {{
+		      try {{
+		        const url = URL.createObjectURL(blob);
+		        const a = document.createElement('a');
+		        a.href = url;
+		        a.download = String(filename || 'download');
+		        document.body.appendChild(a);
+		        a.click();
+		        a.remove();
+		        setTimeout(() => URL.revokeObjectURL(url), 2000);
+		      }} catch (_e) {{}}
+		    }}
+
+		    const EXTRA_SVG_CSS = [
+		      '.node.hidden{{display:none;}}',
+		      '.edge.hidden{{display:none;}}',
+		      '.node.dim{{opacity:0.15;}}',
+		      '.node.match .box{{stroke:#fb8c00;stroke-width:2;}}',
+		      '.node.focus-root .box{{stroke:#0969da;stroke-width:3;stroke-dasharray:none;}}',
+		      '.node.focus-path .box{{stroke:#0969da;stroke-width:2;stroke-dasharray:6 3;}}',
+		      '.edge.focus-path{{stroke:#0969da;stroke-width:2;stroke-dasharray:6 3;}}',
+		      '.node.selected .box{{stroke:#0969da;stroke-width:2;stroke-dasharray:none;}}',
+		      '.edge.selected{{stroke:#0969da;stroke-width:2;stroke-dasharray:none;}}',
+		    ].join('\\n');
+
+		    function exportSvgText() {{
+		      const clone = svg.cloneNode(true);
+		      for (const el of Array.from(clone.querySelectorAll('.hidden'))) {{
+		        try {{ el.remove(); }} catch (_e) {{}}
+		      }}
+		      const ns = 'http://www.w3.org/2000/svg';
+		      let styleEl = clone.querySelector('style');
+		      if (!styleEl) {{
+		        styleEl = document.createElementNS(ns, 'style');
+		        clone.insertBefore(styleEl, clone.firstChild);
+		      }}
+		      styleEl.textContent = (styleEl.textContent || '') + '\\n' + EXTRA_SVG_CSS;
+		      clone.setAttribute('xmlns', ns);
+		      const xml = new XMLSerializer().serializeToString(clone);
+		      if (xml.trim().startsWith('<?xml')) return xml;
+		      return '<?xml version=\"1.0\" encoding=\"UTF-8\"?>\\n' + xml;
+		    }}
+
+		    function exportSvg() {{
+		      const txt = exportSvgText();
+		      const blob = new Blob([txt], {{ type: 'image/svg+xml;charset=utf-8' }});
+		      const name = safeFileName(BASE_TABLE_SQL || 'schema_diff') + '.svg';
+		      downloadBlob(blob, name);
+		    }}
+
+		    function exportPng() {{
+		      try {{
+		        const txt = exportSvgText();
+		        const blob = new Blob([txt], {{ type: 'image/svg+xml;charset=utf-8' }});
+		        const url = URL.createObjectURL(blob);
+		        const img = new Image();
+		        img.onload = () => {{
+		          const w = Number(svg.getAttribute('width') || 0) || 1400;
+		          const h = Number(svg.getAttribute('height') || 0) || 800;
+		          const scale = 2;
+		          const canvas = document.createElement('canvas');
+		          canvas.width = Math.max(1, Math.floor(w * scale));
+		          canvas.height = Math.max(1, Math.floor(h * scale));
+		          const ctx = canvas.getContext('2d');
+		          if (!ctx) {{
+		            URL.revokeObjectURL(url);
+		            return;
+		          }}
+		          ctx.fillStyle = '#ffffff';
+		          ctx.fillRect(0, 0, canvas.width, canvas.height);
+		          ctx.scale(scale, scale);
+		          ctx.drawImage(img, 0, 0, w, h);
+		          canvas.toBlob((pngBlob) => {{
+		            if (pngBlob) {{
+		              const name = safeFileName(BASE_TABLE_SQL || 'schema_diff') + '.png';
+		              downloadBlob(pngBlob, name);
+		            }}
+		            URL.revokeObjectURL(url);
+		          }}, 'image/png');
+		        }};
+		        img.onerror = () => {{
+		          URL.revokeObjectURL(url);
+		        }};
+		        img.src = url;
+		      }} catch (_e) {{}}
+		    }}
 
 	    function isFlagged(nodeEl) {{
 	      return (
@@ -704,15 +1088,21 @@ def render_review_diff_html(
 	      );
 	    }}
 
-	    let visibleNodesCount = nodes.length;
-	    function recomputeVisibility() {{
-	      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
-	      if (depthValue) depthValue.textContent = String(depthLimit);
-	      const only = !!(onlyFlagged && onlyFlagged.checked);
+		    let visibleNodesCount = nodes.length;
+		    function recomputeVisibility() {{
+		      const depthLimit = depthInput ? Number(depthInput.value || maxDepth) : maxDepth;
+		      if (depthValue) depthValue.textContent = String(depthLimit);
+		      const only = !!(onlyFlagged && onlyFlagged.checked);
+		      const focusEnabled = !!(focus && focus.checked);
+		      const fmode = focusMode ? String(focusMode.value || 'subtree') : 'subtree';
+		      const fhops = focusHops ? Number(focusHops.value || 2) : 2;
+		      const basePathOn = focusEnabled && (fmode === 'path' || (!!focusBasePath && focusBasePath.checked));
 
-	      const allow = new Set();
-	      if (only) {{
-	        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
+		      updateFocusControls();
+
+		      const allow = new Set();
+		      if (only) {{
+		        if (BASE_TABLE_SQL) allow.add(BASE_TABLE_SQL);
 	        for (const n of nodes) {{
 	          const sql = n.getAttribute('data-name-sql') || '';
 	          if (!sql) continue;
@@ -728,18 +1118,44 @@ def render_review_diff_html(
 	            if (p === BASE_TABLE_SQL) break;
 	            cur = p;
 	          }}
-	        }}
-	      }}
+		        }}
+		      }}
 
-	      visibleNodesCount = 0;
-	      for (const n of nodes) {{
-	        const sql = n.getAttribute('data-name-sql') || '';
-	        const d = depthBySql[sql] || 0;
-	        const withinDepth = d <= depthLimit;
-	        const visible = withinDepth && (!only || allow.has(sql));
-	        n.classList.toggle('hidden', !visible);
-	        if (visible) visibleNodesCount += 1;
-	      }}
+		      let allowFocus = null;
+		      if (focusEnabled) {{
+		        const root = focusRootSql || selectedTableSql || BASE_TABLE_SQL;
+		        if (root) {{
+		          setFocusRoot(root);
+		          if (fmode === 'khop') allowFocus = khopAllow(root, fhops);
+		          else if (fmode === 'path') {{
+		            const p = joinPathToBase(root);
+		            allowFocus = new Set(p || [root]);
+		          }} else allowFocus = subtreeAllow(root);
+
+		          const p = basePathOn ? joinPathToBase(root) : null;
+		          if (p && fmode !== 'path') {{
+		            for (const x of p) allowFocus.add(String(x || ''));
+		          }}
+		          if (p) applyFocusPath(p);
+		          else clearFocusPath();
+		        }} else {{
+		          clearFocusRoot();
+		          clearFocusPath();
+		        }}
+		      }} else {{
+		        clearFocusRoot();
+		        clearFocusPath();
+		      }}
+
+		      visibleNodesCount = 0;
+		      for (const n of nodes) {{
+		        const sql = n.getAttribute('data-name-sql') || '';
+		        const d = depthBySql[sql] || 0;
+		        const withinDepth = d <= depthLimit;
+		        const visible = withinDepth && (!only || allow.has(sql)) && (!allowFocus || allowFocus.has(sql));
+		        n.classList.toggle('hidden', !visible);
+		        if (visible) visibleNodesCount += 1;
+		      }}
 
 	      for (const e of edges) {{
 	        const p = e.getAttribute('data-parent-sql') || '';
@@ -751,9 +1167,9 @@ def render_review_diff_html(
 	      }}
 	    }}
 
-	    function applyFilter(q) {{
-	      const query = (q || '').trim().toLowerCase();
-	      let matches = 0;
+		    function applyFilter(q) {{
+		      const query = (q || '').trim().toLowerCase();
+		      let matches = 0;
 	      for (const n of nodes) {{
 	        if (n.classList.contains('hidden')) {{
 	          n.classList.remove('dim');
@@ -767,20 +1183,22 @@ def render_review_diff_html(
         n.classList.toggle('dim', !!query && !ok);
         n.classList.toggle('match', !!query && ok);
 	        if (ok && query) matches += 1;
-	      }}
-	      if (status) {{
-	        if (query) status.textContent = 'matches: ' + matches + ' / ' + visibleNodesCount;
-	        else if (visibleNodesCount !== nodes.length) status.textContent = 'visible: ' + visibleNodesCount + ' / ' + nodes.length;
-	        else status.textContent = '';
-	      }}
-	    }}
+		      }}
+		      if (status) {{
+		        const focusLabel = (focus && focus.checked) ? ('focus: ' + String(focusRootSql || selectedTableSql || BASE_TABLE_SQL || '')) : '';
+		        if (query) status.textContent = 'matches: ' + matches + ' / ' + visibleNodesCount + (focusLabel ? (' · ' + focusLabel) : '');
+		        else if (visibleNodesCount !== nodes.length) status.textContent = 'visible: ' + visibleNodesCount + ' / ' + nodes.length + (focusLabel ? (' · ' + focusLabel) : '');
+		        else status.textContent = focusLabel || '';
+		      }}
+		    }}
 
-    function selectTable(tableSql) {{
-      if (!tableSql) return;
-      clearSelection();
-      for (const n of nodes) {{
-        if ((n.getAttribute('data-name-sql') || '') === tableSql) {{
-          n.classList.add('selected');
+	    function selectTable(tableSql) {{
+	      if (!tableSql) return;
+	      selectedTableSql = tableSql;
+	      clearSelection();
+	      for (const n of nodes) {{
+	        if ((n.getAttribute('data-name-sql') || '') === tableSql) {{
+	          n.classList.add('selected');
         }}
       }}
       for (const e of edges) {{
@@ -791,11 +1209,17 @@ def render_review_diff_html(
         }}
       }}
       const d = detailsByTable[tableSql];
-      if (d) {{
-        d.open = true;
-        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
-      }}
-    }}
+	      if (d) {{
+	        d.open = true;
+	        d.scrollIntoView({{behavior: 'smooth', block: 'start'}});
+	      }}
+	      if (focus && focus.checked) {{
+	        setFocusRoot(tableSql);
+	        recomputeVisibility();
+	        applyFilter(search ? search.value : '');
+	      }}
+	      schedulePersist();
+	    }}
 
     for (const n of nodes) {{
       n.addEventListener('click', (ev) => {{
@@ -805,35 +1229,96 @@ def render_review_diff_html(
       }});
     }}
 
-	    if (search) {{
-	      search.addEventListener('input', () => applyFilter(search.value));
-	    }}
-	    if (depthInput) {{
-	      depthInput.addEventListener('input', () => {{
-	        recomputeVisibility();
-	        applyFilter(search ? search.value : '');
-	      }});
-	    }}
-	    if (onlyFlagged) {{
-	      onlyFlagged.addEventListener('change', () => {{
-	        recomputeVisibility();
-	        applyFilter(search ? search.value : '');
-	      }});
-	    }}
-	    if (reset) {{
-	      reset.addEventListener('click', () => {{
-	        if (search) search.value = '';
-	        if (depthInput) depthInput.value = String(maxDepth);
-	        if (onlyFlagged) onlyFlagged.checked = false;
-	        recomputeVisibility();
-	        applyFilter('');
-	        clearSelection();
-	      }});
-	    }}
+		    if (search) {{
+		      search.addEventListener('input', () => {{
+		        applyFilter(search.value);
+		        schedulePersist();
+		      }});
+		    }}
+		    if (depthInput) {{
+		      depthInput.addEventListener('input', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+		    if (onlyFlagged) {{
+		      onlyFlagged.addEventListener('change', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+		    if (focus) {{
+		      focus.addEventListener('change', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+		    if (focusMode) {{
+		      focusMode.addEventListener('change', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+		    if (focusHops) {{
+		      focusHops.addEventListener('input', () => {{
+		        if (focusHopsValue) focusHopsValue.textContent = String(focusHops.value || '');
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+		    if (focusBasePath) {{
+		      focusBasePath.addEventListener('change', () => {{
+		        recomputeVisibility();
+		        applyFilter(search ? search.value : '');
+		        schedulePersist();
+		      }});
+		    }}
+		    if (dlSvg) {{
+		      dlSvg.addEventListener('click', () => {{
+		        exportSvg();
+		      }});
+		    }}
+		    if (dlPng) {{
+		      dlPng.addEventListener('click', () => {{
+		        exportPng();
+		      }});
+		    }}
+		    if (reset) {{
+		      reset.addEventListener('click', () => {{
+		        if (search) search.value = '';
+		        if (depthInput) depthInput.value = String(maxDepth);
+		        if (onlyFlagged) onlyFlagged.checked = false;
+		        if (focus) focus.checked = false;
+		        if (focusMode) focusMode.value = 'subtree';
+		        if (focusHops) focusHops.value = '2';
+		        if (focusBasePath) focusBasePath.checked = true;
+		        recomputeVisibility();
+		        applyFilter('');
+		        clearSelection();
+		        schedulePersist();
+		      }});
+		    }}
 
-	    recomputeVisibility();
-	    applyFilter(search ? search.value : '');
-	  }})();
+		    // Restore UI state (URL has priority over localStorage).
+		    persistSuppressed = true;
+		    const initialState = readStateFromUrl() || readStateFromStorage();
+		    if (initialState) applyState(initialState);
+		    persistSuppressed = false;
+
+		    recomputeVisibility();
+		    applyFilter(search ? search.value : '');
+		    if (selectedTableSql) {{
+		      // Apply selection after initial render.
+		      persistSuppressed = true;
+		      try {{ selectTable(selectedTableSql); }} catch (_e) {{}}
+		      persistSuppressed = false;
+		    }}
+		  }})();
 	  </script>
 </body>
 </html>
