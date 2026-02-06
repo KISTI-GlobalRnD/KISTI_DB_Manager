@@ -16,6 +16,30 @@ Host (requires deps + docker):
 bash examples/smoke.sh
 ```
 
+## Real DB smoke-run (integration)
+
+Use this when you want to validate against an existing MariaDB/MySQL instance (non-docker DB).
+
+1. Create local configs from templates:
+
+```bash
+cp examples/configs/tabular_config_realdb.template.json examples/configs/tabular_config_realdb.local.json
+cp examples/configs/json_config_realdb.template.json examples/configs/json_config_realdb.local.json
+```
+
+2. Edit `db_config` and `data_config` paths in the `.local.json` files.
+
+3. Run integration smoke:
+
+```bash
+bash examples/smoke_real_db.sh \
+  examples/configs/tabular_config_realdb.local.json \
+  examples/configs/json_config_realdb.local.json
+```
+
+Multi-file JSON input template:
+- `examples/configs/json_config_multifile_realdb.template.json`
+
 ## Output previews
 
 These are **representative snapshots**. Regenerate locally with the smoke test and check `examples/out/`.

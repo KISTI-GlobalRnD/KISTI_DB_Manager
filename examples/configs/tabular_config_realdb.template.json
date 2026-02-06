@@ -1,0 +1,26 @@
+{
+  "data_config": {
+    "PATH": "examples/data",
+    "file_name": "sample.csv",
+    "file_type": "csv",
+    "table_name": "kisti_tabular_smoke_realdb",
+    "SEP": ",",
+    "KEY_SEP": "__",
+    "Conv_DATETIME": false,
+    "forced_null": false,
+    "include_extra_columns": true,
+    "auto_alter_table": true,
+    "fallback_on_insert_error": true,
+    "fallback_column_type": "LONGTEXT",
+    "insert_retry_max": 5,
+    "index_prefix_len": 191,
+    "chunksize": 5000
+  },
+  "db_config": {
+    "host": "DB_HOST",
+    "user": "DB_USER",
+    "password": "DB_PASSWORD",
+    "database": "DB_NAME",
+    "port": 3306
+  }
+}

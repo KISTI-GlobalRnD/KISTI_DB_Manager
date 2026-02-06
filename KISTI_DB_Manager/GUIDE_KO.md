@@ -23,6 +23,12 @@ kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
 kisti-db-manager json run --config path/to/json_config.json --mode finalize
 ```
 
+실DB 통합 스모크(도커 DB 미사용) 템플릿/스크립트:
+- `examples/configs/tabular_config_realdb.template.json`
+- `examples/configs/json_config_realdb.template.json`
+- `examples/configs/json_config_multifile_realdb.template.json`
+- `bash examples/smoke_real_db.sh <tabular_config> <json_config>`
+
 ## 상황별 모드 선택
 
 ### 1) LOCAL INFILE 사용 가능 + 속도 최우선 (대부분 추천)

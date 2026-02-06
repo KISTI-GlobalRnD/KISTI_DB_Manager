@@ -166,3 +166,9 @@ bash examples/smoke.sh
 
 Output previews:
 - `examples/README.md`
+
+Real DB integration smoke-run templates and guide:
+- `examples/configs/tabular_config_realdb.template.json`
+- `examples/configs/json_config_realdb.template.json`
+- `examples/configs/json_config_multifile_realdb.template.json`
+- `examples/smoke_real_db.sh`
