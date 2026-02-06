@@ -69,6 +69,9 @@ xdg-open "preview_out/preview.html?view=diagram&record=0"
 
 ![Raw vs Flatten diagram view](assets/json_20lists_preview_diagram.png)
 
+Tip: in diagram view, **double-click** a node to open the expanded view focused on that path/subtable.
+Use **Shift + double-click** to open in the same tab.
+
 ### Raw vs Flatten preview (schema drift / complex)
 
 This is a **synthetic WoS-like JSONL** sample intentionally containing:

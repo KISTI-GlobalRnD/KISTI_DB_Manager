@@ -996,6 +996,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     let schemaBaseKeys = [];
     let schemaBaseBox = null;
     let schemaSubBoxes = [];
+    let subtableIndexByKey = new Map(); // sub_key -> index
     let schemaWrapEl = null;
     let schemaLinesEl = null;
     let isExpandedView = false;
@@ -1147,6 +1148,34 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       }}
     }}
 
+    function openExpandedFocus(focus, sameTab) {{
+      const f = String(focus || '');
+      const useSameTab = !!sameTab;
+      try {{
+        const url = new URL(window.location.href);
+        url.searchParams.set('view', 'expanded');
+        url.searchParams.set('record', String(currentIndex || 0));
+        if (f) url.searchParams.set('focus', f);
+        else url.searchParams.delete('focus');
+        if (useSameTab) {{
+          window.location.href = url.toString();
+          return;
+        }}
+        const w = window.open(url.toString(), '_blank');
+        if (!w) window.location.href = url.toString(); // popup blocked fallback
+      }} catch (e) {{
+        const rec = encodeURIComponent(String(currentIndex || 0));
+        const qs = f ? ('?view=expanded&record=' + rec + '&focus=' + encodeURIComponent(f)) : ('?view=expanded&record=' + rec);
+        const target = String(window.location.href).split('#')[0] + qs;
+        if (useSameTab) {{
+          window.location.href = target;
+          return;
+        }}
+        const w = window.open(target, '_blank');
+        if (!w) window.location.href = target;
+      }}
+    }}
+
     function clearUnionSelection() {{
       for (const el of document.querySelectorAll('.u-node.selected')) {{
         el.classList.remove('selected');
@@ -1192,6 +1221,48 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         el.scrollIntoView({{behavior: 'smooth', block: 'center'}});
       }}
       highlightSchemaForPath(k);
+    }}
+
+    function openRawAncestors(path) {{
+      const p = String(path || '');
+      if (!p) return;
+      const sep = String(META.key_sep || '__');
+      const parts = p.split(sep).filter(x => String(x || '').length);
+      let pref = '';
+      for (let i = 0; i < parts.length; i++) {{
+        pref = pref ? (pref + sep + parts[i]) : parts[i];
+        const el = rawIndex.get(pref);
+        if (!el) continue;
+        const det = el.closest && el.closest('details');
+        if (det) det.open = true;
+      }}
+    }}
+
+    function focusToPath(pathOrKey) {{
+      const p = String(pathOrKey || '');
+      if (!p) return;
+      openRawAncestors(p);
+
+      if (rawIndex.has(p)) {{
+        selectRawPath(p);
+        const el = rawIndex.get(p);
+        if (el) {{
+          try {{ el.scrollIntoView({{behavior: 'smooth', block: 'center'}}); }} catch (e) {{}}
+        }}
+      }} else if (flatIndex.has(p)) {{
+        selectFlatKey(p);
+      }} else {{
+        selectRawPath(p);
+      }}
+
+      if (subtableIndexByKey && subtableIndexByKey.has(p)) {{
+        const idx = String(subtableIndexByKey.get(p));
+        const det = document.getElementById('st-' + idx);
+        if (det && det.tagName && String(det.tagName).toLowerCase() === 'details') {{
+          det.open = true;
+          try {{ det.scrollIntoView({{behavior: 'smooth', block: 'start'}}); }} catch (e) {{}}
+        }}
+      }}
     }}
 
     function renderUnion() {{
@@ -1463,6 +1534,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       schemaBaseKeys = [];
       schemaBaseBox = null;
       schemaSubBoxes = [];
+      subtableIndexByKey = new Map();
 
       function addKeyEl(key, el) {{
         const k = String(key || '');
@@ -1527,6 +1599,8 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         for (let i = 0; i < subtables.length; i++) {{
           const st = subtables[i];
           const cols = Array.isArray(st.columns) ? st.columns : [];
+          const subKey = String(st.sub_key || '');
+          if (subKey) subtableIndexByKey.set(subKey, i);
           html += '<details id=\"st-' + String(i) + '\"><summary><code>' + String(st.table_sql || st.table_original || st.sub_key || '') + '</code>' +
             ' <span class=\"muted\">rows=' + String(st.n_rows || 0) + '</span></summary>';
           html += '<div style=\"margin-top: 8px;\">columns:</div><div>';
@@ -2007,7 +2081,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       if (diagramStatus) {{
         const extra = rr && rr.pruned ? ' · pruned' : '';
         const trunc = pv && pv.raw_truncated ? ' · raw truncated' : '';
-        diagramStatus.textContent = 'raw nodes shown: ' + String(rr && rr.shown ? rr.shown : 0) + ' / ' + String(rr && rr.total ? rr.total : 0) + extra + trunc;
+        diagramStatus.textContent = 'raw nodes shown: ' + String(rr && rr.shown ? rr.shown : 0) + ' / ' + String(rr && rr.total ? rr.total : 0) + extra + trunc + ' · tip: double-click a node to open expanded details (Shift: same tab)';
       }}
 
       for (const el of Array.from(diagramRaw.querySelectorAll('.diag-node[data-path]'))) {{
@@ -2018,15 +2092,24 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
           const path = el.getAttribute('data-path') || '';
           selectDiagramRaw(path);
         }});
+        el.addEventListener('dblclick', (ev) => {{
+          ev.preventDefault();
+          const path = el.getAttribute('data-path') || '';
+          openExpandedFocus(path, ev.shiftKey);
+        }});
       }}
       for (const el of Array.from(diagramSchema.querySelectorAll('.diag-node[data-subkey]'))) {{
         const sk = String(el.getAttribute('data-subkey') || '');
-        if (!sk) continue;
-        diagSchemaIndex.set(sk, el);
+        if (sk) diagSchemaIndex.set(sk, el);
         el.addEventListener('click', (ev) => {{
           ev.preventDefault();
           const subKey = el.getAttribute('data-subkey') || '';
-          selectDiagramSchema(subKey);
+          if (subKey) selectDiagramSchema(subKey);
+        }});
+        el.addEventListener('dblclick', (ev) => {{
+          ev.preventDefault();
+          const subKey = el.getAttribute('data-subkey') || '';
+          openExpandedFocus(subKey, ev.shiftKey);
         }});
       }}
     }}
@@ -2052,6 +2135,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       isExpandedView = viewMode === 'expanded';
       isDiagramView = viewMode === 'diagram';
       const initialRecord = params.get('record');
+      const focus = params.get('focus');
       if (isDiagramView) {{
         try {{ document.body.classList.add('diagram-mode'); }} catch (e) {{}}
       }}
@@ -2082,7 +2166,10 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         setTimeout(() => {{
           applyExpandedView();
           drawSchemaLines();
+          if (focus) focusToPath(focus);
         }}, 0);
+      }} else if (focus && !isDiagramView) {{
+        setTimeout(() => focusToPath(focus), 0);
       }}
     }}
 
