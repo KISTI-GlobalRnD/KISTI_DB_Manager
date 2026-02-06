@@ -35,7 +35,7 @@ class TestCLITabular(unittest.TestCase):
             with patch(
                 "KISTI_DB_Manager.pipeline.run_tabular_pipeline",
                 return_value=TabularRunResult(name_map=None, report=fake_report),
-            ):
+            ), patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = main(["tabular", "run", "--config", cfg_path, "--report", report_path])

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import importlib
 import json
 import sys
 from pathlib import Path
@@ -11,6 +12,30 @@ from .naming import make_index_name, truncate_table_name
 
 def _resolve_bool(value: bool | None, default: bool) -> bool:
     return bool(default) if value is None else bool(value)
+
+
+class MissingDependencyError(RuntimeError):
+    """Raised when an optional dependency group is required but not installed."""
+
+
+def _ensure_optional_deps(feature: str, modules: list[str], *, extras: list[str]) -> None:
+    missing: list[str] = []
+    for mod in modules:
+        try:
+            importlib.import_module(str(mod))
+        except ModuleNotFoundError as e:
+            name = getattr(e, "name", None) or str(mod)
+            missing.append(str(name))
+
+    if not missing:
+        return
+
+    extras_arg = ",".join(str(x) for x in extras if str(x))
+    miss = ", ".join(sorted(set(missing)))
+    raise MissingDependencyError(
+        f"{feature} requires missing dependencies: {miss}. "
+        f"Install with: pip install -e '.[{extras_arg}]'"
+    )
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:
@@ -175,6 +200,18 @@ def _cmd_tabular_run(args: argparse.Namespace) -> int:
     if getattr(args, "db_load_method", None):
         data_config["db_load_method"] = args.db_load_method
 
+    create = _resolve_bool(getattr(args, "create", None), mode_spec.stage_defaults.get("create", True)) and not bool(args.dry_run)
+    load = _resolve_bool(getattr(args, "load", None), mode_spec.stage_defaults.get("load", True)) and not bool(args.dry_run)
+    index = _resolve_bool(getattr(args, "index", None), mode_spec.stage_defaults.get("index", True)) and not bool(args.dry_run)
+    optimize = _resolve_bool(getattr(args, "optimize", None), mode_spec.stage_defaults.get("optimize", True)) and not bool(args.dry_run)
+
+    _ensure_optional_deps("tabular run", ["numpy", "pandas"], extras=["tabular"])
+    if create or load or index or optimize:
+        db_mods = ["pymysql"]
+        if load:
+            db_mods.append("sqlalchemy")
+        _ensure_optional_deps("tabular DB stages", db_mods, extras=["db"])
+
     from .pipeline import run_tabular_pipeline
     from .quarantine import QuarantineWriter
     from .report import RunReport
@@ -182,10 +219,6 @@ def _cmd_tabular_run(args: argparse.Namespace) -> int:
     quarantine = QuarantineWriter(args.quarantine) if args.quarantine else None
     report = RunReport()
     report.set_artifact("mode", mode_spec.name)
-    create = _resolve_bool(getattr(args, "create", None), mode_spec.stage_defaults.get("create", True)) and not bool(args.dry_run)
-    load = _resolve_bool(getattr(args, "load", None), mode_spec.stage_defaults.get("load", True)) and not bool(args.dry_run)
-    index = _resolve_bool(getattr(args, "index", None), mode_spec.stage_defaults.get("index", True)) and not bool(args.dry_run)
-    optimize = _resolve_bool(getattr(args, "optimize", None), mode_spec.stage_defaults.get("optimize", True)) and not bool(args.dry_run)
 
     res = run_tabular_pipeline(
         data_config,
@@ -246,6 +279,18 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     if getattr(args, "json_streaming_load", None) is not None:
         data_config["json_streaming_load"] = bool(args.json_streaming_load)
 
+    create = _resolve_bool(getattr(args, "create", None), mode_spec.stage_defaults.get("create", True)) and not bool(args.dry_run)
+    load = _resolve_bool(getattr(args, "load", None), mode_spec.stage_defaults.get("load", True)) and not bool(args.dry_run)
+    index = _resolve_bool(getattr(args, "index", None), mode_spec.stage_defaults.get("index", True)) and not bool(args.dry_run)
+    optimize = _resolve_bool(getattr(args, "optimize", None), mode_spec.stage_defaults.get("optimize", True)) and not bool(args.dry_run)
+
+    _ensure_optional_deps("json run", ["numpy", "pandas", "tqdm", "orjson", "xmltodict"], extras=["json"])
+    if create or load or index or optimize:
+        db_mods = ["pymysql"]
+        if load:
+            db_mods.append("sqlalchemy")
+        _ensure_optional_deps("json DB stages", db_mods, extras=["db"])
+
     from .pipeline import run_json_pipeline
     from .quarantine import QuarantineWriter
     from .report import RunReport
@@ -254,10 +299,6 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     report = RunReport()
 
     report.set_artifact("mode", mode_spec.name)
-    create = _resolve_bool(getattr(args, "create", None), mode_spec.stage_defaults.get("create", True)) and not bool(args.dry_run)
-    load = _resolve_bool(getattr(args, "load", None), mode_spec.stage_defaults.get("load", True)) and not bool(args.dry_run)
-    index = _resolve_bool(getattr(args, "index", None), mode_spec.stage_defaults.get("index", True)) and not bool(args.dry_run)
-    optimize = _resolve_bool(getattr(args, "optimize", None), mode_spec.stage_defaults.get("optimize", True)) and not bool(args.dry_run)
 
     res = run_json_pipeline(
         data_config,
@@ -660,7 +701,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
-    return int(args.func(args))
+    try:
+        return int(args.func(args))
+    except MissingDependencyError as e:
+        print(f"error: {e}", file=sys.stderr)
+        return 2
 
 
 if __name__ == "__main__":

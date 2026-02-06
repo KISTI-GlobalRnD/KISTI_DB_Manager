@@ -8,15 +8,20 @@ version = "0.7.0"
 description = "MariaDB/MySQL handling + robust JSON/XML flattening utilities"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = [
+dependencies = []
+
+[project.optional-dependencies]
+tabular = [
+  "numpy>=1.23",
+  "pandas>=1.5",
+]
+json = [
   "numpy>=1.23",
   "pandas>=1.5",
   "tqdm>=4.0",
   "orjson>=3.0",
   "xmltodict>=0.13",
 ]
-
-[project.optional-dependencies]
 db = [
   "pymysql>=1.0",
   "SQLAlchemy>=2.0",

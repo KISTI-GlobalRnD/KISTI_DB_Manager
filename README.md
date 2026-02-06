@@ -50,12 +50,21 @@ pip install -e .
 Optional extras:
 
 ```bash
+pip install -e ".[tabular]"
+pip install -e ".[json]"
 pip install -e ".[db]"
 pip install -e ".[viz]"
 pip install -e ".[review]"
-pip install -e ".[db,viz]"
-pip install -e ".[db,review]"
+pip install -e ".[json,db]"
+pip install -e ".[json,db,viz,review]"
 ```
+
+Recommended:
+- Ingest only (tabular): `pip install -e ".[tabular,db]"`
+- Ingest only (json/xml): `pip install -e ".[json,db]"`
+- Full review/visualization: `pip install -e ".[json,db,viz,review]"`
+
+If an extra is missing, CLI prints an install hint instead of a traceback.
 
 ## CLI
 

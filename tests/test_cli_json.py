@@ -35,7 +35,7 @@ class TestCLIJson(unittest.TestCase):
             with patch(
                 "KISTI_DB_Manager.pipeline.run_json_pipeline",
                 return_value=JsonRunResult(name_maps={}, report=fake_report),
-            ):
+            ), patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = main(["json", "run", "--config", cfg_path, "--report", report_path])

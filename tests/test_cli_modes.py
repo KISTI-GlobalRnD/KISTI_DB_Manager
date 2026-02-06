@@ -31,7 +31,7 @@ class TestCLIModes(unittest.TestCase):
             with patch(
                 "KISTI_DB_Manager.pipeline.run_json_pipeline",
                 return_value=JsonRunResult(name_maps={}, report=fake_report),
-            ) as mock_run:
+            ) as mock_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = main(["json", "run", "--config", cfg_path, "--mode", "ingest-fast", "--report", report_path])
@@ -63,7 +63,7 @@ class TestCLIModes(unittest.TestCase):
             with patch(
                 "KISTI_DB_Manager.pipeline.run_json_pipeline",
                 return_value=JsonRunResult(name_maps={}, report=fake_report),
-            ) as mock_run:
+            ) as mock_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = main(
@@ -104,7 +104,7 @@ class TestCLIModes(unittest.TestCase):
             with patch(
                 "KISTI_DB_Manager.pipeline.run_tabular_pipeline",
                 return_value=TabularRunResult(name_map=None, report=fake_report),
-            ) as mock_run:
+            ) as mock_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
                 buf = io.StringIO()
                 with redirect_stdout(buf):
                     rc = main(["tabular", "run", "--config", cfg_path, "--mode", "finalize", "--report", report_path])

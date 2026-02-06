@@ -10,6 +10,24 @@
 - 목표는 **1-pass(1 loop look)** 에 가깝게 “최소 비용으로 스키마를 결정/적재”하고, **전체 작업이 중단되지 않게** 하는 것
 - 대용량(수십~100GB+ 압축 JSON/XML) 기준으로 **속도가 최우선**
 
+## 설치 (extras 권장)
+
+기본 설치(`pip install -e .`)는 경량 명령(`version`, `modes`, `report`, `quarantine` 등) 중심입니다.
+실제 적재/리뷰 작업은 목적별 extras 설치를 권장합니다.
+
+```bash
+# Tabular ingest
+pip install -e ".[tabular,db]"
+
+# JSON/XML ingest
+pip install -e ".[json,db]"
+
+# 리뷰/시각화까지 포함
+pip install -e ".[json,db,viz,review]"
+```
+
+누락된 의존성이 있으면 CLI가 traceback 대신 설치 명령을 안내합니다.
+
 ## 빠르게 시작하기 (추천 워크플로우)
 
 ```bash
