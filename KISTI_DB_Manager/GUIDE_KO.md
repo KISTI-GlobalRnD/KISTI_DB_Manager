@@ -118,6 +118,16 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
   - `chunk_size=1000` → `LOAD DATA` 420회로 느려짐
   - `chunk_size>=5000`부터 거의 포화(병목은 DB ingest/commit 쪽)
 
+### 다중 입력 (`file_names` / `file_glob` / `json_file_names`)
+
+- 사전 병합 없이 여러 JSON 조각 파일을 순차 ingest 가능
+  - `file_names`: 명시 목록 입력
+  - `file_glob`: 패턴 매칭 입력 (예: `**/*.jsonl`)
+- ZIP 입력에서 내부 멤버를 여러 개 지정 가능
+  - `json_file_names`: ZIP 내부 JSON/JSONL 멤버 목록
+- 입력 우선순위:
+  - `file_names`/`input_paths` → `file_glob` → `file_name`
+
 ### `fast_load_session` (속도↑ / 내구성↓ 가능)
 
 - `ingest-fast*` 모드는 기본적으로 DB 세션 변수 튜닝을 “best-effort”로 시도함

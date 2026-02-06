@@ -7,6 +7,7 @@
 ## Done
 - Type widening on insert failures (tabular/json): widen/add column and retry
 - `run_json_pipeline()` (json/jsonl/gz/zip) with per-record quarantine + RunReport stats
+- Multi-input JSON ingest: `file_names`/`file_glob` + ZIP multi-member (`json_file_names`) support
 - Schema drift handling: `ALTER TABLE ADD COLUMN` best-effort during load
 - CLI parity: `json run --dry-run/--print-ddl` (+ NameMap artifacts)
 

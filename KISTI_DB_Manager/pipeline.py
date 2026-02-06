@@ -99,14 +99,20 @@ def _iter_json_records(
     max_records: int | None = None,
 ):
     """
-    Yield JSON records from a file described by data_config.
+    Yield JSON records from one or more inputs described by data_config.
 
     Supports:
     - jsonl/ndjson
     - json (single object or array; optionally records_key within a dict)
     - gz (jsonl by default; json if records_key is used and file contains a JSON object/array)
-    - zip (requires json_file_name, or auto-picks the first .jsonl/.ndjson/.json member)
+    - zip (json member(s) by name, or auto-pick all .jsonl/.ndjson/.json members)
+
+    Input selection priority:
+    1) file_names / input_paths (list)
+    2) file_glob / file_patterns
+    3) file_name (single, backward compatible)
     """
+    import glob
     from pathlib import Path
 
     from .config import join_path
@@ -114,14 +120,85 @@ def _iter_json_records(
     loads = _json_loads_factory()
 
     dc = coerce_data_config(data_config)
-    path = Path(join_path(dc.get("PATH", ""), dc.get("file_name", "")))
-    file_type = str(dc.get("file_type") or "").lower() or path.suffix.lstrip(".").lower()
-
+    base_path = Path(str(dc.get("PATH", "") or ""))
+    configured_file_type = str(dc.get("file_type") or "").strip().lower()
     records_key = dc.get("records_key") or dc.get("json_records_key")
-    json_file_name = dc.get("json_file_name") or dc.get("inner_file_name")
+    json_member_value = dc.get("json_file_names")
+    if json_member_value is None:
+        json_member_value = dc.get("json_file_name")
+    if json_member_value is None:
+        json_member_value = dc.get("inner_file_name")
 
     max_records = int(max_records) if max_records is not None and int(max_records) > 0 else None
     yielded = 0
+
+    def _as_string_list(value: Any) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, (str, Path)):
+            s = str(value).strip()
+            return [s] if s else []
+        if isinstance(value, (list, tuple, set)):
+            out: list[str] = []
+            for item in value:
+                if item is None:
+                    continue
+                s = str(item).strip()
+                if s:
+                    out.append(s)
+            return out
+        s = str(value).strip()
+        return [s] if s else []
+
+    def _resolve_path(value: str) -> Path:
+        p = Path(str(value))
+        if p.is_absolute():
+            return p
+        return Path(join_path(base_path, str(p)))
+
+    source_specs: list[tuple[str, Path]] = []
+    for value in _as_string_list(dc.get("file_names") or dc.get("input_paths")):
+        source_specs.append(("file_names", _resolve_path(value)))
+
+    glob_values = _as_string_list(dc.get("file_glob") or dc.get("file_patterns") or dc.get("file_pattern"))
+    for pattern in glob_values:
+        pattern_path = Path(pattern)
+        if pattern_path.is_absolute():
+            pattern_abs = pattern
+        else:
+            pattern_abs = str(base_path / pattern)
+        matches = sorted(Path(x) for x in glob.glob(pattern_abs, recursive=True))
+        if not matches and report is not None:
+            try:
+                report.warn(stage="iter_json_records", message="No files matched file_glob pattern", pattern=pattern)
+            except Exception:
+                pass
+        for m in matches:
+            source_specs.append((f"file_glob:{pattern}", m))
+
+    if not source_specs:
+        file_name = str(dc.get("file_name") or "").strip()
+        if not file_name:
+            raise ValueError("JSON pipeline input is missing. Set one of: file_name, file_names, file_glob")
+        source_specs.append(("file_name", _resolve_path(file_name)))
+
+    deduped_sources: list[tuple[str, Path]] = []
+    seen_sources: set[str] = set()
+    for origin, path in source_specs:
+        key = str(path)
+        if key in seen_sources:
+            continue
+        seen_sources.add(key)
+        deduped_sources.append((origin, path))
+
+    if not deduped_sources:
+        raise FileNotFoundError("No input files found from file_names/file_glob configuration")
+
+    for origin, path in deduped_sources:
+        if not path.exists():
+            raise FileNotFoundError(f"Input file not found ({origin}): {path}")
+        if not path.is_file():
+            raise FileNotFoundError(f"Input path is not a file ({origin}): {path}")
 
     def _bump_bytes(n: int) -> None:
         if report is None:
@@ -171,7 +248,7 @@ def _iter_json_records(
             return
         yield obj
 
-    def iter_jsonl_fileobj(f):
+    def iter_jsonl_fileobj(f, *, source_label: str):
         import time
 
         for raw in f:
@@ -190,102 +267,137 @@ def _iter_json_records(
                 _add_parse_time(time.perf_counter() - t0)
             except Exception as e:
                 if report:
-                    report.exception(stage="iter_json_records", message="Failed to parse JSONL line", exc=e)
+                    report.exception(
+                        stage="iter_json_records",
+                        message="Failed to parse JSONL line",
+                        exc=e,
+                        source=source_label,
+                    )
                 continue
 
             if not _can_yield_one():
                 return
             yield obj
 
-    if file_type in {"jsonl", "ndjson", "jsonlines"}:
-        with open(path, "rb") as f:
-            yield from iter_jsonl_fileobj(f)
-        return
-
-    if file_type == "json":
+    def iter_one_source(path: Path, *, source_label: str):
         import time
 
-        with open(path, "rb") as f:
-            t0 = time.perf_counter()
-            raw = f.read()
-            _add_read_time(time.perf_counter() - t0)
-            _bump_bytes(len(raw))
-            t1 = time.perf_counter()
-            obj = loads(raw)
-            _add_parse_time(time.perf_counter() - t1)
-        yield from emit(obj)
-        return
+        file_type = configured_file_type or path.suffix.lstrip(".").lower()
 
-    if file_type == "gz":
-        import gzip
-        import time
+        if file_type in {"jsonl", "ndjson", "jsonlines"}:
+            with open(path, "rb") as f:
+                yield from iter_jsonl_fileobj(f, source_label=source_label)
+            return
 
-        with gzip.open(path, "rb") as f:
-            if records_key:
-                # Try parsing full JSON (dict/array). If it fails, fall back to JSONL.
-                try:
-                    t0 = time.perf_counter()
-                    raw = f.read()
-                    _add_read_time(time.perf_counter() - t0)
-                    _bump_bytes(len(raw))
-                    t1 = time.perf_counter()
-                    obj = loads(raw)
-                    _add_parse_time(time.perf_counter() - t1)
-                except Exception:
-                    f.seek(0)
-                    yield from iter_jsonl_fileobj(f)
-                else:
-                    yield from emit(obj)
-            else:
-                yield from iter_jsonl_fileobj(f)
-        return
+        if file_type == "json":
+            with open(path, "rb") as f:
+                t0 = time.perf_counter()
+                raw = f.read()
+                _add_read_time(time.perf_counter() - t0)
+                _bump_bytes(len(raw))
+                t1 = time.perf_counter()
+                obj = loads(raw)
+                _add_parse_time(time.perf_counter() - t1)
+            yield from emit(obj)
+            return
 
-    if file_type == "zip":
-        import io
-        import time
-        import zipfile
+        if file_type == "gz":
+            import gzip
 
-        with zipfile.ZipFile(path, "r") as zf:
-            member = json_file_name
-            if not member:
-                names = zf.namelist()
-                preferred = [n for n in names if n.lower().endswith((".jsonl", ".ndjson"))]
-                if not preferred:
-                    preferred = [n for n in names if n.lower().endswith(".json")]
-                member = preferred[0] if preferred else None
-
-            if not member:
-                raise FileNotFoundError("No JSON/JSONL file found in ZIP (set data_config.json_file_name)")
-
-            with zf.open(member, "r") as fp:
-                suffix = Path(member).suffix.lower()
-                if suffix in {".jsonl", ".ndjson"}:
-                    yield from iter_jsonl_fileobj(fp)
-                else:
-                    t0 = time.perf_counter()
-                    raw = fp.read()
-                    _add_read_time(time.perf_counter() - t0)
-                    _bump_bytes(len(raw))
-                    if not raw:
-                        return
-                    if records_key:
+            with gzip.open(path, "rb") as f:
+                if records_key:
+                    # Try parsing full JSON (dict/array). If it fails, fall back to JSONL.
+                    try:
+                        t0 = time.perf_counter()
+                        raw = f.read()
+                        _add_read_time(time.perf_counter() - t0)
+                        _bump_bytes(len(raw))
                         t1 = time.perf_counter()
                         obj = loads(raw)
                         _add_parse_time(time.perf_counter() - t1)
-                        yield from emit(obj)
+                    except Exception:
+                        f.seek(0)
+                        yield from iter_jsonl_fileobj(f, source_label=source_label)
                     else:
-                        # Heuristic: if it looks like JSON array/object, parse once; otherwise treat as JSONL.
-                        head = raw.lstrip()[:1]
-                        if head in (b"{", b"["):
+                        yield from emit(obj)
+                else:
+                    yield from iter_jsonl_fileobj(f, source_label=source_label)
+            return
+
+        if file_type == "zip":
+            import io
+            import zipfile
+
+            with zipfile.ZipFile(path, "r") as zf:
+                names = [n for n in zf.namelist() if not str(n).endswith("/")]
+
+                requested_members = _as_string_list(json_member_value)
+                if requested_members:
+                    members = [m for m in requested_members if m in names]
+                    missing = [m for m in requested_members if m not in names]
+                    for m in missing:
+                        if report is not None:
+                            try:
+                                report.warn(
+                                    stage="iter_json_records",
+                                    message="Requested ZIP member was not found",
+                                    source=source_label,
+                                    zip_member=m,
+                                )
+                            except Exception:
+                                pass
+                    if not members:
+                        raise FileNotFoundError(
+                            f"No requested JSON/JSONL member found in ZIP: {path} (requested={requested_members})"
+                        )
+                else:
+                    members = [n for n in names if n.lower().endswith((".jsonl", ".ndjson", ".json"))]
+                    members.sort()
+                    if not members:
+                        raise FileNotFoundError(
+                            "No JSON/JSONL file found in ZIP "
+                            f"(source={path}; set data_config.json_file_name/json_file_names)"
+                        )
+
+                for member in members:
+                    if max_records is not None and yielded >= max_records:
+                        return
+                    with zf.open(member, "r") as fp:
+                        member_label = f"{source_label}::{member}"
+                        suffix = Path(member).suffix.lower()
+                        if suffix in {".jsonl", ".ndjson"}:
+                            yield from iter_jsonl_fileobj(fp, source_label=member_label)
+                            continue
+
+                        t0 = time.perf_counter()
+                        raw = fp.read()
+                        _add_read_time(time.perf_counter() - t0)
+                        _bump_bytes(len(raw))
+                        if not raw:
+                            continue
+                        if records_key:
                             t1 = time.perf_counter()
                             obj = loads(raw)
                             _add_parse_time(time.perf_counter() - t1)
                             yield from emit(obj)
                         else:
-                            yield from iter_jsonl_fileobj(io.BytesIO(raw))
-        return
+                            # Heuristic: if it looks like JSON array/object, parse once; otherwise treat as JSONL.
+                            head = raw.lstrip()[:1]
+                            if head in (b"{", b"["):
+                                t1 = time.perf_counter()
+                                obj = loads(raw)
+                                _add_parse_time(time.perf_counter() - t1)
+                                yield from emit(obj)
+                            else:
+                                yield from iter_jsonl_fileobj(io.BytesIO(raw), source_label=member_label)
+            return
 
-    raise ValueError(f"Unsupported file_type={file_type!r} for JSON pipeline")
+        raise ValueError(f"Unsupported file_type={file_type!r} for JSON pipeline (source={path})")
+
+    for _origin, _path in deduped_sources:
+        if max_records is not None and yielded >= max_records:
+            break
+        yield from iter_one_source(_path, source_label=str(_path))
 
 
 def run_tabular_pipeline(

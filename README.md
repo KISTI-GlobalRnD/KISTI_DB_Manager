@@ -92,6 +92,45 @@ kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-f
 Korean ops guide (decision rules + checklist):
 - `KISTI_DB_Manager/GUIDE_KO.md`
 
+### JSON Multi-Input Config
+
+`json run` can read from multiple files without a pre-merge step.
+
+```json
+{
+  "data_config": {
+    "PATH": "path/to/input_dir",
+    "table_name": "kisti_json_base",
+    "file_names": ["part-0001.jsonl", "part-0002.jsonl"]
+  }
+}
+```
+
+Glob input is also supported:
+
+```json
+{
+  "data_config": {
+    "PATH": "path/to/input_dir",
+    "table_name": "kisti_json_base",
+    "file_glob": "**/*.jsonl"
+  }
+}
+```
+
+For ZIP sources, multiple members can be selected with `json_file_names`:
+
+```json
+{
+  "data_config": {
+    "PATH": "path/to/input_dir",
+    "file_name": "bundle.zip",
+    "file_type": "zip",
+    "json_file_names": ["part-a.jsonl", "part-b.json"]
+  }
+}
+```
+
 ## Python API (v1-style usage)
 
 Most v1-style notebooks can keep the same import:
