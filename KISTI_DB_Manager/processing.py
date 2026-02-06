@@ -556,6 +556,7 @@ def extract_rows_from_jsons(
     report=None,
     quarantine=None,
     index_offset: int = 0,
+    record_contexts=None,
     parallel_workers: int | None = None,
 ):
     """
@@ -582,7 +583,47 @@ def extract_rows_from_jsons(
     sub_rows_tot: dict[str, list[dict]] = {}
     excepted_tot = {key: [] for key in except_keys}
 
-    def _handle_record_ok(row, sub_rows, excepted):
+    def _json_dumps_best_effort(value):
+        try:
+            import orjson
+
+            return orjson.dumps(value).decode("utf-8")
+        except Exception:
+            import json
+
+            try:
+                return json.dumps(value, ensure_ascii=False)
+            except Exception:
+                return json.dumps(str(value), ensure_ascii=False)
+
+    def _build_excepted_row(path: str, value, row: dict, context) -> dict:
+        out: dict = {}
+        if isinstance(value, dict):
+            out.update(value)
+        else:
+            out["value"] = value
+
+        out[index_key] = row.get(index_key)
+        out["__except_path__"] = str(path)
+        out["__except_raw_type__"] = type(value).__name__
+        out["__except_raw_json__"] = _json_dumps_best_effort(value)
+
+        if isinstance(context, dict):
+            source_path = context.get("source_path")
+            if source_path is not None:
+                out["__source_path__"] = source_path
+            source_member = context.get("source_member")
+            if source_member is not None:
+                out["__source_member__"] = source_member
+            line_no = context.get("line_no")
+            if line_no is not None:
+                out["__line_no__"] = line_no
+            record_index = context.get("record_index")
+            if record_index is not None:
+                out["__record_index__"] = record_index
+        return out
+
+    def _handle_record_ok(row, sub_rows, excepted, *, record_context=None):
         if report:
             report.bump("records_ok", 1)
         rows_main.append(row)
@@ -594,8 +635,10 @@ def extract_rows_from_jsons(
 
         for key in except_keys:
             try:
-                if key in excepted and excepted[key]:
-                    excepted_tot.setdefault(key, []).append(excepted[key])
+                if key in excepted:
+                    excepted_tot.setdefault(key, []).append(
+                        _build_excepted_row(str(key), excepted[key], row, record_context)
+                    )
             except Exception as e:
                 if report:
                     report.exception(
@@ -648,11 +691,15 @@ def extract_rows_from_jsons(
                 for out in ex.map(_safe_flatten_nested_json_with_list_rows_worker, args_iter, chunksize=chunksize):
                     processed += 1
                     idx, ok, row, sub_rows, excepted, err = out
+                    local_i = processed - 1
+                    context = None
+                    if isinstance(record_contexts, (list, tuple)) and local_i < len(record_contexts):
+                        maybe_ctx = record_contexts[local_i]
+                        if isinstance(maybe_ctx, dict):
+                            context = maybe_ctx
                     if ok:
-                        _handle_record_ok(row, sub_rows, excepted)
+                        _handle_record_ok(row, sub_rows, excepted, record_context=context)
                     else:
-                        # Map failure to original record (by processed-1)
-                        local_i = processed - 1
                         try:
                             rec = jsons[local_i]
                         except Exception:
@@ -684,7 +731,12 @@ def extract_rows_from_jsons(
                 except Exception as e2:
                     _handle_record_fail(index_offset + i, _json, {"type": type(e2).__name__, "message": str(e2)})
                     continue
-                _handle_record_ok(row, sub_rows, excepted)
+                context = None
+                if isinstance(record_contexts, (list, tuple)) and i < len(record_contexts):
+                    maybe_ctx = record_contexts[i]
+                    if isinstance(maybe_ctx, dict):
+                        context = maybe_ctx
+                _handle_record_ok(row, sub_rows, excepted, record_context=context)
         return rows_main, sub_rows_tot, excepted_tot
 
     # Sequential path
@@ -700,7 +752,12 @@ def extract_rows_from_jsons(
         except Exception as e:
             _handle_record_fail(index_offset + i, _json, {"type": type(e).__name__, "message": str(e)})
             continue
-        _handle_record_ok(row, sub_rows, excepted)
+        context = None
+        if isinstance(record_contexts, (list, tuple)) and i < len(record_contexts):
+            maybe_ctx = record_contexts[i]
+            if isinstance(maybe_ctx, dict):
+                context = maybe_ctx
+        _handle_record_ok(row, sub_rows, excepted, record_context=context)
 
     return rows_main, sub_rows_tot, excepted_tot
 
@@ -714,6 +771,7 @@ def extract_data_from_jsons(
     quarantine=None,
     *,
     index_offset: int = 0,
+    record_contexts=None,
     parallel_workers: int | None = None,
 ):
     """
@@ -789,6 +847,7 @@ def extract_data_from_jsons(
         report=report,
         quarantine=quarantine,
         index_offset=index_offset,
+        record_contexts=record_contexts,
         parallel_workers=parallel_workers,
     )
     

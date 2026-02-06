@@ -70,6 +70,22 @@ class TestIterJsonRecords(unittest.TestCase):
             got = list(_iter_json_records(data_config))
             self.assertEqual([it["id"] for it in got], [2, 3])
 
+    def test_iter_json_records_with_context(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "a.jsonl").write_text('{"id":1}\n{"id":2}\n', encoding="utf-8")
+
+            data_config = {
+                "PATH": str(root),
+                "file_name": "a.jsonl",
+                "file_type": "jsonl",
+            }
+            got = list(_iter_json_records(data_config, with_context=True))
+            self.assertEqual(len(got), 2)
+            self.assertEqual(got[0][0]["id"], 1)
+            self.assertEqual(got[0][1]["line_no"], 1)
+            self.assertTrue(str(got[0][1]["source_path"]).endswith("a.jsonl"))
+
 
 if __name__ == "__main__":
     unittest.main()

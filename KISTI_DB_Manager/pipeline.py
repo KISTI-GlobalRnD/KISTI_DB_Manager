@@ -97,6 +97,7 @@ def _iter_json_records(
     *,
     report: RunReport | None = None,
     max_records: int | None = None,
+    with_context: bool = False,
 ):
     """
     Yield JSON records from one or more inputs described by data_config.
@@ -231,27 +232,34 @@ def _iter_json_records(
         yielded += 1
         return True
 
-    def emit(obj):
+    def _record_output(record: Any, context: Mapping[str, Any] | None):
+        if with_context:
+            return record, dict(context or {})
+        return record
+
+    def emit(obj, *, context: Mapping[str, Any] | None = None):
         if isinstance(obj, list):
             for item in obj:
                 if not _can_yield_one():
                     return
-                yield item
+                yield _record_output(item, context)
             return
         if isinstance(obj, dict) and records_key and isinstance(obj.get(records_key), list):
             for item in obj.get(records_key) or []:
                 if not _can_yield_one():
                     return
-                yield item
+                yield _record_output(item, context)
             return
         if not _can_yield_one():
             return
-        yield obj
+        yield _record_output(obj, context)
 
-    def iter_jsonl_fileobj(f, *, source_label: str):
+    def iter_jsonl_fileobj(f, *, source_label: str, source_member: str | None = None):
         import time
 
+        line_no = 0
         for raw in f:
+            line_no += 1
             if max_records is not None and yielded >= max_records:
                 return
             line = raw.strip()
@@ -277,7 +285,10 @@ def _iter_json_records(
 
             if not _can_yield_one():
                 return
-            yield obj
+            context: dict[str, Any] = {"source_path": source_label, "line_no": int(line_no)}
+            if source_member:
+                context["source_member"] = str(source_member)
+            yield _record_output(obj, context)
 
     def iter_one_source(path: Path, *, source_label: str):
         import time
@@ -298,7 +309,7 @@ def _iter_json_records(
                 t1 = time.perf_counter()
                 obj = loads(raw)
                 _add_parse_time(time.perf_counter() - t1)
-            yield from emit(obj)
+            yield from emit(obj, context={"source_path": source_label})
             return
 
         if file_type == "gz":
@@ -319,7 +330,7 @@ def _iter_json_records(
                         f.seek(0)
                         yield from iter_jsonl_fileobj(f, source_label=source_label)
                     else:
-                        yield from emit(obj)
+                        yield from emit(obj, context={"source_path": source_label})
                 else:
                     yield from iter_jsonl_fileobj(f, source_label=source_label)
             return
@@ -366,7 +377,9 @@ def _iter_json_records(
                         member_label = f"{source_label}::{member}"
                         suffix = Path(member).suffix.lower()
                         if suffix in {".jsonl", ".ndjson"}:
-                            yield from iter_jsonl_fileobj(fp, source_label=member_label)
+                            yield from iter_jsonl_fileobj(
+                                fp, source_label=source_label, source_member=str(member)
+                            )
                             continue
 
                         t0 = time.perf_counter()
@@ -379,7 +392,10 @@ def _iter_json_records(
                             t1 = time.perf_counter()
                             obj = loads(raw)
                             _add_parse_time(time.perf_counter() - t1)
-                            yield from emit(obj)
+                            yield from emit(
+                                obj,
+                                context={"source_path": source_label, "source_member": str(member)},
+                            )
                         else:
                             # Heuristic: if it looks like JSON array/object, parse once; otherwise treat as JSONL.
                             head = raw.lstrip()[:1]
@@ -387,9 +403,16 @@ def _iter_json_records(
                                 t1 = time.perf_counter()
                                 obj = loads(raw)
                                 _add_parse_time(time.perf_counter() - t1)
-                                yield from emit(obj)
+                                yield from emit(
+                                    obj,
+                                    context={"source_path": source_label, "source_member": str(member)},
+                                )
                             else:
-                                yield from iter_jsonl_fileobj(io.BytesIO(raw), source_label=member_label)
+                                yield from iter_jsonl_fileobj(
+                                    io.BytesIO(raw),
+                                    source_label=source_label,
+                                    source_member=str(member),
+                                )
             return
 
         raise ValueError(f"Unsupported file_type={file_type!r} for JSON pipeline (source={path})")
@@ -848,6 +871,7 @@ def run_json_pipeline(
     try:
         with quarantine_cm as q:
             batch: list[dict] = []
+            batch_contexts: list[dict[str, Any]] = []
 
             import inspect
 
@@ -873,7 +897,12 @@ def run_json_pipeline(
 
             global_index = 0
 
-            def flush_batch(batch_records: list[dict], *, index_offset: int) -> None:
+            def flush_batch(
+                batch_records: list[dict],
+                *,
+                index_offset: int,
+                record_contexts: list[dict[str, Any]] | None = None,
+            ) -> None:
                 if not batch_records:
                     return
 
@@ -914,6 +943,7 @@ def run_json_pipeline(
                                     report=report,
                                     quarantine=q,
                                     index_offset=int(index_offset),
+                                    record_contexts=record_contexts,
                                     parallel_workers=int(parallel_workers) if parallel_workers and parallel_workers > 1 else None,
                                 )
                         except Exception as e:
@@ -1021,6 +1051,8 @@ def run_json_pipeline(
                     }
                     if "index_offset" in extract_params:
                         extract_kwargs["index_offset"] = int(index_offset)
+                    if record_contexts is not None and "record_contexts" in extract_params:
+                        extract_kwargs["record_contexts"] = list(record_contexts)
                     if parallel_workers and parallel_workers > 1 and "parallel_workers" in extract_params:
                         extract_kwargs["parallel_workers"] = int(parallel_workers)
 
@@ -1131,21 +1163,31 @@ def run_json_pipeline(
                                 pass
 
             batch_index_offset = 0
-            for record in _iter_json_records(dc, report=report, max_records=max_records):
+            for rec_out in _iter_json_records(dc, report=report, max_records=max_records, with_context=True):
                 report.bump("records_read", 1)
+                rec_ctx: dict[str, Any] = {}
+                if isinstance(rec_out, tuple) and len(rec_out) == 2:
+                    record, ctx = rec_out
+                    if isinstance(ctx, Mapping):
+                        rec_ctx = dict(ctx)
+                else:
+                    record = rec_out
                 if not isinstance(record, dict):
                     report.warn(stage="json_pipeline", message="Non-dict JSON record encountered; skipping", dtype=type(record).__name__)
                     continue
+                rec_ctx.setdefault("record_index", int(global_index))
                 if not batch:
                     batch_index_offset = global_index
                 batch.append(record)
+                batch_contexts.append(rec_ctx)
                 global_index += 1
                 if len(batch) >= chunk_size:
-                    flush_batch(batch, index_offset=batch_index_offset)
+                    flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
                     batch = []
+                    batch_contexts = []
 
             if batch:
-                flush_batch(batch, index_offset=batch_index_offset)
+                flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
 
             # Post steps: indexes + optimize
             if index:

@@ -56,7 +56,7 @@ class TestJsonPipeline(unittest.TestCase):
         }
         db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
-        def fake_iter_records(_dc, report=None, max_records=None):
+        def fake_iter_records(_dc, report=None, max_records=None, with_context=False):
             yield {"id": 1}
             yield {"id": 2}
             yield {"id": 3}

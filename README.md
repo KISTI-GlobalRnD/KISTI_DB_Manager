@@ -25,6 +25,7 @@ Starting from **0.7.0**, this repository keeps a single implementation:
   - New columns: best-effort `ALTER TABLE ADD COLUMN`
   - Insert failures: best-effort widen/add failing column (default `LONGTEXT`) and retry
   - Optional **schema freeze**: keep base schema stable and store unknown fields into `__extra__`
+  - Excepted branches: preserve raw payload in excepted tables (`__except_raw_json__`, `__except_path__`, source context columns)
 - **Performance**
   - `LOAD DATA LOCAL INFILE` fast path for bulk ingest (tabular + JSON streaming rows)
   - Chunk/batch controls, parallel JSON flattening, and stage timings/throughput in `RunReport`

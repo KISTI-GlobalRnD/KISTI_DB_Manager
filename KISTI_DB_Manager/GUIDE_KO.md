@@ -140,6 +140,12 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 - 스키마가 계속 바뀌는 데이터에서 “ALTER 반복” 병목을 피하기 위한 전략
 - 테이블에 없는 필드는 지정한 extra 컬럼에 JSON 문자열로 보존
 
+### `except_keys` (원본 보존 강화)
+
+- excepted 테이블에는 제외 브랜치 원문과 컨텍스트를 함께 저장
+  - `__except_raw_json__`, `__except_path__`, `__except_raw_type__`
+  - 가능하면 소스 추적 컬럼(`__source_path__`, `__source_member__`, `__line_no__`, `__record_index__`)
+
 ## 추가 팁 (대용량/운영)
 
 - ingest 단계에서는 `index/optimize`를 분리(`--mode ingest-fast` → `--mode finalize`)
