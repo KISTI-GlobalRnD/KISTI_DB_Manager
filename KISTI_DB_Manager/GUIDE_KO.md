@@ -135,6 +135,8 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 - 속도가 기대보다 느릴 때:
   - `chunk_size`가 너무 작으면 `LOAD DATA` 호출/커밋 횟수 증가로 느려질 수 있음
   - 드리프트가 심한데 evolve(ALTER 허용)로 돌리면 `ALTER TABLE`이 병목이 될 수 있음 → `freeze` 고려
+  - `parallel_workers`는 **flatten(CPU)** 단계에만 영향(=DB load가 병목이면 거의 효과 없음)
+    - `kisti-db-manager report profile run_report.json`로 `json.flatten` vs `json.db.load` 비중을 먼저 확인 권장
 
 ## 중요한 옵션(요약)
 
@@ -161,6 +163,8 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
   - 예: `unique_checks=0`, `foreign_key_checks=0`, `innodb_flush_log_at_trx_commit=2`, `sql_log_bin=0`
 - 서버 권한/정책에 따라 실패할 수 있으며, 실패해도 작업은 계속 진행됨
 - 속도/리스크 트레이드오프이므로 필요 시 `--no-fast-load-session`으로 끌 수 있음
+- 참고: MariaDB에서는 일부 변수(예: `innodb_flush_log_at_trx_commit`)가 **GLOBAL-only**일 수 있음
+  - 이 경우 `fast_load_session`에서 해당 설정이 경고로 기록될 수 있으며, 실제로 적용하려면 서버/권한 범위에서 `SET GLOBAL ...` 또는 서버 시작 옵션으로 설정해야 함
 
 ### `schema_mode=freeze` + `extra_column_name`
 
