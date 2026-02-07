@@ -62,6 +62,15 @@ __all__ = [
     "FastLoadState",
 ]
 
+_LOAD_DATA_ESCAPE_TRANSLATE = {
+    ord("\\"): "\\\\",
+    ord("\t"): "\\t",
+    ord("\n"): "\\n",
+    ord("\r"): "\\r",
+    0: "\\0",
+    26: "\\Z",  # Ctrl+Z (0x1a)
+}
+
 
 @dataclass
 class FastLoadState:
@@ -143,32 +152,32 @@ def _mysql_escape_load_data_value(value) -> str:
     except Exception:
         pass
 
-    try:
-        if math.isnan(value):
-            return r"\N"
-    except Exception:
-        pass
+    if isinstance(value, float) and math.isnan(value):
+        return r"\N"
 
     if isinstance(value, (dict, list)):
+        # Prefer orjson for speed if available.
         try:
-            value = json.dumps(value, ensure_ascii=False)
+            import orjson
+
+            value = orjson.dumps(value).decode("utf-8")
         except Exception:
-            value = str(value)
+            try:
+                value = json.dumps(value, ensure_ascii=False)
+            except Exception:
+                value = str(value)
     elif isinstance(value, (bytes, bytearray, memoryview)):
         try:
             value = bytes(value).decode("utf-8", errors="replace")
         except Exception:
             value = str(value)
+    elif isinstance(value, str):
+        pass
     else:
         value = str(value)
 
-    value = value.replace("\\", "\\\\")
-    value = value.replace("\t", "\\t")
-    value = value.replace("\n", "\\n")
-    value = value.replace("\r", "\\r")
-    value = value.replace("\0", "\\0")
-    value = value.replace("\x1a", "\\Z")  # Ctrl+Z
-    return value
+    # Single-pass escaping via translate (faster than repeated replace).
+    return value.translate(_LOAD_DATA_ESCAPE_TRANSLATE)
 
 
 def _is_nullish_value(value) -> bool:
@@ -239,8 +248,10 @@ def _load_data_local_infile_dataframe(
                 t0 = time.perf_counter()
             except Exception:
                 t0 = None
+            escape = _mysql_escape_load_data_value
+            write = f.write
             for row in df.itertuples(index=False, name=None):
-                f.write("\t".join(_mysql_escape_load_data_value(v) for v in row) + "\n")
+                write("\t".join(escape(v) for v in row) + "\n")
             if report is not None and t0 is not None:
                 try:
                     import time
@@ -339,10 +350,12 @@ def _load_data_local_infile_rows(
                 t0 = time.perf_counter()
             except Exception:
                 t0 = None
+            escape = _mysql_escape_load_data_value
+            cols = list(columns_original)
+            write = f.write
             for row in rows:
-                f.write(
-                    "\t".join(_mysql_escape_load_data_value(row.get(col)) for col in columns_original) + "\n"
-                )
+                row_get = row.get
+                write("\t".join(escape(row_get(col)) for col in cols) + "\n")
             if report is not None and t0 is not None:
                 try:
                     import time

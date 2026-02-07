@@ -10,7 +10,7 @@ mkdir -p "$OUT"
 python3 -c "import pandas, numpy, sqlalchemy, pymysql" >/dev/null 2>&1 || {
   echo "Missing deps. Install first (example):"
   echo "  python3 -m venv .venv && source .venv/bin/activate"
-  echo "  pip install -e \".[db]\""
+  echo "  pip install -e \".[json,db]\""
   exit 1
 }
 

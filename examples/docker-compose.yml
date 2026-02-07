@@ -31,6 +31,6 @@ services:
       [
         "bash",
         "-lc",
-        "python -m pip install -U pip setuptools wheel && pip install -e '.[db]' && mkdir -p examples/out && python -m KISTI_DB_Manager.cli tabular run --config examples/configs/tabular_config_docker.json --report examples/out/tabular_report.json --quarantine examples/out/tabular_quarantine.jsonl && python -m KISTI_DB_Manager.cli json run --config examples/configs/json_config_docker.json --report examples/out/json_report.json --quarantine examples/out/json_quarantine.jsonl"
+        "python -m pip install -U pip setuptools wheel && pip install -e '.[json,db]' && mkdir -p examples/out && python -m KISTI_DB_Manager.cli tabular run --config examples/configs/tabular_config_docker.json --report examples/out/tabular_report.json --quarantine examples/out/tabular_quarantine.jsonl && python -m KISTI_DB_Manager.cli json run --config examples/configs/json_config_docker.json --report examples/out/json_report.json --quarantine examples/out/json_quarantine.jsonl"
       ]
     restart: "no"

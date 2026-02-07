@@ -1,0 +1,19 @@
+{
+  "data_config": {
+    "PATH": "examples/data",
+    "file_name": "bench_20lists_20000.jsonl",
+    "file_type": "jsonl",
+    "table_name": "kisti_v2_json_20lists_bench",
+    "KEY_SEP": "__",
+    "index_key": "id",
+    "except_keys": []
+  },
+  "db_config": {
+    "host": "mariadb",
+    "user": "root",
+    "password": "rootpass",
+    "database": "kisti_smoke",
+    "port": 3306
+  }
+}
+
