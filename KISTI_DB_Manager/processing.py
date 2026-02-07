@@ -419,13 +419,80 @@ def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_ke
     if except_keys is None:
         except_keys = []
 
-    single, multiples, excepted = flatten_json_separate_lists(_json, except_keys=except_keys, sep=sep)
+    # Use a set for faster membership checks.
+    except_set = {str(k) for k in except_keys if str(k)}
+
+    def _flatten_dict_keep_lists(obj) -> dict:
+        """
+        Flatten nested dicts into `a__b__c` keys, but keep lists as values.
+
+        For list-of-dict values, flatten each dict in the list similarly (kept as a list value).
+        This matches the previous behavior where nested lists inside a list-item become a column.
+        """
+        out: dict = {}
+        stack: list[tuple[object, str]] = [(obj, "")]
+        while stack:
+            cur, prefix = stack.pop()
+            if isinstance(cur, dict):
+                for k, v in cur.items():
+                    ks = str(k)
+                    full_key = f"{prefix}{ks}" if prefix else ks
+                    # Preserve previous semantics: excepted keys inside list-items are dropped.
+                    if ks in except_set or full_key in except_set:
+                        continue
+                    if isinstance(v, dict):
+                        stack.append((v, full_key + sep))
+                        continue
+                    if isinstance(v, list):
+                        if v and isinstance(v[0], dict):
+                            out[full_key] = [_flatten_dict_keep_lists(it) for it in v if isinstance(it, dict)]
+                        else:
+                            out[full_key] = v
+                        continue
+                    out[full_key] = v
+                continue
+            key = prefix[: -len(sep)] if prefix.endswith(sep) else prefix
+            if key:
+                out[key] = cur
+        return out
+
+    single: dict = {}
+    excepted: dict = {}
+    lists_to_process: dict[str, list] = {}
+
+    # Iterative traversal (avoids recursion + repeated dict merges).
+    stack2: list[tuple[object, str]] = [(_json, "")]
+    while stack2:
+        cur, prefix = stack2.pop()
+        if isinstance(cur, dict):
+            for k, v in cur.items():
+                ks = str(k)
+                full_key = f"{prefix}{ks}" if prefix else ks
+                if ks in except_set or full_key in except_set:
+                    excepted[full_key] = v
+                    continue
+                if isinstance(v, dict):
+                    stack2.append((v, full_key + sep))
+                    continue
+                if isinstance(v, list):
+                    lists_to_process[full_key] = v
+                    continue
+                single[full_key] = v
+            continue
+
+        # Non-dict record: store under `root` (best-effort).
+        if prefix:
+            key = prefix[: -len(sep)] if prefix.endswith(sep) else prefix
+            single[key] = cur
+        else:
+            single["root"] = cur
+
     if index_key not in single or single.get(index_key) in {None, ""}:
         single[index_key] = index
     _id = single.get(index_key)
 
     sub_rows: dict[str, list[dict]] = {}
-    for key, value_list in (multiples or {}).items():
+    for key, value_list in lists_to_process.items():
         if not value_list:
             continue
 
@@ -434,9 +501,11 @@ def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_ke
             for item in value_list:
                 if not isinstance(item, dict):
                     continue
+                flat_item = _flatten_dict_keep_lists(item)
                 row: dict = {}
-                for col, val in item.items():
-                    col2 = col if col == key else f"{key}{sep}{col}"
+                for col, val in flat_item.items():
+                    col_s = str(col)
+                    col2 = col_s if col_s == key else f"{key}{sep}{col_s}"
                     row[col2] = val
                 row[index_key] = _id
                 rows.append(row)
@@ -446,13 +515,6 @@ def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_ke
 
         if rows:
             sub_rows[str(key)] = rows
-
-    for key, value in list((excepted or {}).items()):
-        if isinstance(value, dict):
-            value[index_key] = _id
-            excepted[key] = value
-        else:
-            excepted[key] = {index_key: _id, "value": value}
 
     return single, sub_rows, excepted
 
