@@ -34,6 +34,9 @@ pip install -e ".[json,db,viz,review]"
 # 0) 모드 목록 확인
 kisti-db-manager modes
 
+# (선택) 최근 실행 리포트 병목 요약
+kisti-db-manager report profile path/to/run_report.json --top 10
+
 # 1) ingest only (index/optimize 생략)
 kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
 

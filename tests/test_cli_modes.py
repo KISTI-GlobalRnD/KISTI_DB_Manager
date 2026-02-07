@@ -84,6 +84,50 @@ class TestCLIModes(unittest.TestCase):
             _args, kwargs = mock_run.call_args
             self.assertTrue(kwargs["index"])
 
+    def test_json_mode_ingest_fast_allows_overriding_chunk_size(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+            report_path = f"{td}/report.json"
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "tbl",
+                    "chunk_size": 10,
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as mock_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
+                buf = io.StringIO()
+                with redirect_stdout(buf):
+                    rc = main(
+                        [
+                            "json",
+                            "run",
+                            "--config",
+                            cfg_path,
+                            "--mode",
+                            "ingest-fast",
+                            "--chunk-size",
+                            "123",
+                            "--report",
+                            report_path,
+                        ]
+                    )
+
+            self.assertEqual(rc, 0)
+            run_args, run_kwargs = mock_run.call_args
+            self.assertEqual(run_kwargs["chunk_size"], 123)
+            self.assertEqual(run_args[0]["chunk_size"], 123)
+
     def test_tabular_mode_finalize_runs_index_optimize_only(self):
         with tempfile.TemporaryDirectory() as td:
             cfg_path = f"{td}/config.json"
