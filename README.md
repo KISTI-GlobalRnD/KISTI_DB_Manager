@@ -82,9 +82,9 @@ kisti-db-manager tabular run --config path/to/config.json --report run_report.js
 kisti-db-manager json run --config path/to/json_config.json --report json_report.json --quarantine quarantine.jsonl
 ```
 
-### Modes (presets)
+### Quick Start (JSON, large data)
 
-Large data (recommended flow):
+Recommended 2-step flow:
 
 ```bash
 # 1) ingest only (skip index/optimize)
@@ -94,10 +94,40 @@ kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
 kisti-db-manager json run --config path/to/json_config.json --mode finalize
 ```
 
-Schema drift heavy + ALTER is too expensive:
+If schema drift is heavy and ALTER is too expensive:
 
 ```bash
 kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-freeze
+```
+
+### Mode Defaults (important)
+
+`json run` precedence is: `config < mode preset < explicit CLI option`.
+
+| mode | create/load/index/optimize | schema_mode | parallel_workers | chunk_size |
+|---|---|---|---:|---:|
+| `default` | on/on/on/on | `evolve` | `0` | config or `1000` |
+| `ingest-fast` | on/on/off/off | `evolve` | `4` | `20000` |
+| `ingest-fast-freeze` | on/on/off/off | `freeze` | `4` | `20000` |
+| `ingest-safe` | on/on/off/off | `evolve` | `0` | `1000` |
+| `finalize` | off/off/on/on | (n/a) | (n/a) | (n/a) |
+
+Notes:
+- If you want forced single-worker flattening, pass `--parallel-workers 0` (even in `ingest-fast*`).
+- If you need to override the mode chunk size, pass `--chunk-size N` explicitly.
+
+### Profile One RunReport
+
+Use this to classify bottlenecks quickly (`flatten` vs `db.load` vs `db.alter`):
+
+```bash
+kisti-db-manager report profile path/to/run_report.json --top 10
+```
+
+Machine-readable output:
+
+```bash
+kisti-db-manager report profile path/to/run_report.json --as-json --out profile.json
 ```
 
 Korean ops guide (decision rules + checklist):
