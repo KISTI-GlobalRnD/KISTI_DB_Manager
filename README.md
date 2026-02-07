@@ -100,6 +100,12 @@ If schema drift is heavy and ALTER is too expensive:
 kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-freeze
 ```
 
+If you want to capture most columns early, then cap ALTER churn later (hybrid):
+
+```bash
+kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-hybrid
+```
+
 ### Mode Defaults (important)
 
 `json run` precedence is: `config < mode preset < explicit CLI option`.
@@ -109,12 +115,14 @@ kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-f
 | `default` | on/on/on/on | `evolve` | `0` | config or `1000` |
 | `ingest-fast` | on/on/off/off | `evolve` | `4` | `20000` |
 | `ingest-fast-freeze` | on/on/off/off | `freeze` | `4` | `20000` |
+| `ingest-fast-hybrid` | on/on/off/off | `hybrid` | `4` | `20000` |
 | `ingest-safe` | on/on/off/off | `evolve` | `0` | `1000` |
 | `finalize` | off/off/on/on | (n/a) | (n/a) | (n/a) |
 
 Notes:
 - If you want forced single-worker flattening, pass `--parallel-workers 0` (even in `ingest-fast*`).
 - If you need to override the mode chunk size, pass `--chunk-size N` explicitly.
+- `ingest-fast-hybrid` evolves only during warmup batches (`schema_hybrid_warmup_batches`, default: 1), then behaves like freeze.
 
 ### Profile One RunReport
 

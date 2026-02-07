@@ -16,6 +16,20 @@ class TestModes(unittest.TestCase):
         self.assertFalse(spec.stage_defaults["index"])
         self.assertFalse(spec.stage_defaults["optimize"])
 
+    def test_apply_mode_ingest_fast_hybrid_overrides(self):
+        cfg = {"table_name": "t", "file_type": "jsonl"}
+        spec = apply_mode("ingest-fast-hybrid", cfg)
+        self.assertEqual(spec.name, "ingest-fast-hybrid")
+        self.assertEqual(cfg["db_load_method"], "auto")
+        self.assertEqual(cfg["chunk_size"], 20000)
+        self.assertEqual(cfg["schema_mode"], "hybrid")
+        self.assertEqual(cfg["schema_hybrid_warmup_batches"], 1)
+        self.assertTrue(cfg["json_streaming_load"])
+        self.assertTrue(spec.stage_defaults["create"])
+        self.assertTrue(spec.stage_defaults["load"])
+        self.assertFalse(spec.stage_defaults["index"])
+        self.assertFalse(spec.stage_defaults["optimize"])
+
     def test_apply_mode_unknown_raises(self):
         cfg = {}
         with self.assertRaises(ValueError):

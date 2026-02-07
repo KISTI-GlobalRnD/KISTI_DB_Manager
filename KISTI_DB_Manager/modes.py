@@ -50,6 +50,22 @@ MODES: dict[str, ModeSpec] = {
         },
         stage_defaults=_stage(True, True, False, False),
     ),
+    "ingest-fast-hybrid": ModeSpec(
+        name="ingest-fast-hybrid",
+        description="Ingest-first + hybrid schema: evolve during warmup batches, then freeze into __extra__ (create+load only).",
+        data_overrides={
+            "db_load_method": "auto",
+            "json_streaming_load": True,
+            "parallel_workers": 4,
+            "chunk_size": 20000,
+            "fast_load_session": True,
+            "schema_mode": "hybrid",
+            "extra_column_name": "__extra__",
+            "schema_hybrid_warmup_batches": 1,
+            "auto_alter_table": True,
+        },
+        stage_defaults=_stage(True, True, False, False),
+    ),
     "ingest-safe": ModeSpec(
         name="ingest-safe",
         description="Portable ingest (no LOCAL INFILE). Uses pandas.to_sql; skips index/optimize.",
@@ -107,4 +123,3 @@ def resolve_mode_name(value: str | None, data_config: Mapping[str, Any] | None =
         if cfg_name:
             return cfg_name
     return "default"
-

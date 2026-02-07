@@ -231,7 +231,9 @@ def _build_run_report_profile(data: dict[str, Any], *, top: int = 8) -> dict[str
         if _share(db_alter_ms) >= 5.0:
             bottleneck = "db-load-bound-drift-ddl"
             reason = f"DDL drift cost is significant (`db.alter`={db_alter_ms}ms, {_share(db_alter_ms):.1f}%)."
-            recommendations.append("Use `schema_mode=freeze` + `auto_alter_table=false` for drift-heavy ingest.")
+            recommendations.append(
+                "Use `schema_mode=freeze` (or `schema_mode=hybrid` with a small warmup) to cap ALTER churn on drift-heavy ingest."
+            )
         if _share(db_to_sql_ms) >= 20.0:
             recommendations.append("Fallback to `to_sql` is expensive; verify LOCAL INFILE/connectivity.")
         if _share(db_tsv_write_ms) >= 10.0:
@@ -274,6 +276,8 @@ def _build_run_report_profile(data: dict[str, Any], *, top: int = 8) -> dict[str
         "path": None,
         "mode": artifacts.get("mode"),
         "schema_mode": artifacts.get("schema_mode"),
+        "schema_hybrid_warmup_batches": artifacts.get("schema_hybrid_warmup_batches"),
+        "schema_hybrid_freeze_started_batch": artifacts.get("schema_hybrid_freeze_started_batch"),
         "chunk_size": artifacts.get("chunk_size"),
         "parallel_workers": artifacts.get("parallel_workers"),
         "duration_s": data.get("duration_s"),
@@ -327,6 +331,9 @@ def _render_run_report_profile_markdown(profile: Mapping[str, Any]) -> str:
     lines.append(f"- run_id: `{profile.get('run_id')}`")
     lines.append(f"- mode: `{profile.get('mode')}`")
     lines.append(f"- schema_mode: `{profile.get('schema_mode')}`")
+    if profile.get("schema_mode") == "hybrid":
+        lines.append(f"- schema_hybrid_warmup_batches: `{profile.get('schema_hybrid_warmup_batches')}`")
+        lines.append(f"- schema_hybrid_freeze_started_batch: `{profile.get('schema_hybrid_freeze_started_batch')}`")
     lines.append(f"- duration_s: `{profile.get('duration_s')}`")
     lines.append(f"- total_ms: `{profile.get('total_ms')}`")
     lines.append(f"- chunk_size: `{profile.get('chunk_size')}`")
@@ -493,6 +500,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["fast_load_session"] = bool(args.fast_load_session)
     if getattr(args, "schema_mode", None):
         data_config["schema_mode"] = str(args.schema_mode)
+    if getattr(args, "schema_hybrid_warmup_batches", None) is not None:
+        data_config["schema_hybrid_warmup_batches"] = int(args.schema_hybrid_warmup_batches)
     if getattr(args, "extra_column_name", None):
         data_config["extra_column_name"] = str(args.extra_column_name)
     if getattr(args, "db_load_method", None):
@@ -813,13 +822,18 @@ def build_parser() -> argparse.ArgumentParser:
     p_json_run.add_argument("--mode", choices=sorted(_MODES), help="Run mode preset (default: config.mode or default)")
     p_json_run.add_argument(
         "--schema-mode",
-        choices=["evolve", "freeze"],
-        help="Schema drift strategy (default: mode/config). freeze stores unknown fields into extra column.",
+        choices=["evolve", "freeze", "hybrid"],
+        help="Schema drift strategy (default: mode/config). freeze/hybrid store unknown fields into extra column.",
+    )
+    p_json_run.add_argument(
+        "--schema-hybrid-warmup-batches",
+        type=int,
+        help="For schema_mode=hybrid: number of initial batches to allow ALTER (default: mode/config, usually 1).",
     )
     p_json_run.add_argument(
         "--extra-column-name",
         dest="extra_column_name",
-        help="Extra column name used when schema_mode=freeze (default: mode/config, usually '__extra__')",
+        help="Extra column name used when schema_mode=freeze/hybrid (default: mode/config, usually '__extra__')",
     )
     p_json_run.add_argument(
         "--fast-load-session",

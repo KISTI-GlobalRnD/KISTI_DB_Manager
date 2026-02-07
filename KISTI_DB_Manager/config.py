@@ -49,8 +49,10 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     # Schema drift strategy (JSON-oriented)
     # - "evolve": add new columns (ALTER TABLE) when needed
     # - "freeze": do not ALTER; store unknown fields into extra_column_name (requires extra col)
+    # - "hybrid": evolve for N warmup batches, then freeze (caps ALTER churn on huge inputs)
     cfg.setdefault("schema_mode", "evolve")
     cfg.setdefault("extra_column_name", "__extra__")
+    cfg.setdefault("schema_hybrid_warmup_batches", 1)
     # DB session tuning for ingest (best-effort; may require privileges)
     cfg.setdefault("fast_load_session", False)
 
@@ -146,6 +148,7 @@ class DataConfig:
     json_streaming_load: bool = True
     schema_mode: str = "evolve"
     extra_column_name: str = "__extra__"
+    schema_hybrid_warmup_batches: int = 1
     fast_load_session: bool = False
 
     @classmethod
@@ -176,6 +179,7 @@ class DataConfig:
             json_streaming_load=bool(cfg.get("json_streaming_load", True)),
             schema_mode=str(cfg.get("schema_mode", "evolve")),
             extra_column_name=str(cfg.get("extra_column_name", "__extra__")),
+            schema_hybrid_warmup_batches=int(cfg.get("schema_hybrid_warmup_batches", 1) or 0),
             fast_load_session=bool(cfg.get("fast_load_session", False)),
         )
 
@@ -205,5 +209,6 @@ class DataConfig:
             "json_streaming_load": bool(self.json_streaming_load),
             "schema_mode": str(self.schema_mode),
             "extra_column_name": str(self.extra_column_name),
+            "schema_hybrid_warmup_batches": int(self.schema_hybrid_warmup_batches),
             "fast_load_session": bool(self.fast_load_session),
         }

@@ -69,6 +69,21 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
   - 장점: 대용량에서 “새 컬럼 등장 → ALTER 반복” 병목을 크게 줄임
   - 단점: 이후 분석에서 `__extra__`를 다시 풀어 컬럼으로 승격하는 후처리가 필요할 수 있음
 
+### 2.5) 드리프트가 잦지만, 초반에는 컬럼을 최대한 확보하고 싶다 (hybrid)
+
+- 추천: `--mode ingest-fast-hybrid`
+- 특징:
+  - 초반 `schema_hybrid_warmup_batches` 만큼은 evolve처럼 `ALTER TABLE`로 컬럼을 확보
+  - warmup 이후에는 freeze처럼 `ALTER`을 중단하고 unknown 필드는 `__extra__`로 보존
+  - 운영상 “초반 스키마 자동 확장 + 후반 ALTER 폭발 방지” 타협안
+
+```bash
+kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-hybrid
+
+# warmup 배치 수 조정(예: 3 배치까지 evolve 후 freeze)
+kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-hybrid --schema-hybrid-warmup-batches 3
+```
+
 ### 3) 보안/권한 문제로 LOCAL INFILE이 불가 (혹은 서버 정책상 금지)
 
 - 추천: `--mode ingest-safe`

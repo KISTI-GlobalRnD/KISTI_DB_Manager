@@ -692,13 +692,22 @@ def run_json_pipeline(
     fallback_column_type = str(dc.get("fallback_column_type", "LONGTEXT"))
     insert_retry_max = int(dc.get("insert_retry_max", 5) or 0)
     schema_mode = str(dc.get("schema_mode") or "evolve").strip().lower()
-    if schema_mode not in {"evolve", "freeze"}:
+    if schema_mode in {"evolve_then_freeze", "evolve-then-freeze", "evolve_to_freeze"}:
+        schema_mode = "hybrid"
+    if schema_mode not in {"evolve", "freeze", "hybrid"}:
         schema_mode = "evolve"
     extra_column_name = str(dc.get("extra_column_name") or "__extra__")
-    use_extra_column = schema_mode == "freeze"
+    use_extra_column = schema_mode in {"freeze", "hybrid"}
+    hybrid_warmup_batches = int(dc.get("schema_hybrid_warmup_batches", 1) or 0)
+    if hybrid_warmup_batches < 0:
+        hybrid_warmup_batches = 0
+    auto_alter_table_cfg = bool(dc.get("auto_alter_table", True))
     report.set_artifact("schema_mode", schema_mode)
     if use_extra_column:
         report.set_artifact("extra_column_name", extra_column_name)
+    if schema_mode == "hybrid":
+        report.set_artifact("schema_hybrid_warmup_batches", int(hybrid_warmup_batches))
+    report.set_artifact("auto_alter_table", bool(auto_alter_table_cfg))
     report.set_artifact("fast_load_session", bool(dc.get("fast_load_session", False)))
 
     if extract_fn is None:
@@ -896,6 +905,8 @@ def run_json_pipeline(
             )
 
             global_index = 0
+            batch_no = 0
+            hybrid_freeze_started = False
 
             def flush_batch(
                 batch_records: list[dict],
@@ -905,6 +916,32 @@ def run_json_pipeline(
             ) -> None:
                 if not batch_records:
                     return
+
+                nonlocal batch_no, hybrid_freeze_started
+                batch_idx = int(batch_no)
+                batch_no += 1
+
+                is_hybrid_warmup = schema_mode == "hybrid" and batch_idx < int(hybrid_warmup_batches)
+                if schema_mode == "evolve":
+                    auto_alter_table_effective = bool(auto_alter_table_cfg)
+                elif schema_mode == "freeze":
+                    auto_alter_table_effective = False
+                else:
+                    auto_alter_table_effective = bool(auto_alter_table_cfg) and bool(is_hybrid_warmup)
+                    if not is_hybrid_warmup and not hybrid_freeze_started:
+                        hybrid_freeze_started = True
+                        try:
+                            report.bump("schema_hybrid_freeze_started", 1)
+                        except Exception:
+                            pass
+                        report.set_artifact("schema_hybrid_freeze_started_batch", int(batch_idx))
+                        report.set_artifact("schema_hybrid_freeze_started_record", int(index_offset))
+
+                if schema_mode == "hybrid":
+                    try:
+                        report.bump("schema_hybrid_batches_warmup" if is_hybrid_warmup else "schema_hybrid_batches_frozen", 1)
+                    except Exception:
+                        pass
 
                 report.bump("batches_total", 1)
 
@@ -1024,7 +1061,7 @@ def run_json_pipeline(
                                     name_map=nm,
                                     extra_column_name=extra_column_name if use_extra_column else None,
                                     columns_original=cols,
-                                    auto_alter_table=bool(dc.get("auto_alter_table", True)),
+                                    auto_alter_table=bool(auto_alter_table_effective),
                                     column_type=column_type,
                                     report=report,
                                     engine=engine,
@@ -1139,7 +1176,7 @@ def run_json_pipeline(
                             table_name=nm.table_sql,
                             name_map=nm,
                             extra_column_name=extra_column_name if use_extra_column else None,
-                            auto_alter_table=bool(dc.get("auto_alter_table", True)),
+                            auto_alter_table=bool(auto_alter_table_effective),
                             column_type=column_type,
                             fallback_on_insert_error=fallback_on_insert_error,
                             fallback_column_type=fallback_column_type,
