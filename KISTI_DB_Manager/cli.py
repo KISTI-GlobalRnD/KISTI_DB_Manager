@@ -216,6 +216,7 @@ def _build_run_report_profile(data: dict[str, Any], *, top: int = 8) -> dict[str
     db_load_exec_ms = _timing("db.load_data.exec")
     db_tsv_write_ms = _timing("db.load_data.tsv_write")
     db_to_sql_ms = _timing("db.to_sql")
+    db_load_parallel_tables = _as_int(artifacts.get("db_load_parallel_tables"), 0)
 
     bottleneck = "mixed"
     reason = "No single stage dominates runtime."
@@ -228,6 +229,15 @@ def _build_run_report_profile(data: dict[str, Any], *, top: int = 8) -> dict[str
             "Keep ingest and finalize separate (skip index/optimize during ingest).",
             "Prefer LOAD DATA path (`db_load_method=auto` and LOCAL INFILE enabled).",
         ]
+        tables_total = _as_int(stats.get("tables_total"), 0)
+        tables_loaded = _as_int(stats.get("tables_loaded"), 0)
+        if tables_total >= 2 and db_load_parallel_tables <= 1:
+            # Heuristic: if we load many tables (or many batches), parallelizing LOAD DATA across
+            # tables often reduces wall time. This is only meaningful for the LOAD DATA path.
+            if tables_loaded >= tables_total:
+                recommendations.append(
+                    "Consider `db_load_parallel_tables` to parallelize `LOAD DATA` across tables (e.g., 4-8) when DB ingest dominates."
+                )
         if _share(db_alter_ms) >= 5.0:
             bottleneck = "db-load-bound-drift-ddl"
             reason = f"DDL drift cost is significant (`db.alter`={db_alter_ms}ms, {_share(db_alter_ms):.1f}%)."
@@ -280,6 +290,7 @@ def _build_run_report_profile(data: dict[str, Any], *, top: int = 8) -> dict[str
         "schema_hybrid_freeze_started_batch": artifacts.get("schema_hybrid_freeze_started_batch"),
         "chunk_size": artifacts.get("chunk_size"),
         "parallel_workers": artifacts.get("parallel_workers"),
+        "db_load_parallel_tables": artifacts.get("db_load_parallel_tables"),
         "duration_s": data.get("duration_s"),
         "issues": len(data.get("issues") or []),
         "stats": {
@@ -338,6 +349,8 @@ def _render_run_report_profile_markdown(profile: Mapping[str, Any]) -> str:
     lines.append(f"- total_ms: `{profile.get('total_ms')}`")
     lines.append(f"- chunk_size: `{profile.get('chunk_size')}`")
     lines.append(f"- parallel_workers: `{profile.get('parallel_workers')}`")
+    if profile.get("db_load_parallel_tables") is not None:
+        lines.append(f"- db_load_parallel_tables: `{profile.get('db_load_parallel_tables')}`")
     lines.append(f"- issues: `{profile.get('issues')}`")
     lines.append("")
 

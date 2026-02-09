@@ -877,6 +877,15 @@ def run_json_pipeline(
                     pass
                 local_infile_conn = None
 
+    # Lazily created per-run executors (to amortize pool/connection startup across batches).
+    flatten_executor = None
+    parallel_tsv_disabled = False
+    load_executor = None
+    load_tls = None
+    load_conns: list[Any] = []
+    load_conns_lock = None
+    load_parallel_disabled = False
+
     try:
         with quarantine_cm as q:
             batch: list[dict] = []
@@ -930,6 +939,8 @@ def run_json_pipeline(
                     return
 
                 nonlocal batch_no, hybrid_freeze_started
+                nonlocal flatten_executor, parallel_tsv_disabled
+                nonlocal load_executor, load_tls, load_conns, load_conns_lock, load_parallel_disabled
                 batch_idx = int(batch_no)
                 batch_no += 1
 
@@ -983,7 +994,13 @@ def run_json_pipeline(
                                 return False
 
                         # Parallel TSV backend (workers write TSV; parent does LOAD DATA) to minimize IPC.
-                        if parallel_workers and int(parallel_workers) > 1 and len(batch_records) >= 2 and bool(auto_alter_table_effective):
+                        if (
+                            (not parallel_tsv_disabled)
+                            and parallel_workers
+                            and int(parallel_workers) > 1
+                            and len(batch_records) >= 2
+                            and bool(auto_alter_table_effective)
+                        ):
                             import os
                             import shutil
                             from concurrent.futures import ProcessPoolExecutor
@@ -1008,30 +1025,32 @@ def run_json_pipeline(
                             class _ParallelTSVFailed(Exception):
                                 pass
                             try:
+                                if flatten_executor is None:
+                                    flatten_executor = ProcessPoolExecutor(max_workers=int(parallel_workers))
+
                                 try:
                                     with report.timer("json.flatten"):
-                                        with ProcessPoolExecutor(max_workers=pw) as ex:
-                                            futs = []
-                                            for s, e in slices:
-                                                ctx_slice = None
-                                                if isinstance(record_contexts, (list, tuple)):
-                                                    ctx_slice = list(record_contexts[s:e])
-                                                futs.append(
-                                                    ex.submit(
-                                                        _safe_flatten_jsons_to_tsv_worker,
-                                                        (
-                                                            int(index_offset) + int(s),
-                                                            list(batch_records[s:e]),
-                                                            index_key,
-                                                            tuple(except_keys or ()),
-                                                            key_sep,
-                                                            tmp_dir,
-                                                            ctx_slice,
-                                                        ),
-                                                    )
+                                        futs = []
+                                        for s, e in slices:
+                                            ctx_slice = None
+                                            if isinstance(record_contexts, (list, tuple)):
+                                                ctx_slice = list(record_contexts[s:e])
+                                            futs.append(
+                                                flatten_executor.submit(
+                                                    _safe_flatten_jsons_to_tsv_worker,
+                                                    (
+                                                        int(index_offset) + int(s),
+                                                        list(batch_records[s:e]),
+                                                        index_key,
+                                                        tuple(except_keys or ()),
+                                                        key_sep,
+                                                        tmp_dir,
+                                                        ctx_slice,
+                                                    ),
                                                 )
-                                            for fut in futs:
-                                                results.append(fut.result())
+                                            )
+                                        for fut in futs:
+                                            results.append(fut.result())
                                 except Exception as e:
                                     try:
                                         report.warn(
@@ -1041,6 +1060,14 @@ def run_json_pipeline(
                                         )
                                     except Exception:
                                         pass
+                                    # Disable this backend for the remainder of the run (prevents repeat failures).
+                                    parallel_tsv_disabled = True
+                                    try:
+                                        if flatten_executor is not None:
+                                            flatten_executor.shutdown(wait=False, cancel_futures=True)
+                                    except Exception:
+                                        pass
+                                    flatten_executor = None
                                     raise _ParallelTSVFailed() from e
 
                                 tables_files: dict[str, list[dict]] = {}
@@ -1231,7 +1258,7 @@ def run_json_pipeline(
                                 # Execute LOAD DATA for this batch (optionally parallel across tables).
                                 if load and load_groups:
                                     # Serial load: keep existing behavior/timings.
-                                    if not db_load_parallel_tables or int(db_load_parallel_tables) <= 1 or len(load_groups) <= 1:
+                                    if load_parallel_disabled or (not db_load_parallel_tables) or int(db_load_parallel_tables) <= 1 or len(load_groups) <= 1:
                                         for g in load_groups:
                                             nm = g.get("nm")
                                             table_sql = g.get("table_sql")
@@ -1277,17 +1304,17 @@ def run_json_pipeline(
                                                 report.bump("tables_loaded", 1)
                                         return
 
-                                    # Parallel load across tables: one local_infile connection per thread.
-                                    try:
-                                        import threading
-                                        import time
-                                        from concurrent.futures import ThreadPoolExecutor, as_completed
+                                    # Parallel load across tables: one LOCAL INFILE connection per thread (reused across batches).
+                                    import threading
+                                    import time
+                                    from concurrent.futures import ThreadPoolExecutor, as_completed
 
-                                        import pymysql
+                                    import pymysql
 
-                                        tls = threading.local()
-                                        conns: list[Any] = []
-                                        conns_lock = threading.Lock()
+                                    if load_executor is None or load_tls is None:
+                                        load_tls = threading.local()
+                                        if load_conns_lock is None:
+                                            load_conns_lock = threading.Lock()
 
                                         def _thread_init():
                                             conn = pymysql.connect(
@@ -1310,127 +1337,208 @@ def run_json_pipeline(
                                                     )
                                                 except Exception:
                                                     pass
-                                            tls.conn = conn
-                                            with conns_lock:
-                                                conns.append(conn)
-
-                                        def _get_conn():
-                                            return getattr(tls, "conn", None)
-
-                                        def _load_group(g: dict) -> dict:
-                                            nm = g.get("nm")
-                                            table_sql = str(g.get("table_sql") or "")
-                                            entries = g.get("entries") or []
-                                            existing_cols = g.get("existing_cols")
-                                            res = {
-                                                "table_sql": table_sql,
-                                                "ok": True,
-                                                "loaded_any": False,
-                                                "rows_loaded": 0,
-                                                "load_ok": 0,
-                                                "load_failed": 0,
-                                                "load_data_ok": 0,
-                                                "existing_cols": existing_cols,
-                                                "errors": [],
-                                            }
-                                            conn = _get_conn()
-                                            if conn is None:
-                                                res["ok"] = False
-                                                res["errors"].append({"type": "RuntimeError", "message": "missing thread connection"})
-                                                return res
-
-                                            for fi in entries:
-                                                path = fi.get("path")
-                                                file_cols = fi.get("columns") or []
-                                                if not path or not file_cols:
-                                                    continue
-                                                try:
-                                                    manage.fill_table_from_tsv_file(
-                                                        str(path),
-                                                        dbc,
-                                                        table_name=table_sql,
-                                                        name_map=nm,
-                                                        extra_column_name=None,
-                                                        columns_original=list(file_cols),
-                                                        auto_alter_table=bool(auto_alter_table_effective),
-                                                        column_type=column_type,
-                                                        report=None,  # avoid thread-unsafe RunReport mutations
-                                                        engine=engine,
-                                                        existing_cols=existing_cols,
-                                                        load_method=db_load_method,
-                                                        fast_load_state=None,
-                                                        local_infile_conn=conn,
-                                                    )
-                                                    res["loaded_any"] = True
-                                                    res["load_ok"] += 1
-                                                    res["load_data_ok"] += 1
-                                                    try:
-                                                        res["rows_loaded"] += int(fi.get("rows") or 0)
-                                                    except Exception:
-                                                        pass
-                                                except Exception as e:
-                                                    res["ok"] = False
-                                                    res["load_failed"] += 1
-                                                    res["errors"].append({"type": type(e).__name__, "message": str(e)})
-                                                    if not continue_on_error:
-                                                        break
-                                                finally:
-                                                    try:
-                                                        os.remove(str(path))
-                                                    except Exception:
-                                                        pass
-                                            return res
-
-                                        pl = min(int(db_load_parallel_tables), int(len(load_groups)))
-                                        t0 = time.perf_counter()
-                                        with report.timer("json.db.load"):
-                                            with ThreadPoolExecutor(
-                                                max_workers=pl,
-                                                thread_name_prefix="kisti_load",
-                                                initializer=_thread_init,
-                                            ) as ex:
-                                                futs = [ex.submit(_load_group, g) for g in load_groups]
-                                                for fut in as_completed(futs):
-                                                    r = fut.result()
-                                                    if not isinstance(r, dict):
-                                                        continue
-                                                    # Update existing column cache from the worker's view (best-effort).
-                                                    if r.get("existing_cols") is not None:
-                                                        try:
-                                                            existing_cols_cache[str(r.get("table_sql") or "")] = set(r.get("existing_cols") or [])
-                                                        except Exception:
-                                                            pass
-                                                    try:
-                                                        report.bump("rows_loaded", int(r.get("rows_loaded") or 0))
-                                                    except Exception:
-                                                        pass
-                                                    try:
-                                                        report.bump("load_ok", int(r.get("load_ok") or 0))
-                                                        report.bump("load_failed", int(r.get("load_failed") or 0))
-                                                        report.bump("load_data_ok", int(r.get("load_data_ok") or 0))
-                                                    except Exception:
-                                                        pass
-                                                    if r.get("loaded_any"):
-                                                        report.bump("tables_loaded", 1)
-                                                    if not r.get("ok"):
-                                                        report.warn(
-                                                            stage="json_pipeline.load.parallel_tables",
-                                                            message="LOAD DATA failed for table in parallel loader",
-                                                            table=str(r.get("table_sql") or ""),
-                                                            errors=list(r.get("errors") or [])[:3],
-                                                        )
-                                                        if not continue_on_error:
-                                                            raise RuntimeError(f"parallel_table_load_failed: {r.get('table_sql')}")
-                                        dt = time.perf_counter() - t0
-                                        # For parallel load, report wall time to keep share_pct meaningful.
-                                        report.add_time_s("db.load_data.exec", dt)
-                                        report.add_time_s("db.load_data.total", dt)
-                                    finally:
-                                        for c in conns:
+                                            load_tls.conn = conn
                                             try:
-                                                c.close()
+                                                with load_conns_lock:
+                                                    load_conns.append(conn)
                                             except Exception:
                                                 pass
+
+                                        load_executor = ThreadPoolExecutor(
+                                            max_workers=int(db_load_parallel_tables),
+                                            thread_name_prefix="kisti_load",
+                                            initializer=_thread_init,
+                                        )
+
+                                    def _get_conn():
+                                        return getattr(load_tls, "conn", None) if load_tls is not None else None
+
+                                    def _load_group(g: dict) -> dict:
+                                        nm = g.get("nm")
+                                        table_sql = str(g.get("table_sql") or "")
+                                        entries = g.get("entries") or []
+                                        existing_cols = g.get("existing_cols")
+                                        res = {
+                                            "table_sql": table_sql,
+                                            "ok": True,
+                                            "loaded_any": False,
+                                            "rows_loaded": 0,
+                                            "load_ok": 0,
+                                            "load_failed": 0,
+                                            "load_data_ok": 0,
+                                            "existing_cols": existing_cols,
+                                            "errors": [],
+                                        }
+                                        conn = _get_conn()
+                                        if conn is None:
+                                            res["ok"] = False
+                                            res["errors"].append({"type": "RuntimeError", "message": "missing thread connection"})
+                                            return res
+
+                                        for fi in entries:
+                                            path = fi.get("path")
+                                            file_cols = fi.get("columns") or []
+                                            if not path or not file_cols:
+                                                continue
+                                            try:
+                                                manage.fill_table_from_tsv_file(
+                                                    str(path),
+                                                    dbc,
+                                                    table_name=table_sql,
+                                                    name_map=nm,
+                                                    extra_column_name=None,
+                                                    columns_original=list(file_cols),
+                                                    auto_alter_table=bool(auto_alter_table_effective),
+                                                    column_type=column_type,
+                                                    report=None,  # avoid thread-unsafe RunReport mutations
+                                                    engine=engine,
+                                                    existing_cols=existing_cols,
+                                                    load_method=db_load_method,
+                                                    fast_load_state=None,
+                                                    local_infile_conn=conn,
+                                                )
+                                                res["loaded_any"] = True
+                                                res["load_ok"] += 1
+                                                res["load_data_ok"] += 1
+                                                try:
+                                                    res["rows_loaded"] += int(fi.get("rows") or 0)
+                                                except Exception:
+                                                    pass
+                                            except Exception as e:
+                                                res["ok"] = False
+                                                res["load_failed"] += 1
+                                                res["errors"].append({"type": type(e).__name__, "message": str(e)})
+                                                if not continue_on_error:
+                                                    break
+                                            finally:
+                                                try:
+                                                    os.remove(str(path))
+                                                except Exception:
+                                                    pass
+                                        return res
+
+                                    remaining_groups: list[dict] = []
+                                    t0 = time.perf_counter()
+                                    with report.timer("json.db.load"):
+                                        futures = []
+                                        for i, g in enumerate(load_groups):
+                                            try:
+                                                futures.append(load_executor.submit(_load_group, g))
+                                            except Exception as e:
+                                                remaining_groups = list(load_groups[i:])
+                                                load_parallel_disabled = True
+                                                report.warn(
+                                                    stage="json_pipeline.load.parallel_tables",
+                                                    message="Parallel table loader submit failed; falling back to serial for remaining tables",
+                                                    error={"type": type(e).__name__, "message": str(e)},
+                                                )
+                                                break
+
+                                        for fut in as_completed(futures):
+                                            try:
+                                                r = fut.result()
+                                            except Exception as e:
+                                                r = {
+                                                    "table_sql": "",
+                                                    "ok": False,
+                                                    "loaded_any": False,
+                                                    "rows_loaded": 0,
+                                                    "load_ok": 0,
+                                                    "load_failed": 1,
+                                                    "load_data_ok": 0,
+                                                    "existing_cols": None,
+                                                    "errors": [{"type": type(e).__name__, "message": str(e)}],
+                                                }
+
+                                            if not isinstance(r, dict):
+                                                continue
+                                            # Update existing column cache from the worker's view (best-effort).
+                                            if r.get("existing_cols") is not None:
+                                                try:
+                                                    existing_cols_cache[str(r.get("table_sql") or "")] = set(r.get("existing_cols") or [])
+                                                except Exception:
+                                                    pass
+                                            try:
+                                                report.bump("rows_loaded", int(r.get("rows_loaded") or 0))
+                                            except Exception:
+                                                pass
+                                            try:
+                                                report.bump("load_ok", int(r.get("load_ok") or 0))
+                                                report.bump("load_failed", int(r.get("load_failed") or 0))
+                                                report.bump("load_data_ok", int(r.get("load_data_ok") or 0))
+                                            except Exception:
+                                                pass
+                                            if r.get("loaded_any"):
+                                                report.bump("tables_loaded", 1)
+                                            if not r.get("ok"):
+                                                report.warn(
+                                                    stage="json_pipeline.load.parallel_tables",
+                                                    message="LOAD DATA failed for table in parallel loader",
+                                                    table=str(r.get("table_sql") or ""),
+                                                    errors=list(r.get("errors") or [])[:3],
+                                                )
+                                                if not continue_on_error:
+                                                    raise RuntimeError(f"parallel_table_load_failed: {r.get('table_sql')}")
+
+                                        if remaining_groups:
+                                            # Ensure remaining tables are loaded serially (no duplication: they were never submitted).
+                                            for g in remaining_groups:
+                                                nm = g.get("nm")
+                                                table_sql = str(g.get("table_sql") or "")
+                                                entries = g.get("entries") or []
+                                                existing_cols = g.get("existing_cols")
+                                                if not nm or not table_sql or not entries:
+                                                    continue
+                                                for fi in entries:
+                                                    path = fi.get("path")
+                                                    file_cols = fi.get("columns") or []
+                                                    if not path or not file_cols:
+                                                        continue
+                                                    try:
+                                                        manage.fill_table_from_tsv_file(
+                                                            str(path),
+                                                            dbc,
+                                                            table_name=table_sql,
+                                                            name_map=nm,
+                                                            extra_column_name=None,
+                                                            columns_original=list(file_cols),
+                                                            auto_alter_table=bool(auto_alter_table_effective),
+                                                            column_type=column_type,
+                                                            report=None,
+                                                            engine=engine,
+                                                            existing_cols=existing_cols,
+                                                            load_method=db_load_method,
+                                                            fast_load_state=None,
+                                                            local_infile_conn=local_infile_conn,
+                                                        )
+                                                        report.bump("load_ok", 1)
+                                                        report.bump("load_data_ok", 1)
+                                                        report.bump("rows_loaded", int(fi.get("rows") or 0))
+                                                    except Exception as e:
+                                                        report.bump("load_failed", 1)
+                                                        report.warn(
+                                                            stage="json_pipeline.load.parallel_tables.fallback",
+                                                            message="Serial fallback LOAD DATA failed",
+                                                            table=table_sql,
+                                                            error={"type": type(e).__name__, "message": str(e)},
+                                                        )
+                                                        if not continue_on_error:
+                                                            raise
+                                                    finally:
+                                                        try:
+                                                            os.remove(str(path))
+                                                        except Exception:
+                                                            pass
+                                                report.bump("tables_loaded", 1)
+                                                if existing_cols is not None:
+                                                    try:
+                                                        existing_cols_cache[str(table_sql)] = set(existing_cols)
+                                                    except Exception:
+                                                        pass
+                                    dt = time.perf_counter() - t0
+                                    # For parallel load, report wall time to keep share_pct meaningful.
+                                    report.add_time_s("db.load_data.exec", dt)
+                                    report.add_time_s("db.load_data.total", dt)
                                 return
                             except _ParallelTSVFailed:
                                 # Fall back to serial rows backend below.
@@ -1763,6 +1871,21 @@ def run_json_pipeline(
         return JsonRunResult(name_maps=name_maps, report=report)
     finally:
         report.add_time_s("pipeline.json.total", time.perf_counter() - t_total0)
+        if load_executor is not None:
+            try:
+                load_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                pass
+            for c in list(load_conns):
+                try:
+                    c.close()
+                except Exception:
+                    pass
+        if flatten_executor is not None:
+            try:
+                flatten_executor.shutdown(wait=True, cancel_futures=True)
+            except Exception:
+                pass
         if local_infile_conn is not None:
             try:
                 local_infile_conn.close()
