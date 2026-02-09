@@ -29,8 +29,27 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
-            "parallel_workers": 4,
+            # NOTE: `parallel_workers>0` enables a ProcessPool-based flatten/TSV pipeline.
+            # It can speed up end-to-end ingest when TSV generation is a bottleneck, but it
+            # adds worker startup overhead and should be benchmarked on real data.
+            "parallel_workers": 0,
+            # Optional: parallelize LOAD DATA across tables (one LOCAL INFILE conn per thread).
+            # This is most effective when the pipeline is DB-load-bound and produces many tables.
+            "db_load_parallel_tables": 0,
             "chunk_size": 20000,
+            "fast_load_session": True,
+        },
+        stage_defaults=_stage(True, True, False, False),
+    ),
+    "ingest-fast-parallel": ModeSpec(
+        name="ingest-fast-parallel",
+        description="Max ingest throughput with parallel flatten + parallel LOAD DATA across tables (create+load only).",
+        data_overrides={
+            "db_load_method": "auto",
+            "json_streaming_load": True,
+            "parallel_workers": 8,
+            "db_load_parallel_tables": 8,
+            "chunk_size": 5000,
             "fast_load_session": True,
         },
         stage_defaults=_stage(True, True, False, False),
@@ -41,7 +60,7 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
-            "parallel_workers": 4,
+            "parallel_workers": 0,
             "chunk_size": 20000,
             "fast_load_session": True,
             "schema_mode": "freeze",
@@ -56,7 +75,7 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
-            "parallel_workers": 4,
+            "parallel_workers": 0,
             "chunk_size": 20000,
             "fast_load_session": True,
             "schema_mode": "hybrid",

@@ -16,6 +16,12 @@ class DummyDF:
 
 class TestJsonPipeline(unittest.TestCase):
     def test_run_json_pipeline_handles_missing_processing_backend(self):
+        # Ensure the import path is exercised even when optional deps are installed
+        # and earlier tests have already imported the processing backend.
+        import sys
+
+        sys.modules.pop("KISTI_DB_Manager.processing", None)
+
         data_config = {
             "PATH": "data/",
             "file_name": "x.jsonl",
@@ -28,7 +34,8 @@ class TestJsonPipeline(unittest.TestCase):
         real_import = __import__
 
         def fake_import(name, globals=None, locals=None, fromlist=(), level=0):
-            if name.endswith(".processing") or name == "KISTI_DB_Manager.processing":
+            # Relative import inside the package can come through as `name="processing", level=1`.
+            if name.endswith(".processing") or name in {"KISTI_DB_Manager.processing", "processing"}:
                 raise ModuleNotFoundError("No module named 'numpy'")
             return real_import(name, globals, locals, fromlist, level)
 

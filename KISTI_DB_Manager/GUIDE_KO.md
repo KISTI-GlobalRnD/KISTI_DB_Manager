@@ -150,8 +150,13 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 - 속도가 기대보다 느릴 때:
   - `chunk_size`가 너무 작으면 `LOAD DATA` 호출/커밋 횟수 증가로 느려질 수 있음
   - 드리프트가 심한데 evolve(ALTER 허용)로 돌리면 `ALTER TABLE`이 병목이 될 수 있음 → `freeze` 고려
-  - `parallel_workers`는 **flatten(CPU)** 단계에만 영향(=DB load가 병목이면 거의 효과 없음)
-    - `kisti-db-manager report profile run_report.json`로 `json.flatten` vs `json.db.load` 비중을 먼저 확인 권장
+  - `parallel_workers`는 주로 **flatten/TSV 생성(CPU+I/O)** 단계에 영향(=DB load가 병목이면 효과 제한적)
+    - `json_streaming_load=true` + `LOAD DATA` 경로에서는 워커가 TSV를 생성하고(IPC 최소화) 부모가 `LOAD DATA`를 수행
+    - 동일 스키마(컬럼 순서) TSV 조각은 테이블별로 병합해 `LOAD DATA` 호출 수를 줄임
+  - `db_load_parallel_tables`는 **테이블 단위로 `LOAD DATA`를 병렬화**해 DB ingest 구간(`db.load_data.exec`)을 줄일 수 있음
+    - 테이블별로 별도 `LOCAL INFILE` 커넥션을 사용(쓰레드 기반)
+    - WoS-like처럼 테이블 수가 많고(`tables_loaded`가 큼) `db.load_data.exec` 비중이 높을 때 효과가 큼
+    - `kisti-db-manager report profile run_report.json`로 `json.flatten` / `db.load_data.*` 비중을 먼저 확인 권장
 
 ## 중요한 옵션(요약)
 
@@ -180,6 +185,14 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 - 속도/리스크 트레이드오프이므로 필요 시 `--no-fast-load-session`으로 끌 수 있음
 - 참고: MariaDB에서는 일부 변수(예: `innodb_flush_log_at_trx_commit`)가 **GLOBAL-only**일 수 있음
   - 이 경우 `fast_load_session`에서 해당 설정이 경고로 기록될 수 있으며, 실제로 적용하려면 서버/권한 범위에서 `SET GLOBAL ...` 또는 서버 시작 옵션으로 설정해야 함
+
+### `db_load_parallel_tables` (DB ingest 병렬화)
+
+- `LOAD DATA`를 테이블 단위로 병렬 실행해 wall-time을 줄이는 옵션
+  - 예: 배치당 12개 테이블을 순차 로딩(12번) → 8개 쓰레드로 동시 로딩(대략 12/8 라운드)
+- 권장: `2~8` 범위에서 벤치로 결정(너무 크게 잡으면 DB/디스크가 포화되어 오히려 느려질 수 있음)
+- CLI에서 바로 덮어쓰려면: `--db-load-parallel-tables N`
+- 참고: 병렬 로딩에서는 `db.load_data.exec`가 “합계”가 아니라 “wall-time”으로 기록됨(프로파일 share_pct 해석을 위해)
 
 ### `schema_mode=freeze` + `extra_column_name`
 

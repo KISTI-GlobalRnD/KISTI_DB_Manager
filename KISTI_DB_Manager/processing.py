@@ -293,6 +293,8 @@ def flatten_json_separate_lists(nested_json, except_keys=None, sep="__", parent=
     """
     if except_keys is None:
         except_keys = []
+    # Normalize once for faster membership checks.
+    except_set = {str(k) for k in except_keys if str(k)}
 
     single_values = {}
     multiple_values = {}
@@ -302,7 +304,7 @@ def flatten_json_separate_lists(nested_json, except_keys=None, sep="__", parent=
         if isinstance(x, dict):
             for a in x:
                 full_key = f"{name}{a}" if name else str(a)
-                if a in except_keys or full_key in except_keys:
+                if a in except_set or full_key in except_set:
                     excepted_values[full_key] = x[a]
                 else:
                     flatten(x[a], full_key + sep)
@@ -407,7 +409,7 @@ def flatten_nested_json_with_list(_json, index_key="id", index=0, except_keys=No
     return _df, df_subs_add_idx, excepted
 
 
-def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_keys=None, sep="__"):
+def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_keys=None, sep="__", colname_cache=None):
     """
     Row-oriented variant of flatten_nested_json_with_list for performance.
 
@@ -419,102 +421,267 @@ def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_ke
     if except_keys is None:
         except_keys = []
 
-    # Use a set for faster membership checks.
-    except_set = {str(k) for k in except_keys if str(k)}
+    # Allow callers (extract_rows_from_jsons) to pass a pre-built set to avoid per-record conversion.
+    if isinstance(except_keys, set):
+        except_set = except_keys
+    else:
+        except_set = {str(k) for k in except_keys if str(k)}
 
-    def _flatten_dict_keep_lists(obj) -> dict:
-        """
-        Flatten nested dicts into `a__b__c` keys, but keep lists as values.
+    # Column name cache for subtable rows:
+    #   {sep: {list_key: {item_col: full_col}}}
+    if colname_cache is None:
+        colname_cache = {}
+    colname_cache_sep = colname_cache.setdefault(str(sep), {})
 
-        For list-of-dict values, flatten each dict in the list similarly (kept as a list value).
-        This matches the previous behavior where nested lists inside a list-item become a column.
-        """
-        out: dict = {}
-        stack: list[tuple[object, str]] = [(obj, "")]
-        while stack:
-            cur, prefix = stack.pop()
-            if isinstance(cur, dict):
-                for k, v in cur.items():
-                    ks = str(k)
-                    full_key = f"{prefix}{ks}" if prefix else ks
-                    # Preserve previous semantics: excepted keys inside list-items are dropped.
-                    if ks in except_set or full_key in except_set:
-                        continue
-                    if isinstance(v, dict):
-                        stack.append((v, full_key + sep))
-                        continue
-                    if isinstance(v, list):
-                        if v and isinstance(v[0], dict):
-                            out[full_key] = [_flatten_dict_keep_lists(it) for it in v if isinstance(it, dict)]
-                        else:
-                            out[full_key] = v
-                        continue
-                    out[full_key] = v
-                continue
-            key = prefix[: -len(sep)] if prefix.endswith(sep) else prefix
-            if key:
-                out[key] = cur
-        return out
+    if except_set:
+        def _flatten_dict_keep_lists(obj) -> dict:
+            out: dict = {}
+            stack: list[tuple[object, str]] = [(obj, "")]
+            stack_pop = stack.pop
+            stack_append = stack.append
+            sep_local = sep
+            sep_len = len(sep_local)
+            while stack:
+                cur, prefix = stack_pop()
+                if type(cur) is dict or isinstance(cur, dict):
+                    for k, v in cur.items():
+                        ks = k if type(k) is str else str(k)
+                        full_key = (prefix + ks) if prefix else ks
+                        # Preserve previous semantics: excepted keys inside list-items are dropped.
+                        if ks in except_set or full_key in except_set:
+                            continue
+                        tv = type(v)
+                        if tv is dict:
+                            stack_append((v, full_key + sep_local))
+                            continue
+                        if tv is list:
+                            if v and (type(v[0]) is dict or isinstance(v[0], dict)):
+                                flat_list: list[dict] = []
+                                flat_list_append = flat_list.append
+                                for it in v:
+                                    if type(it) is dict:
+                                        tmp: dict = {}
+                                        deep = False
+                                        for kk, vv in it.items():
+                                            tvv = type(vv)
+                                            if tvv is dict or (
+                                                tvv is list and vv and (type(vv[0]) is dict or isinstance(vv[0], dict))
+                                            ):
+                                                deep = True
+                                                break
+                                            kks = kk if type(kk) is str else str(kk)
+                                            if kks in except_set:
+                                                continue
+                                            tmp[kks] = vv
+                                        if not deep:
+                                            flat_list_append(tmp)
+                                        else:
+                                            flat_list_append(_flatten_dict_keep_lists(it))
+                                    elif isinstance(it, dict):
+                                        flat_list_append(_flatten_dict_keep_lists(it))
+                                out[full_key] = flat_list
+                            else:
+                                out[full_key] = v
+                            continue
+                        out[full_key] = v
+                    continue
+                key = prefix[: -sep_len] if prefix.endswith(sep_local) else prefix
+                if key:
+                    out[key] = cur
+            return out
+    else:
+        def _flatten_dict_keep_lists(obj) -> dict:
+            # Same as above but without except-key checks (common case: no exclusions).
+            out: dict = {}
+            stack: list[tuple[object, str]] = [(obj, "")]
+            stack_pop = stack.pop
+            stack_append = stack.append
+            sep_local = sep
+            sep_len = len(sep_local)
+            while stack:
+                cur, prefix = stack_pop()
+                if type(cur) is dict or isinstance(cur, dict):
+                    for k, v in cur.items():
+                        ks = k if type(k) is str else str(k)
+                        full_key = (prefix + ks) if prefix else ks
+                        tv = type(v)
+                        if tv is dict:
+                            stack_append((v, full_key + sep_local))
+                            continue
+                        if tv is list:
+                            if v and (type(v[0]) is dict or isinstance(v[0], dict)):
+                                flat_list: list[dict] = []
+                                flat_list_append = flat_list.append
+                                for it in v:
+                                    if type(it) is dict:
+                                        tmp: dict = {}
+                                        deep = False
+                                        for kk, vv in it.items():
+                                            tvv = type(vv)
+                                            if tvv is dict or (
+                                                tvv is list and vv and (type(vv[0]) is dict or isinstance(vv[0], dict))
+                                            ):
+                                                deep = True
+                                                break
+                                            kks = kk if type(kk) is str else str(kk)
+                                            tmp[kks] = vv
+                                        if not deep:
+                                            flat_list_append(tmp)
+                                        else:
+                                            flat_list_append(_flatten_dict_keep_lists(it))
+                                    elif isinstance(it, dict):
+                                        flat_list_append(_flatten_dict_keep_lists(it))
+                                out[full_key] = flat_list
+                            else:
+                                out[full_key] = v
+                            continue
+                        out[full_key] = v
+                    continue
+                key = prefix[: -sep_len] if prefix.endswith(sep_local) else prefix
+                if key:
+                    out[key] = cur
+            return out
+
+
+    # Resolve record id early so we can build subtable rows on-the-fly without a second pass.
+    # Keep semantics identical to the original flatten: if id is missing/blank or not a scalar
+    # (dict/list), fall back to the record index.
+    _id = index
+    if isinstance(_json, dict) and index_key and (not except_set or str(index_key) not in except_set):
+        try:
+            cand = _json.get(index_key)
+        except Exception:
+            cand = None
+        if cand not in {None, ""} and not isinstance(cand, (dict, list)):
+            _id = cand
 
     single: dict = {}
     excepted: dict = {}
-    lists_to_process: dict[str, list] = {}
+    sub_rows: dict[str, list[dict]] = {}
+
+    def _process_value_list(key, value_list) -> None:
+        if not value_list:
+            return
+
+        key_s = key if type(key) is str else str(key)
+        rows: list[dict] = []
+        first = value_list[0]
+        if type(first) is dict or isinstance(first, dict):
+            key_prefix = key_s + sep
+            col_map = colname_cache_sep.get(key_s)
+            if col_map is None:
+                col_map = {}
+                colname_cache_sep[key_s] = col_map
+            rows_append = rows.append
+            for item in value_list:
+                if type(item) is dict:
+                    pass
+                elif isinstance(item, dict):
+                    pass
+                else:
+                    continue
+
+                # One-pass: build fast row while checking if we must fall back to deep flatten.
+                row: dict = {index_key: _id}
+                needs_deep_flatten = False
+                for col, val in item.items():
+                    tv = type(val)
+                    if tv is dict or (tv is list and val and (type(val[0]) is dict or isinstance(val[0], dict))):
+                        needs_deep_flatten = True
+                        break
+                    col_s = col if type(col) is str else str(col)
+                    if except_set and col_s in except_set:
+                        continue
+                    try:
+                        col2 = col_map[col_s]
+                    except KeyError:
+                        col2 = col_s if col_s == key_s else (key_prefix + col_s)
+                        col_map[col_s] = col2
+                    row[col2] = val
+
+                if not needs_deep_flatten:
+                    rows_append(row)
+                    continue
+
+                flat_item = _flatten_dict_keep_lists(item)
+                row = {index_key: _id}
+                for col, val in flat_item.items():
+                    col_s = col if type(col) is str else str(col)
+                    try:
+                        col2 = col_map[col_s]
+                    except KeyError:
+                        col2 = col_s if col_s == key_s else (key_prefix + col_s)
+                        col_map[col_s] = col2
+                    row[col2] = val
+                rows_append(row)
+        else:
+            for val in value_list:
+                rows.append({index_key: _id, key_s: val})
+
+        if rows:
+            # key_s is always a stable string for table naming.
+            sub_rows[key_s] = rows
 
     # Iterative traversal (avoids recursion + repeated dict merges).
     stack2: list[tuple[object, str]] = [(_json, "")]
-    while stack2:
-        cur, prefix = stack2.pop()
-        if isinstance(cur, dict):
-            for k, v in cur.items():
-                ks = str(k)
-                full_key = f"{prefix}{ks}" if prefix else ks
-                if ks in except_set or full_key in except_set:
-                    excepted[full_key] = v
-                    continue
-                if isinstance(v, dict):
-                    stack2.append((v, full_key + sep))
-                    continue
-                if isinstance(v, list):
-                    lists_to_process[full_key] = v
-                    continue
-                single[full_key] = v
-            continue
+    if except_set:
+        while stack2:
+            cur, prefix = stack2.pop()
+            if type(cur) is dict:
+                for k, v in cur.items():
+                    ks = k if type(k) is str else str(k)
+                    full_key = (prefix + ks) if prefix else ks
+                    if ks in except_set or full_key in except_set:
+                        excepted[full_key] = v
+                        continue
+                    tv = type(v)
+                    if tv is dict:
+                        stack2.append((v, full_key + sep))
+                        continue
+                    if tv is list:
+                        _process_value_list(full_key, v)
+                        continue
+                    if v is None or tv is str or tv is int or tv is float or tv is bool:
+                        single[full_key] = v
+                        continue
+                    single[full_key] = v
+                continue
 
-        # Non-dict record: store under `root` (best-effort).
-        if prefix:
-            key = prefix[: -len(sep)] if prefix.endswith(sep) else prefix
-            single[key] = cur
-        else:
-            single["root"] = cur
+            # Non-dict record: store under `root` (best-effort).
+            if prefix:
+                key = prefix[: -len(sep)] if prefix.endswith(sep) else prefix
+                single[key] = cur
+            else:
+                single["root"] = cur
+    else:
+        while stack2:
+            cur, prefix = stack2.pop()
+            if type(cur) is dict:
+                for k, v in cur.items():
+                    ks = k if type(k) is str else str(k)
+                    full_key = (prefix + ks) if prefix else ks
+                    tv = type(v)
+                    if tv is dict:
+                        stack2.append((v, full_key + sep))
+                        continue
+                    if tv is list:
+                        _process_value_list(full_key, v)
+                        continue
+                    if v is None or tv is str or tv is int or tv is float or tv is bool:
+                        single[full_key] = v
+                        continue
+                    single[full_key] = v
+                continue
+
+            # Non-dict record: store under `root` (best-effort).
+            if prefix:
+                key = prefix[: -len(sep)] if prefix.endswith(sep) else prefix
+                single[key] = cur
+            else:
+                single["root"] = cur
 
     if index_key not in single or single.get(index_key) in {None, ""}:
-        single[index_key] = index
-    _id = single.get(index_key)
-
-    sub_rows: dict[str, list[dict]] = {}
-    for key, value_list in lists_to_process.items():
-        if not value_list:
-            continue
-
-        rows: list[dict] = []
-        if isinstance(value_list, list) and isinstance(value_list[0], dict):
-            for item in value_list:
-                if not isinstance(item, dict):
-                    continue
-                flat_item = _flatten_dict_keep_lists(item)
-                row: dict = {}
-                for col, val in flat_item.items():
-                    col_s = str(col)
-                    col2 = col_s if col_s == key else f"{key}{sep}{col_s}"
-                    row[col2] = val
-                row[index_key] = _id
-                rows.append(row)
-        else:
-            for val in value_list:
-                rows.append({index_key: _id, key: val})
-
-        if rows:
-            sub_rows[str(key)] = rows
+        single[index_key] = _id
 
     return single, sub_rows, excepted
 
@@ -551,6 +718,302 @@ def _safe_flatten_nested_json_with_list_rows_worker(args):
                 "traceback": traceback.format_exc(),
             },
         )
+
+
+# ProcessPool worker config (set via initializer to reduce per-task IPC/pickling overhead).
+_flatten_pool_index_key = None
+_flatten_pool_except_set = None
+_flatten_pool_sep = None
+_flatten_pool_colname_cache = None
+
+
+def _init_flatten_nested_json_with_list_rows_worker(index_key: str, except_keys, sep: str):
+    global _flatten_pool_index_key, _flatten_pool_except_set, _flatten_pool_sep, _flatten_pool_colname_cache
+    _flatten_pool_index_key = str(index_key) if index_key is not None else "id"
+    _flatten_pool_except_set = set(except_keys or ())
+    _flatten_pool_sep = str(sep) if sep is not None else "__"
+    _flatten_pool_colname_cache = {}
+
+
+def _safe_flatten_nested_json_with_list_rows_worker_v2(args):
+    """ProcessPool worker wrapper using globals set by initializer."""
+    import traceback
+
+    try:
+        index, record = args
+        row, sub_rows, excepted = flatten_nested_json_with_list_rows(
+            record,
+            index_key=_flatten_pool_index_key or "id",
+            index=index,
+            except_keys=_flatten_pool_except_set,
+            sep=_flatten_pool_sep or "__",
+            colname_cache=_flatten_pool_colname_cache,
+        )
+        return index, True, row, sub_rows, excepted, None
+    except Exception as e:
+        return (
+            None,
+            False,
+            None,
+            None,
+            None,
+            {
+                "type": type(e).__name__,
+                "message": str(e),
+                "traceback": traceback.format_exc(),
+            },
+        )
+
+
+def _safe_flatten_jsons_to_tsv_worker(args):
+    """
+    ProcessPool worker: flatten a chunk of JSON records and write TSV files per table.
+
+    This avoids returning large Python objects (rows) to the parent process. The parent
+    can then execute `LOAD DATA LOCAL INFILE` using the returned file paths.
+
+    Returns (dict):
+      - ok: bool
+      - index_offset: int
+      - records_ok / records_failed: int
+      - errors: list[dict]  (best-effort per-record errors)
+      - workdir: str (temporary directory containing TSV files)
+      - main: fileinfo | None
+      - subs: dict[sub_key, fileinfo]
+      - excepted: dict[except_key, fileinfo]
+
+    fileinfo:
+      - path: str
+      - columns: list[str] (canonical column names, file order)
+      - rows: int
+    """
+    import os
+    import tempfile
+    import time
+    import traceback
+    import uuid
+
+    try:
+        (
+            index_offset,
+            jsons,
+            index_key,
+            except_keys,
+            sep,
+            tmp_dir,
+            record_contexts,
+        ) = args
+
+        try:
+            index_offset = int(index_offset or 0)
+        except Exception:
+            index_offset = 0
+
+        index_key = str(index_key) if index_key is not None else "id"
+        sep = str(sep) if sep is not None else "__"
+        tmp_dir = str(tmp_dir or "/tmp")
+
+        # Normalize once so comparisons against excepted keys are stable.
+        if except_keys is None:
+            except_keys = []
+        except_keys = [str(k).strip() for k in except_keys if str(k).strip()]
+        except_set = set(except_keys)
+
+        def _json_dumps_best_effort(value):
+            try:
+                import orjson
+
+                return orjson.dumps(value).decode("utf-8")
+            except Exception:
+                import json
+
+                try:
+                    return json.dumps(value, ensure_ascii=False)
+                except Exception:
+                    return json.dumps(str(value), ensure_ascii=False)
+
+        def _build_excepted_row(path: str, value, row: dict, context) -> dict:
+            out: dict = {}
+            if isinstance(value, dict):
+                out.update(value)
+            else:
+                out["value"] = value
+
+            out[index_key] = row.get(index_key)
+            out["__except_path__"] = str(path)
+            out["__except_raw_type__"] = type(value).__name__
+            out["__except_raw_json__"] = _json_dumps_best_effort(value)
+
+            if isinstance(context, dict):
+                source_path = context.get("source_path")
+                if source_path is not None:
+                    out["__source_path__"] = source_path
+                source_member = context.get("source_member")
+                if source_member is not None:
+                    out["__source_member__"] = source_member
+                line_no = context.get("line_no")
+                if line_no is not None:
+                    out["__line_no__"] = line_no
+                record_index = context.get("record_index")
+                if record_index is not None:
+                    out["__record_index__"] = record_index
+            return out
+
+        def _is_nullish(v) -> bool:
+            import math
+
+            if v is None:
+                return True
+            try:
+                if type(v).__name__ == "NAType":
+                    return True
+            except Exception:
+                pass
+            try:
+                return isinstance(v, float) and math.isnan(v)
+            except Exception:
+                return False
+
+        # Flatten chunk to row dicts (in-worker only).
+        t_flat0 = time.perf_counter()
+        rows_main: list[dict] = []
+        sub_rows_tot: dict[str, list[dict]] = {}
+        excepted_tot: dict[str, list[dict]] = {k: [] for k in except_keys}
+        colname_cache: dict = {}
+
+        records_ok = 0
+        records_failed = 0
+        errors: list[dict] = []
+
+        for i, rec in enumerate(jsons or []):
+            idx = index_offset + i
+            ctx = None
+            if isinstance(record_contexts, (list, tuple)) and i < len(record_contexts):
+                maybe = record_contexts[i]
+                if isinstance(maybe, dict):
+                    ctx = maybe
+
+            try:
+                row, sub_rows, excepted = flatten_nested_json_with_list_rows(
+                    rec,
+                    index_key=index_key,
+                    index=idx,
+                    except_keys=except_set,
+                    sep=sep,
+                    colname_cache=colname_cache,
+                )
+            except Exception as e:
+                records_failed += 1
+                errors.append(
+                    {
+                        "index": int(idx),
+                        "type": type(e).__name__,
+                        "message": str(e),
+                        "traceback": traceback.format_exc(),
+                    }
+                )
+                continue
+
+            records_ok += 1
+            rows_main.append(row)
+
+            for k, rows in (sub_rows or {}).items():
+                if rows:
+                    sub_rows_tot.setdefault(str(k), []).extend(rows)
+
+            for k in except_keys:
+                try:
+                    if k in excepted:
+                        excepted_tot.setdefault(k, []).append(_build_excepted_row(str(k), excepted[k], row, ctx))
+                except Exception as e:
+                    errors.append(
+                        {
+                            "index": int(idx),
+                            "type": type(e).__name__,
+                            "message": f"excepted_collect_failed: {e}",
+                        }
+                    )
+
+        flatten_ms = int(round((time.perf_counter() - t_flat0) * 1000.0))
+
+        # Write TSV files per table.
+        t_tsv0 = time.perf_counter()
+        from . import manage as _manage
+
+        escape = _manage._mysql_escape_load_data_value
+
+        def _columns_from_rows(rows: list[dict]) -> list[str]:
+            cols_non_null: set[str] = set()
+            for r in rows:
+                if not isinstance(r, dict):
+                    continue
+                for k, v in r.items():
+                    ks = k if type(k) is str else str(k)
+                    if ks == index_key or not _is_nullish(v):
+                        cols_non_null.add(ks)
+            cols_non_null.add(index_key)
+            # Keep existing semantics: id first, then stable sort.
+            return [index_key] + sorted([c for c in cols_non_null if c != index_key])
+
+        run_tag = uuid.uuid4().hex[:12]
+        workdir = tempfile.mkdtemp(prefix=f"kisti_flatten_{run_tag}_", dir=tmp_dir)
+
+        def _write_tsv(rows: list[dict], cols: list[str], stem: str) -> dict:
+            safe_stem = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in str(stem))[:80]
+            path = os.path.join(workdir, f"{safe_stem}_{uuid.uuid4().hex[:10]}.tsv")
+            with open(path, "w", encoding="utf-8", newline="\n") as f:
+                write = f.write
+                cols_local = list(cols)
+                for r in rows:
+                    rg = r.get
+                    write("\t".join(escape(rg(col)) for col in cols_local) + "\n")
+            return {"path": path, "columns": list(cols), "rows": int(len(rows))}
+
+        main_info = None
+        if rows_main:
+            cols = _columns_from_rows(rows_main)
+            main_info = _write_tsv(rows_main, cols, "main")
+
+        subs: dict[str, dict] = {}
+        for sub_key, rows in (sub_rows_tot or {}).items():
+            if not rows:
+                continue
+            cols = _columns_from_rows(rows)
+            subs[str(sub_key)] = _write_tsv(rows, cols, f"sub_{sub_key}")
+
+        excepted: dict[str, dict] = {}
+        for ex_key, rows in (excepted_tot or {}).items():
+            if not rows:
+                continue
+            cols = _columns_from_rows(rows)
+            excepted[str(ex_key)] = _write_tsv(rows, cols, f"except_{ex_key}")
+
+        tsv_write_ms = int(round((time.perf_counter() - t_tsv0) * 1000.0))
+
+        return {
+            "ok": True,
+            "index_offset": int(index_offset),
+            "records_ok": int(records_ok),
+            "records_failed": int(records_failed),
+            "errors": list(errors),
+            "timings_ms": {
+                "flatten_ms": int(flatten_ms),
+                "tsv_write_ms": int(tsv_write_ms),
+            },
+            "workdir": str(workdir),
+            "main": main_info,
+            "subs": subs,
+            "excepted": excepted,
+        }
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": {
+                "type": type(e).__name__,
+                "message": str(e),
+                "traceback": traceback.format_exc(),
+            },
+        }
 
 def separate_excepted(jsons, except_keys, sep='__'):
     _jsons = jsons.copy()
@@ -630,6 +1093,9 @@ def extract_rows_from_jsons(
     """
     if except_keys is None:
         except_keys = []
+    # Normalize once (string keys, trimmed) so flatten/collection keys are consistent.
+    except_keys = [str(k).strip() for k in except_keys if str(k).strip()]
+    except_set = set(except_keys)
 
     try:
         index_offset = int(index_offset or 0)
@@ -644,6 +1110,8 @@ def extract_rows_from_jsons(
     rows_main: list[dict] = []
     sub_rows_tot: dict[str, list[dict]] = {}
     excepted_tot = {key: [] for key in except_keys}
+    # Cache column name prefixing across records (major win for homogeneous JSON arrays).
+    colname_cache: dict = {}
 
     def _json_dumps_best_effort(value):
         try:
@@ -746,11 +1214,13 @@ def extract_rows_from_jsons(
 
             except_keys_tuple = tuple(except_keys or [])
             chunksize = max(1, min(256, len(jsons) // (int(parallel_workers) * 4) or 1))
-            args_iter = (
-                (index_offset + i, _json, index_key, except_keys_tuple, sep) for i, _json in enumerate(jsons)
-            )
-            with ProcessPoolExecutor(max_workers=int(parallel_workers)) as ex:
-                for out in ex.map(_safe_flatten_nested_json_with_list_rows_worker, args_iter, chunksize=chunksize):
+            args_iter = ((index_offset + i, _json) for i, _json in enumerate(jsons))
+            with ProcessPoolExecutor(
+                max_workers=int(parallel_workers),
+                initializer=_init_flatten_nested_json_with_list_rows_worker,
+                initargs=(index_key, except_keys_tuple, sep),
+            ) as ex:
+                for out in ex.map(_safe_flatten_nested_json_with_list_rows_worker_v2, args_iter, chunksize=chunksize):
                     processed += 1
                     idx, ok, row, sub_rows, excepted, err = out
                     local_i = processed - 1
@@ -770,10 +1240,16 @@ def extract_rows_from_jsons(
         except Exception as e:
             if report:
                 try:
+                    msg = "Parallel flatten failed; falling back to sequential for remaining records"
+                    if isinstance(e, PermissionError):
+                        msg = (
+                            "Parallel flatten unavailable (PermissionError starting worker processes); "
+                            "falling back to sequential for remaining records"
+                        )
                     report.warn(
                         stage="extract_rows_from_jsons.parallel",
-                        message="Parallel flatten failed; falling back to sequential for remaining records",
-                        error=str(e),
+                        message=msg,
+                        error={"type": type(e).__name__, "message": str(e)},
                         processed=int(processed),
                         total=int(len(jsons)),
                     )
@@ -787,8 +1263,9 @@ def extract_rows_from_jsons(
                         _json,
                         index=index_offset + i,
                         index_key=index_key,
-                        except_keys=except_keys,
+                        except_keys=except_set,
                         sep=sep,
+                        colname_cache=colname_cache,
                     )
                 except Exception as e2:
                     _handle_record_fail(index_offset + i, _json, {"type": type(e2).__name__, "message": str(e2)})
@@ -808,8 +1285,9 @@ def extract_rows_from_jsons(
                 _json,
                 index=index_offset + i,
                 index_key=index_key,
-                except_keys=except_keys,
+                except_keys=except_set,
                 sep=sep,
+                colname_cache=colname_cache,
             )
         except Exception as e:
             _handle_record_fail(index_offset + i, _json, {"type": type(e).__name__, "message": str(e)})

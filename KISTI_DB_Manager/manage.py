@@ -50,6 +50,7 @@ __all__ = [
     "fill_table_from_file",
     "fill_table_from_dataframe",
     "fill_table_from_rows",
+    "fill_table_from_tsv_file",
     "drop_table",
     "drop_DB",
     "create_DB",
@@ -440,6 +441,69 @@ def _load_data_local_infile_tabular_file(
         + ignore
         + "("
         + ", ".join(columns_expr)
+        + ");"
+    )
+
+    t0 = None
+    try:
+        import time
+
+        t0 = time.perf_counter()
+    except Exception:
+        t0 = None
+
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+        conn.commit()
+        if report is not None and t0 is not None:
+            try:
+                import time
+
+                report.add_time_s("db.load_data.exec", time.perf_counter() - t0)
+            except Exception:
+                pass
+    except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
+        raise
+
+
+def _load_data_local_infile_tsv_file(
+    *,
+    conn,
+    table_name: str,
+    file_path: str,
+    columns_sql: list[str],
+    report=None,
+) -> None:
+    """
+    Bulk load an existing TSV file via LOAD DATA LOCAL INFILE.
+
+    Unlike `_load_data_local_infile_tabular_file`, this is tailored to the TSVs we generate:
+    - tab-separated
+    - no quotes
+    - MySQL escape sequences (ESCAPED BY '\\\\')
+    - newline-terminated
+    """
+
+    def qi(ident: str) -> str:
+        return str(ident).replace("`", "``")
+
+    if not columns_sql:
+        return
+
+    sql = (
+        "LOAD DATA LOCAL INFILE "
+        + _sql_quote_string(str(file_path))
+        + f" INTO TABLE `{qi(table_name)}` "
+        + "CHARACTER SET utf8mb4 "
+        + "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
+        + "LINES TERMINATED BY '\\n' "
+        + "("
+        + ", ".join(f"`{qi(c)}`" for c in columns_sql)
         + ");"
     )
 
@@ -1766,6 +1830,188 @@ def fill_table_from_rows(
             index=False,
         )
     return nm
+
+
+def fill_table_from_tsv_file(
+    file_path: str,
+    db_config,
+    *,
+    table_name: str,
+    name_map: NameMap | dict,
+    columns_original: list[str],
+    extra_column_name: str | None = None,
+    auto_alter_table: bool = True,
+    column_type: str = "LONGTEXT",
+    report=None,
+    engine=None,
+    existing_cols: set[str] | None = None,
+    load_method: str | None = None,
+    fast_load_state: FastLoadState | None = None,
+    local_infile_conn=None,
+):
+    """
+    Load a TSV file into an existing table with best-effort drift handling.
+
+    Primary purpose: parallel JSON flatten where worker processes write per-table TSV
+    files, and the parent process performs `LOAD DATA LOCAL INFILE` into MariaDB/MySQL.
+
+    Notes:
+    - This function is intended for the LOAD DATA path. It does not attempt to fall back
+      to pandas.to_sql because the TSV uses MySQL escape sequences (e.g., \\t, \\n, \\N),
+      and a correct reverse-unescape is non-trivial and would be slow.
+    """
+    from contextlib import nullcontext
+
+    from sqlalchemy import create_engine, inspect, text
+    from sqlalchemy.engine import URL
+
+    def qi(ident: str) -> str:
+        return str(ident).replace("`", "``")
+
+    nm = load_namemap(name_map)
+    if nm is None:
+        raise TypeError("fill_table_from_tsv_file requires a valid NameMap")
+
+    if not file_path:
+        return nm
+
+    db_config = coerce_db_config(db_config)
+
+    if engine is None:
+        url = URL.create(
+            "mysql+pymysql",
+            username=db_config.get("user"),
+            password=db_config.get("password"),
+            host=db_config.get("host"),
+            port=db_config.get("port"),
+            database=db_config.get("database"),
+        )
+        engine = create_engine(url)
+
+    if not columns_original:
+        return nm
+
+    # Normalize to canonical naming (dots -> key_sep).
+    canonical_cols = [str(c).replace(".", nm.key_sep) for c in columns_original]
+    if canonical_cols != list(columns_original):
+        columns_original = canonical_cols
+
+    extra_canon = None
+    extra_sql = None
+    if extra_column_name:
+        extra_canon = str(extra_column_name).replace(".", nm.key_sep)
+        if extra_canon not in set(columns_original):
+            columns_original = list(columns_original) + [extra_canon]
+
+    # Ensure NameMap covers requested columns (schema drift).
+    nm = nm.with_additional_columns(columns_original, max_len=64)
+    if extra_canon:
+        extra_sql = nm.map_column(extra_canon)
+
+    cols_sql = [nm.map_column(c) for c in columns_original]
+
+    # Best-effort: align with existing table schema.
+    existing_cols_set: set[str] | None
+    if existing_cols is not None:
+        existing_cols_set = existing_cols
+    else:
+        try:
+            inspector = inspect(engine)
+            existing_cols_set = {c.get("name") for c in inspector.get_columns(table_name)}
+        except Exception as e:
+            print(f"Warning: could not inspect existing columns for `{table_name}`: {e}")
+            existing_cols_set = None
+
+    missing_cols = [col for col in cols_sql if col not in existing_cols_set] if existing_cols_set else []
+
+    # Ensure extra column exists (best-effort) so we can accept extra_column_name in TSV schemas.
+    if extra_sql and existing_cols_set is not None and extra_sql not in existing_cols_set:
+        try:
+            with (report.timer("db.alter") if report else nullcontext()):
+                with engine.begin() as conn:
+                    conn.execute(text(f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` {column_type}"))
+            existing_cols_set.add(extra_sql)
+        except Exception as e:
+            if report:
+                try:
+                    report.warn(
+                        stage="fill_table_from_tsv_file.extra",
+                        message="Failed to ensure extra column; unknown fields may be dropped",
+                        table=table_name,
+                        column=extra_sql,
+                        error=str(e),
+                    )
+                except Exception:
+                    pass
+
+    if missing_cols and auto_alter_table:
+        add_clauses = [f"ADD COLUMN `{qi(col)}` {column_type}" for col in missing_cols]
+        alter_sql = f"ALTER TABLE `{qi(table_name)}` " + ", ".join(add_clauses)
+        with (report.timer("db.alter") if report else nullcontext()):
+            with engine.begin() as conn:
+                try:
+                    conn.execute(text(alter_sql))
+                    for col in missing_cols:
+                        if existing_cols_set is not None:
+                            existing_cols_set.add(col)
+                    print(f"Added {len(missing_cols)} missing columns to `{table_name}` ({column_type}).")
+                except Exception:
+                    for col in missing_cols:
+                        try:
+                            conn.execute(text(f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(col)}` {column_type}"))
+                            if existing_cols_set is not None:
+                                existing_cols_set.add(col)
+                            print(f"Added missing column `{col}` to `{table_name}` ({column_type}).")
+                        except Exception as e:
+                            print(f"Warning: failed to add column `{col}` to `{table_name}`: {e}")
+
+    keep_cols_sql = cols_sql
+    keep_cols_original = list(columns_original)
+    if existing_cols_set:
+        keep_pairs = [(o, s) for o, s in zip(columns_original, cols_sql) if s in existing_cols_set]
+        if len(keep_pairs) != len(cols_sql):
+            dropped = [s for o, s in zip(columns_original, cols_sql) if s not in set(s for _, s in keep_pairs)]
+            print(f"Warning: dropping {len(dropped)} columns not present in `{table_name}`: {dropped[:10]}")
+        keep_cols_original = [o for o, _s in keep_pairs]
+        keep_cols_sql = [s for _o, s in keep_pairs]
+
+    load_method_norm = _normalize_db_load_method(load_method)
+    if fast_load_state is not None and not fast_load_state.enabled:
+        load_method_norm = "to_sql"
+
+    if load_method_norm not in {"auto", "load_data"} or local_infile_conn is None:
+        raise RuntimeError("fill_table_from_tsv_file requires LOAD DATA (local_infile_conn) and db_load_method=auto/load_data")
+
+    try:
+        with (report.timer("db.load_data.total") if report else nullcontext()):
+            _load_data_local_infile_tsv_file(
+                conn=local_infile_conn,
+                table_name=table_name,
+                file_path=str(file_path),
+                columns_sql=list(keep_cols_sql),
+                report=report,
+            )
+        if report:
+            try:
+                report.bump("load_data_ok", 1)
+            except Exception:
+                pass
+        return nm
+    except Exception as e:
+        if report:
+            try:
+                report.warn(
+                    stage="fill_table_from_tsv_file.load_data",
+                    message="LOAD DATA LOCAL INFILE failed",
+                    table=table_name,
+                    file_path=str(file_path),
+                    error=str(e),
+                )
+            except Exception:
+                pass
+        if fast_load_state is not None:
+            fast_load_state.disable(reason="load_data_failed", error=str(e))
+        raise
 
 
 def drop_table(table_name, db_config):

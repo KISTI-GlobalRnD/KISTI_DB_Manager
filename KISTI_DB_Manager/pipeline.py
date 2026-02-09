@@ -896,6 +896,18 @@ def run_json_pipeline(
             except Exception:
                 parallel_workers = 0
 
+            db_load_parallel_tables = dc.get("db_load_parallel_tables", dc.get("load_parallel_tables", 0))
+            try:
+                db_load_parallel_tables = int(db_load_parallel_tables) if db_load_parallel_tables is not None else 0
+            except Exception:
+                db_load_parallel_tables = 0
+            if db_load_parallel_tables < 0:
+                db_load_parallel_tables = 0
+            try:
+                report.set_artifact("db_load_parallel_tables", int(db_load_parallel_tables))
+            except Exception:
+                pass
+
             json_streaming_load = bool(dc.get("json_streaming_load", True))
             use_streaming_rows = (
                 bool(load)
@@ -947,7 +959,7 @@ def run_json_pipeline(
 
                 if use_streaming_rows and fast_load_state.enabled:
                     try:
-                        from .processing import extract_rows_from_jsons
+                        from .processing import extract_rows_from_jsons, _safe_flatten_jsons_to_tsv_worker
                     except Exception as e:
                         report.exception(
                             stage="json_pipeline.flatten",
@@ -970,6 +982,467 @@ def run_json_pipeline(
                             except Exception:
                                 return False
 
+                        # Parallel TSV backend (workers write TSV; parent does LOAD DATA) to minimize IPC.
+                        if parallel_workers and int(parallel_workers) > 1 and len(batch_records) >= 2 and bool(auto_alter_table_effective):
+                            import os
+                            import shutil
+                            from concurrent.futures import ProcessPoolExecutor
+
+                            pw = min(int(parallel_workers), int(len(batch_records)))
+                            # Split the batch into pw contiguous chunks to keep LOAD DATA calls bounded.
+                            n = int(len(batch_records))
+                            base = n // pw
+                            rem = n % pw
+                            slices: list[tuple[int, int]] = []
+                            start = 0
+                            for wi in range(pw):
+                                extra = 1 if wi < rem else 0
+                                end = start + base + extra
+                                if end > start:
+                                    slices.append((start, end))
+                                start = end
+
+                            tmp_dir = str(dc.get("tmp_dir") or "/tmp")
+                            workdirs: list[str] = []
+                            results: list[dict] = []
+                            class _ParallelTSVFailed(Exception):
+                                pass
+                            try:
+                                try:
+                                    with report.timer("json.flatten"):
+                                        with ProcessPoolExecutor(max_workers=pw) as ex:
+                                            futs = []
+                                            for s, e in slices:
+                                                ctx_slice = None
+                                                if isinstance(record_contexts, (list, tuple)):
+                                                    ctx_slice = list(record_contexts[s:e])
+                                                futs.append(
+                                                    ex.submit(
+                                                        _safe_flatten_jsons_to_tsv_worker,
+                                                        (
+                                                            int(index_offset) + int(s),
+                                                            list(batch_records[s:e]),
+                                                            index_key,
+                                                            tuple(except_keys or ()),
+                                                            key_sep,
+                                                            tmp_dir,
+                                                            ctx_slice,
+                                                        ),
+                                                    )
+                                                )
+                                            for fut in futs:
+                                                results.append(fut.result())
+                                except Exception as e:
+                                    try:
+                                        report.warn(
+                                            stage="json_pipeline.flatten.parallel_tsv",
+                                            message="Parallel TSV backend failed; falling back to serial rows backend",
+                                            error={"type": type(e).__name__, "message": str(e)},
+                                        )
+                                    except Exception:
+                                        pass
+                                    raise _ParallelTSVFailed() from e
+
+                                tables_files: dict[str, list[dict]] = {}
+                                load_groups: list[dict[str, Any]] = []
+
+                                def _add_file(table: str, fi: dict | None) -> None:
+                                    if not isinstance(fi, dict):
+                                        return
+                                    if not fi.get("path") or not fi.get("columns") or not fi.get("rows"):
+                                        return
+                                    tables_files.setdefault(str(table), []).append(fi)
+
+                                for res in results:
+                                    if not isinstance(res, dict) or not res.get("ok"):
+                                        err = None
+                                        if isinstance(res, dict):
+                                            err = res.get("error")
+                                        report.warn(
+                                            stage="json_pipeline.flatten.parallel_tsv",
+                                            message="Worker failed to produce TSV artifacts; skipping chunk",
+                                            error=err,
+                                        )
+                                        if not continue_on_error:
+                                            raise RuntimeError(f"parallel_tsv_worker_failed: {err}")
+                                        continue
+
+                                    try:
+                                        report.bump("records_ok", int(res.get("records_ok", 0) or 0))
+                                        report.bump("records_failed", int(res.get("records_failed", 0) or 0))
+                                    except Exception:
+                                        pass
+
+                                    tms = res.get("timings_ms") or {}
+                                    try:
+                                        report.add_time_ms("json.flatten.workersum", int(tms.get("flatten_ms", 0) or 0))
+                                        report.add_time_ms("json.flatten.tsv_write.workersum", int(tms.get("tsv_write_ms", 0) or 0))
+                                    except Exception:
+                                        pass
+
+                                    wd = res.get("workdir")
+                                    if isinstance(wd, str) and wd:
+                                        workdirs.append(wd)
+
+                                    _add_file(base_table, res.get("main"))
+                                    for sub_key, fi in (res.get("subs") or {}).items():
+                                        _add_file(_table_for_sub(str(sub_key).replace(".", key_sep)), fi)
+                                    for ex_key, fi in (res.get("excepted") or {}).items():
+                                        _add_file(_table_for_excepted(str(ex_key).replace(".", key_sep)), fi)
+
+                                    for err in (res.get("errors") or [])[:20]:
+                                        try:
+                                            report.warn(
+                                                stage="json_pipeline.flatten.parallel_tsv.record",
+                                                message="Record failed in parallel TSV worker",
+                                                error=err,
+                                            )
+                                        except Exception:
+                                            pass
+                                        try:
+                                            q.write(
+                                                stage="json_pipeline.flatten.record",
+                                                record={"table_name": base_table, "error": err},
+                                                exc=RuntimeError(str(err.get("message") if isinstance(err, dict) else err)),
+                                            )
+                                        except Exception:
+                                            pass
+
+                                for table_original, files in tables_files.items():
+                                    if not files:
+                                        continue
+
+                                    # Create table schema once using union of all file columns for this batch.
+                                    cols_non_null: set[str] = set()
+                                    for fi in files:
+                                        for c in fi.get("columns") or []:
+                                            cols_non_null.add(str(c))
+                                    cols_non_null.add(index_key)
+                                    cols = [index_key] + sorted([c for c in cols_non_null if c != index_key])
+                                    if use_extra_column and extra_column_name not in set(cols):
+                                        cols.append(extra_column_name)
+                                    if not cols:
+                                        continue
+
+                                    nm = ensure_name_map(table_original, cols)
+                                    if emit_ddl:
+                                        try:
+                                            ddl, _nm2 = manage.generate_create_table_sql_from_columns(
+                                                table_name=table_original,
+                                                columns=list(nm.columns_original),
+                                                name_map=nm,
+                                                key_sep=key_sep,
+                                                column_type=column_type,
+                                            )
+                                            ddl_by_table[table_original] = ddl
+                                        except Exception as e:
+                                            report.warn(stage="json_pipeline", message="Failed to generate DDL artifact", exc=str(e))
+
+                                    if create and table_original not in created_tables:
+                                        nm_created = step(
+                                            "create",
+                                            manage.create_table_from_columns,
+                                            dbc,
+                                            table_name=table_original,
+                                            columns=list(nm.columns_original),
+                                            name_map=nm,
+                                            key_sep=key_sep,
+                                            column_type=column_type,
+                                        )
+                                        if isinstance(nm_created, NameMap):
+                                            name_maps[table_original] = nm_created
+                                            nm = nm_created
+                                        if nm_created is not None:
+                                            created_tables.add(table_original)
+                                            report.bump("tables_created", 1)
+                                            existing_cols_cache[nm.table_sql] = set(nm.columns_sql)
+
+                                    if load:
+                                        # Reduce LOAD DATA calls by concatenating files with identical schemas.
+                                        import tempfile
+                                        import uuid
+
+                                        groups: dict[tuple[str, ...], list[dict]] = {}
+                                        for fi in files:
+                                            cols_key = tuple(fi.get("columns") or ())
+                                            if not cols_key:
+                                                continue
+                                            groups.setdefault(cols_key, []).append(fi)
+
+                                        merged_entries: list[dict] = []
+                                        for cols_key, group_files in groups.items():
+                                            if len(group_files) == 1:
+                                                merged_entries.append(group_files[0])
+                                                continue
+
+                                            # Merge to a single TSV to amortize LOAD DATA overhead.
+                                            tmp_path = None
+                                            with tempfile.NamedTemporaryFile(
+                                                mode="wb",
+                                                prefix=f"kisti_merge_{uuid.uuid4().hex[:8]}_",
+                                                suffix=".tsv",
+                                                delete=False,
+                                                dir=tmp_dir,
+                                            ) as out:
+                                                tmp_path = out.name
+                                                merged_path = tmp_path
+                                                for gf in group_files:
+                                                    try:
+                                                        with open(str(gf.get("path")), "rb") as inp:
+                                                            shutil.copyfileobj(inp, out, length=1024 * 1024)
+                                                    except Exception:
+                                                        # Best-effort: if merge fails, fall back to loading files individually.
+                                                        merged_path = None
+                                                        break
+
+                                            if not merged_path:
+                                                if tmp_path:
+                                                    try:
+                                                        os.remove(str(tmp_path))
+                                                    except Exception:
+                                                        pass
+                                                merged_entries.extend(group_files)
+                                                continue
+
+                                            # Delete originals after successful merge.
+                                            for gf in group_files:
+                                                try:
+                                                    os.remove(str(gf.get("path")))
+                                                except Exception:
+                                                    pass
+
+                                            merged_entries.append(
+                                                {
+                                                    "path": str(merged_path),
+                                                    "columns": list(cols_key),
+                                                    "rows": int(sum(int(gf.get("rows") or 0) for gf in group_files)),
+                                                }
+                                            )
+
+                                        load_groups.append(
+                                            {
+                                                "nm": nm,
+                                                "table_sql": nm.table_sql,
+                                                "entries": merged_entries,
+                                                "existing_cols": set(_get_existing_cols(nm.table_sql) or []) if inspector is not None else None,
+                                            }
+                                        )
+
+                                # Execute LOAD DATA for this batch (optionally parallel across tables).
+                                if load and load_groups:
+                                    # Serial load: keep existing behavior/timings.
+                                    if not db_load_parallel_tables or int(db_load_parallel_tables) <= 1 or len(load_groups) <= 1:
+                                        for g in load_groups:
+                                            nm = g.get("nm")
+                                            table_sql = g.get("table_sql")
+                                            entries = g.get("entries") or []
+                                            if not nm or not table_sql or not entries:
+                                                continue
+                                            loaded_any = False
+                                            for fi in entries:
+                                                path = fi.get("path")
+                                                file_cols = fi.get("columns") or []
+                                                if not path or not file_cols:
+                                                    continue
+                                                load_res = step(
+                                                    "load",
+                                                    manage.fill_table_from_tsv_file,
+                                                    str(path),
+                                                    dbc,
+                                                    table_name=str(table_sql),
+                                                    name_map=nm,
+                                                    # TSV backend does not populate __extra__; keep file columns exact.
+                                                    extra_column_name=None,
+                                                    columns_original=list(file_cols),
+                                                    auto_alter_table=bool(auto_alter_table_effective),
+                                                    column_type=column_type,
+                                                    report=report,
+                                                    engine=engine,
+                                                    existing_cols=_get_existing_cols(str(table_sql)),
+                                                    load_method=db_load_method,
+                                                    fast_load_state=fast_load_state,
+                                                    local_infile_conn=local_infile_conn,
+                                                )
+                                                if load_res is not None:
+                                                    loaded_any = True
+                                                    try:
+                                                        report.bump("rows_loaded", int(fi.get("rows") or 0))
+                                                    except Exception:
+                                                        pass
+                                                try:
+                                                    os.remove(str(path))
+                                                except Exception:
+                                                    pass
+                                            if loaded_any:
+                                                report.bump("tables_loaded", 1)
+                                        return
+
+                                    # Parallel load across tables: one local_infile connection per thread.
+                                    try:
+                                        import threading
+                                        import time
+                                        from concurrent.futures import ThreadPoolExecutor, as_completed
+
+                                        import pymysql
+
+                                        tls = threading.local()
+                                        conns: list[Any] = []
+                                        conns_lock = threading.Lock()
+
+                                        def _thread_init():
+                                            conn = pymysql.connect(
+                                                host=dbc.get("host"),
+                                                user=dbc.get("user"),
+                                                password=dbc.get("password"),
+                                                database=dbc.get("database"),
+                                                port=int(dbc.get("port") or 3306),
+                                                charset="utf8mb4",
+                                                autocommit=False,
+                                                local_infile=1,
+                                                connect_timeout=3,
+                                            )
+                                            if bool(dc.get("fast_load_session", False)):
+                                                try:
+                                                    _apply_fast_load_session_settings(
+                                                        conn,
+                                                        report=None,
+                                                        stage="json_pipeline.fast_load_session",
+                                                    )
+                                                except Exception:
+                                                    pass
+                                            tls.conn = conn
+                                            with conns_lock:
+                                                conns.append(conn)
+
+                                        def _get_conn():
+                                            return getattr(tls, "conn", None)
+
+                                        def _load_group(g: dict) -> dict:
+                                            nm = g.get("nm")
+                                            table_sql = str(g.get("table_sql") or "")
+                                            entries = g.get("entries") or []
+                                            existing_cols = g.get("existing_cols")
+                                            res = {
+                                                "table_sql": table_sql,
+                                                "ok": True,
+                                                "loaded_any": False,
+                                                "rows_loaded": 0,
+                                                "load_ok": 0,
+                                                "load_failed": 0,
+                                                "load_data_ok": 0,
+                                                "existing_cols": existing_cols,
+                                                "errors": [],
+                                            }
+                                            conn = _get_conn()
+                                            if conn is None:
+                                                res["ok"] = False
+                                                res["errors"].append({"type": "RuntimeError", "message": "missing thread connection"})
+                                                return res
+
+                                            for fi in entries:
+                                                path = fi.get("path")
+                                                file_cols = fi.get("columns") or []
+                                                if not path or not file_cols:
+                                                    continue
+                                                try:
+                                                    manage.fill_table_from_tsv_file(
+                                                        str(path),
+                                                        dbc,
+                                                        table_name=table_sql,
+                                                        name_map=nm,
+                                                        extra_column_name=None,
+                                                        columns_original=list(file_cols),
+                                                        auto_alter_table=bool(auto_alter_table_effective),
+                                                        column_type=column_type,
+                                                        report=None,  # avoid thread-unsafe RunReport mutations
+                                                        engine=engine,
+                                                        existing_cols=existing_cols,
+                                                        load_method=db_load_method,
+                                                        fast_load_state=None,
+                                                        local_infile_conn=conn,
+                                                    )
+                                                    res["loaded_any"] = True
+                                                    res["load_ok"] += 1
+                                                    res["load_data_ok"] += 1
+                                                    try:
+                                                        res["rows_loaded"] += int(fi.get("rows") or 0)
+                                                    except Exception:
+                                                        pass
+                                                except Exception as e:
+                                                    res["ok"] = False
+                                                    res["load_failed"] += 1
+                                                    res["errors"].append({"type": type(e).__name__, "message": str(e)})
+                                                    if not continue_on_error:
+                                                        break
+                                                finally:
+                                                    try:
+                                                        os.remove(str(path))
+                                                    except Exception:
+                                                        pass
+                                            return res
+
+                                        pl = min(int(db_load_parallel_tables), int(len(load_groups)))
+                                        t0 = time.perf_counter()
+                                        with report.timer("json.db.load"):
+                                            with ThreadPoolExecutor(
+                                                max_workers=pl,
+                                                thread_name_prefix="kisti_load",
+                                                initializer=_thread_init,
+                                            ) as ex:
+                                                futs = [ex.submit(_load_group, g) for g in load_groups]
+                                                for fut in as_completed(futs):
+                                                    r = fut.result()
+                                                    if not isinstance(r, dict):
+                                                        continue
+                                                    # Update existing column cache from the worker's view (best-effort).
+                                                    if r.get("existing_cols") is not None:
+                                                        try:
+                                                            existing_cols_cache[str(r.get("table_sql") or "")] = set(r.get("existing_cols") or [])
+                                                        except Exception:
+                                                            pass
+                                                    try:
+                                                        report.bump("rows_loaded", int(r.get("rows_loaded") or 0))
+                                                    except Exception:
+                                                        pass
+                                                    try:
+                                                        report.bump("load_ok", int(r.get("load_ok") or 0))
+                                                        report.bump("load_failed", int(r.get("load_failed") or 0))
+                                                        report.bump("load_data_ok", int(r.get("load_data_ok") or 0))
+                                                    except Exception:
+                                                        pass
+                                                    if r.get("loaded_any"):
+                                                        report.bump("tables_loaded", 1)
+                                                    if not r.get("ok"):
+                                                        report.warn(
+                                                            stage="json_pipeline.load.parallel_tables",
+                                                            message="LOAD DATA failed for table in parallel loader",
+                                                            table=str(r.get("table_sql") or ""),
+                                                            errors=list(r.get("errors") or [])[:3],
+                                                        )
+                                                        if not continue_on_error:
+                                                            raise RuntimeError(f"parallel_table_load_failed: {r.get('table_sql')}")
+                                        dt = time.perf_counter() - t0
+                                        # For parallel load, report wall time to keep share_pct meaningful.
+                                        report.add_time_s("db.load_data.exec", dt)
+                                        report.add_time_s("db.load_data.total", dt)
+                                    finally:
+                                        for c in conns:
+                                            try:
+                                                c.close()
+                                            except Exception:
+                                                pass
+                                return
+                            except _ParallelTSVFailed:
+                                # Fall back to serial rows backend below.
+                                pass
+                            finally:
+                                for wd in workdirs:
+                                    try:
+                                        shutil.rmtree(wd, ignore_errors=True)
+                                    except Exception:
+                                        pass
+
+                        # Serial rows backend (rows -> TSV -> LOAD DATA) for maximal correctness/compatibility.
                         try:
                             with report.timer("json.flatten"):
                                 rows_main, sub_rows_tot, excepted = extract_rows_from_jsons(
@@ -981,7 +1454,7 @@ def run_json_pipeline(
                                     quarantine=q,
                                     index_offset=int(index_offset),
                                     record_contexts=record_contexts,
-                                    parallel_workers=int(parallel_workers) if parallel_workers and parallel_workers > 1 else None,
+                                    parallel_workers=None,
                                 )
                         except Exception as e:
                             report.exception(stage="json_pipeline.flatten", message="Failed to flatten JSON batch", exc=e)

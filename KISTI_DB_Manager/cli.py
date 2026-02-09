@@ -508,6 +508,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["db_load_method"] = args.db_load_method
     if getattr(args, "parallel_workers", None) is not None:
         data_config["parallel_workers"] = int(args.parallel_workers)
+    if getattr(args, "db_load_parallel_tables", None) is not None:
+        data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
     if getattr(args, "json_streaming_load", None) is not None:
         data_config["json_streaming_load"] = bool(args.json_streaming_load)
     if getattr(args, "chunk_size", None) is not None:
@@ -850,6 +852,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--parallel-workers",
         type=int,
         help="ProcessPool workers for JSON flatten (default: config or 0/off)",
+    )
+    p_json_run.add_argument(
+        "--db-load-parallel-tables",
+        type=int,
+        help="Parallelize LOAD DATA across tables (default: config or 0/off)",
     )
     p_json_run.add_argument(
         "--json-streaming-load",
