@@ -291,6 +291,7 @@ def _build_run_report_profile(data: dict[str, Any], *, top: int = 8) -> dict[str
         "chunk_size": artifacts.get("chunk_size"),
         "parallel_workers": artifacts.get("parallel_workers"),
         "db_load_parallel_tables": artifacts.get("db_load_parallel_tables"),
+        "overlap_batches": artifacts.get("overlap_batches"),
         "duration_s": data.get("duration_s"),
         "issues": len(data.get("issues") or []),
         "stats": {
@@ -351,6 +352,8 @@ def _render_run_report_profile_markdown(profile: Mapping[str, Any]) -> str:
     lines.append(f"- parallel_workers: `{profile.get('parallel_workers')}`")
     if profile.get("db_load_parallel_tables") is not None:
         lines.append(f"- db_load_parallel_tables: `{profile.get('db_load_parallel_tables')}`")
+    if profile.get("overlap_batches") is not None:
+        lines.append(f"- overlap_batches: `{profile.get('overlap_batches')}`")
     lines.append(f"- issues: `{profile.get('issues')}`")
     lines.append("")
 
@@ -523,6 +526,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["parallel_workers"] = int(args.parallel_workers)
     if getattr(args, "db_load_parallel_tables", None) is not None:
         data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
+    if getattr(args, "overlap_batches", None) is not None:
+        data_config["overlap_batches"] = bool(args.overlap_batches)
     if getattr(args, "json_streaming_load", None) is not None:
         data_config["json_streaming_load"] = bool(args.json_streaming_load)
     if getattr(args, "chunk_size", None) is not None:
@@ -870,6 +875,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--db-load-parallel-tables",
         type=int,
         help="Parallelize LOAD DATA across tables (default: config or 0/off)",
+    )
+    p_json_run.add_argument(
+        "--overlap-batches",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Overlap batch flattening with previous batch DB load (default: mode/config; requires streaming LOAD DATA)",
     )
     p_json_run.add_argument(
         "--json-streaming-load",

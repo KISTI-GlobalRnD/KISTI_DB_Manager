@@ -49,6 +49,8 @@ MODES: dict[str, ModeSpec] = {
             "json_streaming_load": True,
             "parallel_workers": 8,
             "db_load_parallel_tables": 8,
+            # Overlap batch N+1 flatten with batch N DB load (reduces end-to-end wall time).
+            "overlap_batches": True,
             "chunk_size": 5000,
             "fast_load_session": True,
         },

@@ -157,6 +157,9 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
     - 테이블별로 별도 `LOCAL INFILE` 커넥션을 사용(쓰레드 기반)
     - WoS-like처럼 테이블 수가 많고(`tables_loaded`가 큼) `db.load_data.exec` 비중이 높을 때 효과가 큼
     - `kisti-db-manager report profile run_report.json`로 `json.flatten` / `db.load_data.*` 비중을 먼저 확인 권장
+  - `overlap_batches`는 **배치 N의 DB load와 배치 N+1의 flatten을 오버랩**해 end-to-end wall time을 줄이는 옵션
+    - `json.flatten`과 `db.load_data.exec`가 둘 다 큰 경우(둘이 번갈아 병목인 경우) 특히 효과가 큼
+    - 오버랩이 켜져 있으면 `json.db.load`/`db.load_data.exec`는 “대기(스톨) 시간” 위주로 기록되며, 실제 DB 로딩 wall-time은 `db.load_data.exec.wall`도 함께 확인 권장
 
 ## 중요한 옵션(요약)
 
@@ -193,6 +196,15 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 - 권장: `2~8` 범위에서 벤치로 결정(너무 크게 잡으면 DB/디스크가 포화되어 오히려 느려질 수 있음)
 - CLI에서 바로 덮어쓰려면: `--db-load-parallel-tables N`
 - 참고: 병렬 로딩에서는 `db.load_data.exec`가 “합계”가 아니라 “wall-time”으로 기록됨(프로파일 share_pct 해석을 위해)
+
+### `overlap_batches` (배치 오버랩)
+
+- 배치 N의 `LOAD DATA`가 진행되는 동안 배치 N+1의 flatten/TSV 생성을 먼저 수행해 파이프라인 wall-time을 줄임
+- 조건/주의:
+  - `db_load_method=auto/load_data` + `json_streaming_load=true` 경로에서 주로 의미가 큼(=LOAD DATA 기반)
+  - 오버랩이 켜진 경우 프로파일의 `json.db.load`/`db.load_data.exec`는 “대기(스톨) 시간” 성격이 강함
+    - 실제 DB 로딩 wall-time은 `db.load_data.exec.wall`도 함께 확인 권장
+- CLI: `--overlap-batches` / `--no-overlap-batches`
 
 ### `schema_mode=freeze` + `extra_column_name`
 

@@ -917,6 +917,31 @@ def run_json_pipeline(
             except Exception:
                 pass
 
+            def _coerce_bool(v) -> bool:
+                if isinstance(v, bool):
+                    return bool(v)
+                if v is None:
+                    return False
+                if isinstance(v, (int, float)):
+                    try:
+                        return int(v) != 0
+                    except Exception:
+                        return False
+                s = str(v).strip().lower()
+                if s in {"1", "true", "t", "yes", "y", "on"}:
+                    return True
+                if s in {"0", "false", "f", "no", "n", "off", ""}:
+                    return False
+                return bool(s)
+
+            overlap_batches = _coerce_bool(
+                dc.get("overlap_batches", dc.get("pipeline_overlap_batches", dc.get("pipeline_overlap", False)))
+            )
+            try:
+                report.set_artifact("overlap_batches", bool(overlap_batches))
+            except Exception:
+                pass
+
             json_streaming_load = bool(dc.get("json_streaming_load", True))
             use_streaming_rows = (
                 bool(load)
@@ -928,6 +953,119 @@ def run_json_pipeline(
             global_index = 0
             batch_no = 0
             hybrid_freeze_started = False
+            pending_load_futures: list[Any] = []
+            pending_load_workdirs: list[str] = []
+            pending_load_submitted_at: float | None = None
+
+            def _cleanup_workdirs(workdirs: list[str]) -> None:
+                if not workdirs:
+                    return
+                import shutil
+
+                for wd in workdirs:
+                    try:
+                        shutil.rmtree(wd, ignore_errors=True)
+                    except Exception:
+                        pass
+
+            def _drain_pending_loads() -> None:
+                """
+                Wait for any in-flight LOAD DATA futures and aggregate results into the report.
+
+                When overlap_batches is enabled, we submit per-table LOAD DATA futures and
+                let the main thread continue flattening the next batch. Before any DB DDL/load
+                work in the next batch, we drain these futures so schema/cache stay consistent.
+                """
+                nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
+                if not pending_load_futures:
+                    # Best-effort cleanup if a caller attached workdirs without futures.
+                    if pending_load_workdirs:
+                        _cleanup_workdirs(pending_load_workdirs)
+                        pending_load_workdirs = []
+                    pending_load_submitted_at = None
+                    return
+
+                import time
+                from concurrent.futures import as_completed
+
+                futures = list(pending_load_futures)
+                workdirs = list(pending_load_workdirs)
+                submitted_at = pending_load_submitted_at
+
+                pending_load_futures = []
+                pending_load_workdirs = []
+                pending_load_submitted_at = None
+
+                t0 = time.perf_counter()
+                try:
+                    with report.timer("json.db.load"):
+                        for fut in as_completed(futures):
+                            try:
+                                r = fut.result()
+                            except Exception as e:
+                                r = {
+                                    "table_sql": "",
+                                    "ok": False,
+                                    "loaded_any": False,
+                                    "rows_loaded": 0,
+                                    "load_ok": 0,
+                                    "load_failed": 1,
+                                    "load_data_ok": 0,
+                                    "existing_cols": None,
+                                    "errors": [{"type": type(e).__name__, "message": str(e)}],
+                                }
+
+                            if not isinstance(r, dict):
+                                continue
+
+                            table_sql = str(r.get("table_sql") or "")
+                            if table_sql and r.get("existing_cols") is not None:
+                                try:
+                                    existing_cols_cache[table_sql] = set(r.get("existing_cols") or [])
+                                except Exception:
+                                    pass
+
+                            try:
+                                report.bump("rows_loaded", int(r.get("rows_loaded") or 0))
+                            except Exception:
+                                pass
+                            try:
+                                report.bump("load_ok", int(r.get("load_ok") or 0))
+                                report.bump("load_failed", int(r.get("load_failed") or 0))
+                                report.bump("load_data_ok", int(r.get("load_data_ok") or 0))
+                            except Exception:
+                                pass
+
+                            if r.get("loaded_any"):
+                                try:
+                                    report.bump("tables_loaded", 1)
+                                except Exception:
+                                    pass
+
+                            if not r.get("ok"):
+                                try:
+                                    report.warn(
+                                        stage="json_pipeline.load.overlap",
+                                        message="LOAD DATA failed for table in overlapped loader",
+                                        table=table_sql,
+                                        errors=list(r.get("errors") or [])[:3],
+                                    )
+                                except Exception:
+                                    pass
+                                if not continue_on_error:
+                                    raise RuntimeError(f"overlapped_table_load_failed: {table_sql}")
+                finally:
+                    t1 = time.perf_counter()
+                    wait_dt = t1 - t0
+                    # For overlapped loads, record the *stall* time (critical path), not worker sum.
+                    report.add_time_s("db.load_data.exec", wait_dt)
+                    report.add_time_s("db.load_data.total", wait_dt)
+                    if submitted_at is not None:
+                        wall_dt = t1 - float(submitted_at)
+                        report.add_time_s("db.load_data.exec.wall", wall_dt)
+                        report.add_time_s("db.load_data.total.wall", wall_dt)
+
+                    _cleanup_workdirs(workdirs)
 
             def flush_batch(
                 batch_records: list[dict],
@@ -941,6 +1079,7 @@ def run_json_pipeline(
                 nonlocal batch_no, hybrid_freeze_started
                 nonlocal flatten_executor, parallel_tsv_disabled
                 nonlocal load_executor, load_tls, load_conns, load_conns_lock, load_parallel_disabled
+                nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
                 batch_idx = int(batch_no)
                 batch_no += 1
 
@@ -1024,6 +1163,7 @@ def run_json_pipeline(
                             results: list[dict] = []
                             class _ParallelTSVFailed(Exception):
                                 pass
+                            defer_workdir_cleanup = False
                             try:
                                 if flatten_executor is None:
                                     flatten_executor = ProcessPoolExecutor(max_workers=int(parallel_workers))
@@ -1134,6 +1274,10 @@ def run_json_pipeline(
                                             )
                                         except Exception:
                                             pass
+
+                                # Ensure any previous batch loads are fully applied before we touch DB for this batch.
+                                if overlap_batches:
+                                    _drain_pending_loads()
 
                                 for table_original, files in tables_files.items():
                                     if not files:
@@ -1257,6 +1401,144 @@ def run_json_pipeline(
 
                                 # Execute LOAD DATA for this batch (optionally parallel across tables).
                                 if load and load_groups:
+                                    if overlap_batches and not load_parallel_disabled:
+                                        # Overlapped load: submit and return immediately. Results are aggregated
+                                        # when we drain before the next batch's DB work (or at pipeline end).
+                                        import threading
+                                        import time
+                                        from concurrent.futures import ThreadPoolExecutor
+
+                                        import pymysql
+
+                                        eff_workers = int(db_load_parallel_tables) if int(db_load_parallel_tables or 0) > 0 else 1
+                                        if load_executor is None or load_tls is None:
+                                            load_tls = threading.local()
+                                            if load_conns_lock is None:
+                                                load_conns_lock = threading.Lock()
+
+                                            def _thread_init():
+                                                conn = pymysql.connect(
+                                                    host=dbc.get("host"),
+                                                    user=dbc.get("user"),
+                                                    password=dbc.get("password"),
+                                                    database=dbc.get("database"),
+                                                    port=int(dbc.get("port") or 3306),
+                                                    charset="utf8mb4",
+                                                    autocommit=False,
+                                                    local_infile=1,
+                                                    connect_timeout=3,
+                                                )
+                                                if bool(dc.get("fast_load_session", False)):
+                                                    try:
+                                                        _apply_fast_load_session_settings(
+                                                            conn,
+                                                            report=None,
+                                                            stage="json_pipeline.fast_load_session",
+                                                        )
+                                                    except Exception:
+                                                        pass
+                                                load_tls.conn = conn
+                                                try:
+                                                    with load_conns_lock:
+                                                        load_conns.append(conn)
+                                                except Exception:
+                                                    pass
+
+                                            load_executor = ThreadPoolExecutor(
+                                                max_workers=int(eff_workers),
+                                                thread_name_prefix="kisti_load",
+                                                initializer=_thread_init,
+                                            )
+
+                                        def _get_conn():
+                                            return getattr(load_tls, "conn", None) if load_tls is not None else None
+
+                                        def _load_group(g: dict) -> dict:
+                                            nm = g.get("nm")
+                                            table_sql = str(g.get("table_sql") or "")
+                                            entries = g.get("entries") or []
+                                            existing_cols = g.get("existing_cols")
+                                            res = {
+                                                "table_sql": table_sql,
+                                                "ok": True,
+                                                "loaded_any": False,
+                                                "rows_loaded": 0,
+                                                "load_ok": 0,
+                                                "load_failed": 0,
+                                                "load_data_ok": 0,
+                                                "existing_cols": existing_cols,
+                                                "errors": [],
+                                            }
+                                            conn = _get_conn()
+                                            if conn is None:
+                                                res["ok"] = False
+                                                res["errors"].append({"type": "RuntimeError", "message": "missing thread connection"})
+                                                return res
+
+                                            for fi in entries:
+                                                path = fi.get("path")
+                                                file_cols = fi.get("columns") or []
+                                                if not path or not file_cols:
+                                                    continue
+                                                try:
+                                                    manage.fill_table_from_tsv_file(
+                                                        str(path),
+                                                        dbc,
+                                                        table_name=table_sql,
+                                                        name_map=nm,
+                                                        extra_column_name=None,
+                                                        columns_original=list(file_cols),
+                                                        auto_alter_table=bool(auto_alter_table_effective),
+                                                        column_type=column_type,
+                                                        report=None,  # avoid thread-unsafe RunReport mutations
+                                                        engine=engine,
+                                                        existing_cols=existing_cols,
+                                                        load_method=db_load_method,
+                                                        fast_load_state=None,
+                                                        local_infile_conn=conn,
+                                                    )
+                                                    res["loaded_any"] = True
+                                                    res["load_ok"] += 1
+                                                    res["load_data_ok"] += 1
+                                                    try:
+                                                        res["rows_loaded"] += int(fi.get("rows") or 0)
+                                                    except Exception:
+                                                        pass
+                                                except Exception as e:
+                                                    res["ok"] = False
+                                                    res["load_failed"] += 1
+                                                    res["errors"].append({"type": type(e).__name__, "message": str(e)})
+                                                    if not continue_on_error:
+                                                        break
+                                                finally:
+                                                    try:
+                                                        os.remove(str(path))
+                                                    except Exception:
+                                                        pass
+                                            return res
+
+                                        futs = []
+                                        for g in load_groups:
+                                            try:
+                                                futs.append(load_executor.submit(_load_group, g))
+                                            except Exception as e:
+                                                load_parallel_disabled = True
+                                                report.warn(
+                                                    stage="json_pipeline.load.overlap",
+                                                    message="Overlapped loader submit failed; falling back to synchronous load",
+                                                    error={"type": type(e).__name__, "message": str(e)},
+                                                )
+                                                futs = []
+                                                break
+
+                                        if futs:
+                                            # Attach to pending list and return; keep workdirs until drained.
+                                            pending_load_futures = list(futs)
+                                            pending_load_workdirs = list(workdirs)
+                                            pending_load_submitted_at = time.perf_counter()
+                                            defer_workdir_cleanup = True
+                                            return
+
                                     # Serial load: keep existing behavior/timings.
                                     if load_parallel_disabled or (not db_load_parallel_tables) or int(db_load_parallel_tables) <= 1 or len(load_groups) <= 1:
                                         for g in load_groups:
@@ -1544,11 +1826,12 @@ def run_json_pipeline(
                                 # Fall back to serial rows backend below.
                                 pass
                             finally:
-                                for wd in workdirs:
-                                    try:
-                                        shutil.rmtree(wd, ignore_errors=True)
-                                    except Exception:
-                                        pass
+                                if not defer_workdir_cleanup:
+                                    for wd in workdirs:
+                                        try:
+                                            shutil.rmtree(wd, ignore_errors=True)
+                                        except Exception:
+                                            pass
 
                         # Serial rows backend (rows -> TSV -> LOAD DATA) for maximal correctness/compatibility.
                         try:
@@ -1580,6 +1863,10 @@ def run_json_pipeline(
                         for ex_key, items in (excepted or {}).items():
                             if items:
                                 tables_rows[_table_for_excepted(str(ex_key).replace(".", key_sep))] = list(items)
+
+                        # If the previous batch is still loading, wait before doing any DB work for this batch.
+                        if overlap_batches:
+                            _drain_pending_loads()
 
                         for table_original, rows in tables_rows.items():
                             if not rows:
@@ -1708,6 +1995,10 @@ def run_json_pipeline(
                                     except_key=str(ex_key),
                                 )
 
+                # If the previous batch is still loading, wait before doing any DB work for this batch.
+                if overlap_batches:
+                    _drain_pending_loads()
+
                 for table_original, df in tables.items():
                     cols = list(getattr(df, "columns", []))
                     if not cols:
@@ -1806,6 +2097,9 @@ def run_json_pipeline(
 
             if batch:
                 flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
+
+            # Ensure any overlapped batch loads are finished before finalize steps.
+            _drain_pending_loads()
 
             # Post steps: indexes + optimize
             if index:
