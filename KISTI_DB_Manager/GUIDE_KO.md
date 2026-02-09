@@ -211,6 +211,7 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 
 - 스키마가 계속 바뀌는 데이터에서 “ALTER 반복” 병목을 피하기 위한 전략
 - 테이블에 없는 필드는 지정한 extra 컬럼에 JSON 문자열로 보존
+- `parallel_workers>0`(병렬 flatten/TSV)에서도 freeze/hybrid(frozen)에서 unknown 필드를 `__extra__`로 패킹한 뒤 `LOAD DATA`로 적재 가능
 
 ### `except_keys` (원본 보존 강화)
 

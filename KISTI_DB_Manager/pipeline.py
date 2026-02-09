@@ -953,6 +953,9 @@ def run_json_pipeline(
             global_index = 0
             batch_no = 0
             hybrid_freeze_started = False
+            # Frozen schema support (schema_mode=freeze or hybrid frozen):
+            # table_original -> allowed canonical columns (unknowns should be packed into extra).
+            frozen_allowed_cols_by_table_original: dict[str, set[str]] = {}
             pending_load_futures: list[Any] = []
             pending_load_workdirs: list[str] = []
             pending_load_submitted_at: float | None = None
@@ -1080,6 +1083,7 @@ def run_json_pipeline(
                 nonlocal flatten_executor, parallel_tsv_disabled
                 nonlocal load_executor, load_tls, load_conns, load_conns_lock, load_parallel_disabled
                 nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
+                nonlocal frozen_allowed_cols_by_table_original
                 batch_idx = int(batch_no)
                 batch_no += 1
 
@@ -1098,6 +1102,44 @@ def run_json_pipeline(
                             pass
                         report.set_artifact("schema_hybrid_freeze_started_batch", int(batch_idx))
                         report.set_artifact("schema_hybrid_freeze_started_record", int(index_offset))
+                        # Ensure warmup batch loads/ALTERs are fully applied before we freeze schema.
+                        try:
+                            _drain_pending_loads()
+                        except Exception as e:
+                            report.warn(
+                                stage="json_pipeline.schema_hybrid_freeze",
+                                message="Failed to drain pending loads at hybrid freeze transition",
+                                error={"type": type(e).__name__, "message": str(e)},
+                            )
+                            if not continue_on_error:
+                                raise
+
+                        # Snapshot allowed columns for each known table at the time of freezing.
+                        try:
+                            extra_canon = str(extra_column_name).replace(".", key_sep) if extra_column_name else "__extra__"
+                            for table_original, nm in name_maps.items():
+                                allowed: set[str] = set()
+                                existing_sql = _get_existing_cols(nm.table_sql)
+                                if existing_sql:
+                                    sql_to_orig = {nm.columns_sql[i]: nm.columns_original[i] for i in range(len(nm.columns_sql))}
+                                    for c in existing_sql:
+                                        o = sql_to_orig.get(str(c))
+                                        if o:
+                                            allowed.add(o)
+                                else:
+                                    allowed = set(nm.columns_original)
+                                allowed.add(index_key)
+                                allowed.add(extra_canon)
+                                frozen_allowed_cols_by_table_original[table_original] = allowed
+                            report.set_artifact("frozen_schema_tables", int(len(frozen_allowed_cols_by_table_original)))
+                        except Exception as e:
+                            report.warn(
+                                stage="json_pipeline.schema_hybrid_freeze",
+                                message="Failed to snapshot frozen schema columns; unknown fields may be dropped",
+                                error={"type": type(e).__name__, "message": str(e)},
+                            )
+                            if not continue_on_error:
+                                raise
 
                 if schema_mode == "hybrid":
                     try:
@@ -1136,10 +1178,22 @@ def run_json_pipeline(
                         #
                         # - parallel_workers>1: ProcessPool writes multiple TSV fragments per batch (minimize IPC)
                         # - parallel_workers<=1: run the same TSV worker in-process (still enables parallel DB load across tables)
+                        tsv_extra_column_name = extra_column_name if use_extra_column else None
+                        tsv_freeze_active = bool(use_extra_column) and (not bool(auto_alter_table_effective))
+                        tsv_allowed_cols_by_table = None
+                        if tsv_freeze_active and frozen_allowed_cols_by_table_original:
+                            try:
+                                tsv_allowed_cols_by_table = {
+                                    k: tuple(sorted(v)) for k, v in frozen_allowed_cols_by_table_original.items()
+                                }
+                            except Exception:
+                                tsv_allowed_cols_by_table = {
+                                    str(k): list(v) for k, v in frozen_allowed_cols_by_table_original.items()
+                                }
                         if (
                             (not parallel_tsv_disabled)
-                            and bool(auto_alter_table_effective)
                             and len(batch_records) >= 1
+                            and (bool(auto_alter_table_effective) or bool(tsv_freeze_active))
                         ):
                             import os
                             import shutil
@@ -1190,6 +1244,9 @@ def run_json_pipeline(
                                                             key_sep,
                                                             tmp_dir,
                                                             ctx_slice,
+                                                            base_table,
+                                                            tsv_extra_column_name,
+                                                            tsv_allowed_cols_by_table,
                                                         ),
                                                     )
                                                 )
@@ -1228,6 +1285,9 @@ def run_json_pipeline(
                                                     key_sep,
                                                     tmp_dir,
                                                     ctx_full,
+                                                    base_table,
+                                                    tsv_extra_column_name,
+                                                    tsv_allowed_cols_by_table,
                                                 )
                                             )
                                         if not isinstance(res, dict) or not res.get("ok"):
@@ -1363,6 +1423,8 @@ def run_json_pipeline(
                                             created_tables.add(table_original)
                                             report.bump("tables_created", 1)
                                             existing_cols_cache[nm.table_sql] = set(nm.columns_sql)
+                                            if tsv_freeze_active and tsv_extra_column_name:
+                                                frozen_allowed_cols_by_table_original[table_original] = set(nm.columns_original)
 
                                     if load:
                                         # Reduce LOAD DATA calls by concatenating files with identical schemas.
@@ -1522,7 +1584,7 @@ def run_json_pipeline(
                                                         dbc,
                                                         table_name=table_sql,
                                                         name_map=nm,
-                                                        extra_column_name=None,
+                                                        extra_column_name=tsv_extra_column_name,
                                                         columns_original=list(file_cols),
                                                         auto_alter_table=bool(auto_alter_table_effective),
                                                         column_type=column_type,
@@ -1596,8 +1658,8 @@ def run_json_pipeline(
                                                     dbc,
                                                     table_name=str(table_sql),
                                                     name_map=nm,
-                                                    # TSV backend does not populate __extra__; keep file columns exact.
-                                                    extra_column_name=None,
+                                                    # TSV backend can optionally populate __extra__ (freeze/hybrid frozen).
+                                                    extra_column_name=tsv_extra_column_name,
                                                     columns_original=list(file_cols),
                                                     auto_alter_table=bool(auto_alter_table_effective),
                                                     column_type=column_type,
@@ -1704,7 +1766,7 @@ def run_json_pipeline(
                                                     dbc,
                                                     table_name=table_sql,
                                                     name_map=nm,
-                                                    extra_column_name=None,
+                                                    extra_column_name=tsv_extra_column_name,
                                                     columns_original=list(file_cols),
                                                     auto_alter_table=bool(auto_alter_table_effective),
                                                     column_type=column_type,
@@ -1818,7 +1880,7 @@ def run_json_pipeline(
                                                             dbc,
                                                             table_name=table_sql,
                                                             name_map=nm,
-                                                            extra_column_name=None,
+                                                            extra_column_name=tsv_extra_column_name,
                                                             columns_original=list(file_cols),
                                                             auto_alter_table=bool(auto_alter_table_effective),
                                                             column_type=column_type,
@@ -1954,6 +2016,8 @@ def run_json_pipeline(
                                     created_tables.add(table_original)
                                     report.bump("tables_created", 1)
                                     existing_cols_cache[nm.table_sql] = set(nm.columns_sql)
+                                    if use_extra_column and not bool(auto_alter_table_effective):
+                                        frozen_allowed_cols_by_table_original[table_original] = set(nm.columns_original)
 
                             if load:
                                 load_res = step(
@@ -2074,6 +2138,8 @@ def run_json_pipeline(
                             created_tables.add(table_original)
                             report.bump("tables_created", 1)
                             existing_cols_cache[nm.table_sql] = set(nm.columns_sql)
+                            if use_extra_column and not bool(auto_alter_table_effective):
+                                frozen_allowed_cols_by_table_original[table_original] = set(nm.columns_original)
 
                     if load:
                         load_res = step(

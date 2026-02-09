@@ -794,15 +794,22 @@ def _safe_flatten_jsons_to_tsv_worker(args):
     import uuid
 
     try:
-        (
-            index_offset,
-            jsons,
-            index_key,
-            except_keys,
-            sep,
-            tmp_dir,
-            record_contexts,
-        ) = args
+        # Backward-compatible args parsing:
+        #   legacy: (index_offset, jsons, index_key, except_keys, sep, tmp_dir, record_contexts)
+        #   new:    (..., base_table, extra_column_name, allowed_cols_by_table)
+        if not isinstance(args, (list, tuple)) or len(args) < 7:
+            raise TypeError("flatten_jsons_to_tsv_worker expects a tuple/list of length >= 7")
+
+        index_offset = args[0]
+        jsons = args[1]
+        index_key = args[2]
+        except_keys = args[3]
+        sep = args[4]
+        tmp_dir = args[5]
+        record_contexts = args[6]
+        base_table = args[7] if len(args) > 7 else None
+        extra_column_name = args[8] if len(args) > 8 else None
+        allowed_cols_by_table = args[9] if len(args) > 9 else None
 
         try:
             index_offset = int(index_offset or 0)
@@ -812,6 +819,35 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         index_key = str(index_key) if index_key is not None else "id"
         sep = str(sep) if sep is not None else "__"
         tmp_dir = str(tmp_dir or "/tmp")
+        base_table = str(base_table or "")
+
+        extra_canon = None
+        if extra_column_name:
+            extra_canon = str(extra_column_name).replace(".", sep)
+
+        allowed_map: dict[str, set[str]] | None = None
+        if extra_canon and isinstance(allowed_cols_by_table, dict) and allowed_cols_by_table:
+            out: dict[str, set[str]] = {}
+            for tn, cols in allowed_cols_by_table.items():
+                tns = str(tn or "").strip()
+                if not tns or cols is None:
+                    continue
+                try:
+                    it = cols if isinstance(cols, (list, tuple, set)) else list(cols)
+                except Exception:
+                    it = []
+                keep: set[str] = set()
+                for c in it:
+                    cs = str(c or "").strip()
+                    if not cs:
+                        continue
+                    keep.add(cs.replace(".", sep))
+                if keep:
+                    # Always allow id + extra on the worker side (even if caller forgot to include them).
+                    keep.add(index_key)
+                    keep.add(extra_canon)
+                    out[tns] = keep
+            allowed_map = out or None
 
         # Normalize once so comparisons against excepted keys are stable.
         if except_keys is None:
@@ -936,6 +972,62 @@ def _safe_flatten_jsons_to_tsv_worker(args):
 
         flatten_ms = int(round((time.perf_counter() - t_flat0) * 1000.0))
 
+        # Freeze/hybrid(frozen): filter unknown columns and pack them into extra JSON string per row.
+        #
+        # - allowed_map is keyed by the *final* table name (base + sub path) as used by the parent pipeline.
+        # - If a table is missing from allowed_map, we treat it as "new table": keep all columns (no packing).
+        if extra_canon:
+            def _pack_rows_for_table(table_name: str, rows: list[dict]) -> None:
+                if not rows:
+                    return
+                keep = allowed_map.get(str(table_name)) if isinstance(allowed_map, dict) else None
+                if keep is None:
+                    # Ensure column exists in the TSV schema for consistency, even if unused.
+                    for r in rows:
+                        if isinstance(r, dict) and extra_canon not in r:
+                            r[extra_canon] = None
+                    return
+
+                for r in rows:
+                    if not isinstance(r, dict):
+                        continue
+                    extras: dict[str, object] | None = None
+                    for k in list(r.keys()):
+                        ks = k if type(k) is str else str(k)
+                        if ks == index_key or ks == extra_canon:
+                            continue
+                        if ks in keep:
+                            continue
+                        v = r.get(k)
+                        if not _is_nullish(v):
+                            if extras is None:
+                                extras = {}
+                            extras[ks] = v
+                        r.pop(k, None)
+                    r[extra_canon] = _json_dumps_best_effort(extras) if extras else None
+
+            # main table
+            if rows_main:
+                _pack_rows_for_table(base_table, rows_main)
+
+            # sub tables
+            if sub_rows_tot:
+                for sub_key, rows in sub_rows_tot.items():
+                    if not rows:
+                        continue
+                    sub_key_norm = str(sub_key).replace(".", sep)
+                    tname = f"{base_table}{sep}{sub_key_norm}" if base_table else sub_key_norm
+                    _pack_rows_for_table(tname, rows)
+
+            # excepted tables
+            if excepted_tot:
+                for ex_key, rows in excepted_tot.items():
+                    if not rows:
+                        continue
+                    ex_key_norm = str(ex_key).replace(".", sep)
+                    tname = f"{base_table}{sep}excepted{sep}{ex_key_norm}" if base_table else ex_key_norm
+                    _pack_rows_for_table(tname, rows)
+
         # Write TSV files per table.
         t_tsv0 = time.perf_counter()
         from . import manage as _manage
@@ -953,7 +1045,10 @@ def _safe_flatten_jsons_to_tsv_worker(args):
                         cols_non_null.add(ks)
             cols_non_null.add(index_key)
             # Keep existing semantics: id first, then stable sort.
-            return [index_key] + sorted([c for c in cols_non_null if c != index_key])
+            out = [index_key] + sorted([c for c in cols_non_null if c != index_key])
+            if extra_canon and extra_canon not in set(out):
+                out.append(extra_canon)
+            return out
 
         run_tag = uuid.uuid4().hex[:12]
         workdir = tempfile.mkdtemp(prefix=f"kisti_flatten_{run_tag}_", dir=tmp_dir)
