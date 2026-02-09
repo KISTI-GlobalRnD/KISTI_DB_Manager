@@ -195,6 +195,7 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
   - 예: 배치당 12개 테이블을 순차 로딩(12번) → 8개 쓰레드로 동시 로딩(대략 12/8 라운드)
 - 권장: `2~8` 범위에서 벤치로 결정(너무 크게 잡으면 DB/디스크가 포화되어 오히려 느려질 수 있음)
 - CLI에서 바로 덮어쓰려면: `--db-load-parallel-tables N`
+- 참고: `parallel_workers=0`(싱글 flatten)이어도 `schema_mode=evolve`(또는 hybrid warmup)에서는 테이블 병렬 로딩이 적용됨
 - 참고: 병렬 로딩에서는 `db.load_data.exec`가 “합계”가 아니라 “wall-time”으로 기록됨(프로파일 share_pct 해석을 위해)
 
 ### `overlap_batches` (배치 오버랩)

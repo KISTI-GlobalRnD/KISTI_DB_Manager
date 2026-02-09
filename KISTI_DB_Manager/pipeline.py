@@ -1132,31 +1132,17 @@ def run_json_pipeline(
                             except Exception:
                                 return False
 
-                        # Parallel TSV backend (workers write TSV; parent does LOAD DATA) to minimize IPC.
+                        # TSV backend (worker(s) write TSV; parent does LOAD DATA) to minimize IPC.
+                        #
+                        # - parallel_workers>1: ProcessPool writes multiple TSV fragments per batch (minimize IPC)
+                        # - parallel_workers<=1: run the same TSV worker in-process (still enables parallel DB load across tables)
                         if (
                             (not parallel_tsv_disabled)
-                            and parallel_workers
-                            and int(parallel_workers) > 1
-                            and len(batch_records) >= 2
                             and bool(auto_alter_table_effective)
+                            and len(batch_records) >= 1
                         ):
                             import os
                             import shutil
-                            from concurrent.futures import ProcessPoolExecutor
-
-                            pw = min(int(parallel_workers), int(len(batch_records)))
-                            # Split the batch into pw contiguous chunks to keep LOAD DATA calls bounded.
-                            n = int(len(batch_records))
-                            base = n // pw
-                            rem = n % pw
-                            slices: list[tuple[int, int]] = []
-                            start = 0
-                            for wi in range(pw):
-                                extra = 1 if wi < rem else 0
-                                end = start + base + extra
-                                if end > start:
-                                    slices.append((start, end))
-                                start = end
 
                             tmp_dir = str(dc.get("tmp_dir") or "/tmp")
                             workdirs: list[str] = []
@@ -1165,50 +1151,100 @@ def run_json_pipeline(
                                 pass
                             defer_workdir_cleanup = False
                             try:
-                                if flatten_executor is None:
-                                    flatten_executor = ProcessPoolExecutor(max_workers=int(parallel_workers))
+                                use_pool = bool(parallel_workers) and int(parallel_workers) > 1 and len(batch_records) >= 2
+                                if use_pool:
+                                    from concurrent.futures import ProcessPoolExecutor
 
-                                try:
-                                    with report.timer("json.flatten"):
-                                        futs = []
-                                        for s, e in slices:
-                                            ctx_slice = None
-                                            if isinstance(record_contexts, (list, tuple)):
-                                                ctx_slice = list(record_contexts[s:e])
-                                            futs.append(
-                                                flatten_executor.submit(
-                                                    _safe_flatten_jsons_to_tsv_worker,
-                                                    (
-                                                        int(index_offset) + int(s),
-                                                        list(batch_records[s:e]),
-                                                        index_key,
-                                                        tuple(except_keys or ()),
-                                                        key_sep,
-                                                        tmp_dir,
-                                                        ctx_slice,
-                                                    ),
+                                    pw = min(int(parallel_workers), int(len(batch_records)))
+                                    # Split the batch into pw contiguous chunks to keep LOAD DATA calls bounded.
+                                    n = int(len(batch_records))
+                                    base = n // pw
+                                    rem = n % pw
+                                    slices: list[tuple[int, int]] = []
+                                    start = 0
+                                    for wi in range(pw):
+                                        extra = 1 if wi < rem else 0
+                                        end = start + base + extra
+                                        if end > start:
+                                            slices.append((start, end))
+                                        start = end
+
+                                    if flatten_executor is None:
+                                        flatten_executor = ProcessPoolExecutor(max_workers=int(parallel_workers))
+
+                                    try:
+                                        with report.timer("json.flatten"):
+                                            futs = []
+                                            for s, e in slices:
+                                                ctx_slice = None
+                                                if isinstance(record_contexts, (list, tuple)):
+                                                    ctx_slice = list(record_contexts[s:e])
+                                                futs.append(
+                                                    flatten_executor.submit(
+                                                        _safe_flatten_jsons_to_tsv_worker,
+                                                        (
+                                                            int(index_offset) + int(s),
+                                                            list(batch_records[s:e]),
+                                                            index_key,
+                                                            tuple(except_keys or ()),
+                                                            key_sep,
+                                                            tmp_dir,
+                                                            ctx_slice,
+                                                        ),
+                                                    )
+                                                )
+                                            for fut in futs:
+                                                results.append(fut.result())
+                                    except Exception as e:
+                                        try:
+                                            report.warn(
+                                                stage="json_pipeline.flatten.parallel_tsv",
+                                                message="Parallel TSV backend failed; falling back to serial rows backend",
+                                                error={"type": type(e).__name__, "message": str(e)},
+                                            )
+                                        except Exception:
+                                            pass
+                                        # Disable this backend for the remainder of the run (prevents repeat failures).
+                                        parallel_tsv_disabled = True
+                                        try:
+                                            if flatten_executor is not None:
+                                                flatten_executor.shutdown(wait=False, cancel_futures=True)
+                                        except Exception:
+                                            pass
+                                        flatten_executor = None
+                                        raise _ParallelTSVFailed() from e
+                                else:
+                                    try:
+                                        ctx_full = None
+                                        if isinstance(record_contexts, (list, tuple)):
+                                            ctx_full = list(record_contexts)
+                                        with report.timer("json.flatten"):
+                                            res = _safe_flatten_jsons_to_tsv_worker(
+                                                (
+                                                    int(index_offset),
+                                                    list(batch_records),
+                                                    index_key,
+                                                    tuple(except_keys or ()),
+                                                    key_sep,
+                                                    tmp_dir,
+                                                    ctx_full,
                                                 )
                                             )
-                                        for fut in futs:
-                                            results.append(fut.result())
-                                except Exception as e:
-                                    try:
-                                        report.warn(
-                                            stage="json_pipeline.flatten.parallel_tsv",
-                                            message="Parallel TSV backend failed; falling back to serial rows backend",
-                                            error={"type": type(e).__name__, "message": str(e)},
-                                        )
-                                    except Exception:
-                                        pass
-                                    # Disable this backend for the remainder of the run (prevents repeat failures).
-                                    parallel_tsv_disabled = True
-                                    try:
-                                        if flatten_executor is not None:
-                                            flatten_executor.shutdown(wait=False, cancel_futures=True)
-                                    except Exception:
-                                        pass
-                                    flatten_executor = None
-                                    raise _ParallelTSVFailed() from e
+                                        if not isinstance(res, dict) or not res.get("ok"):
+                                            err = res.get("error") if isinstance(res, dict) else None
+                                            raise RuntimeError(f"tsv_worker_failed: {err}")
+                                        results.append(res)
+                                    except Exception as e:
+                                        try:
+                                            report.warn(
+                                                stage="json_pipeline.flatten.parallel_tsv",
+                                                message="TSV backend failed; falling back to serial rows backend",
+                                                error={"type": type(e).__name__, "message": str(e)},
+                                            )
+                                        except Exception:
+                                            pass
+                                        parallel_tsv_disabled = True
+                                        raise _ParallelTSVFailed() from e
 
                                 tables_files: dict[str, list[dict]] = {}
                                 load_groups: list[dict[str, Any]] = []
