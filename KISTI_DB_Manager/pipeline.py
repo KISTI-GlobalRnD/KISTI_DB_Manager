@@ -27,36 +27,38 @@ def _apply_fast_load_session_settings(conn, *, report: RunReport | None, stage: 
         return
 
     settings = [
+        # Session-only toggles (safe defaults for ingest speed; automatically reset when connection closes).
         ("SET SESSION unique_checks=0", "unique_checks=0"),
         ("SET SESSION foreign_key_checks=0", "foreign_key_checks=0"),
-        # Faster commits; higher risk of data loss on crash (trade-off for ingest speed).
-        ("SET SESSION innodb_flush_log_at_trx_commit=2", "innodb_flush_log_at_trx_commit=2"),
+        # Global-only in MariaDB/MySQL: keep durability trade-off explicit.
+        ("SET GLOBAL innodb_flush_log_at_trx_commit=2", "GLOBAL innodb_flush_log_at_trx_commit=2"),
         # Disable binlog for this session (may require SUPER / SYSTEM_VARIABLES_ADMIN; often fails on managed DBs).
         ("SET SESSION sql_log_bin=0", "sql_log_bin=0"),
     ]
+
+    applied: list[str] = []
+    skipped: list[dict] = []
 
     try:
         with conn.cursor() as cur:
             for sql, label in settings:
                 try:
                     cur.execute(sql)
+                    applied.append(label)
                 except Exception as e:
-                    if report is not None:
-                        try:
-                            report.warn(
-                                stage=stage,
-                                message="Failed to apply fast-load session setting (ignored)",
-                                setting=label,
-                                error=str(e),
-                            )
-                        except Exception:
-                            pass
+                    # Avoid spamming warnings for expected privilege/scope limitations; record as artifacts instead.
+                    skipped.append({"setting": label, "error": str(e)})
     except Exception as e:
-        if report is not None:
-            try:
-                report.warn(stage=stage, message="Failed to apply fast-load session settings (ignored)", error=str(e))
-            except Exception:
-                pass
+        skipped.append({"setting": "<cursor>", "error": str(e)})
+
+    if report is not None:
+        try:
+            if applied:
+                report.set_artifact("fast_load_session.applied", list(applied))
+            if skipped:
+                report.set_artifact("fast_load_session.skipped", list(skipped))
+        except Exception:
+            pass
 
 
 @dataclass(frozen=True)
