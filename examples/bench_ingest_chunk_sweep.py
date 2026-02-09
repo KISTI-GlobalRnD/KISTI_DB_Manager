@@ -61,6 +61,7 @@ class SweepRow:
     parallel_workers: int
     db_load_parallel_tables: int
     load_data_commit_strategy: str
+    tsv_merge_union_schema: bool
     overlap_batches: bool
     rep: int
     db_name: str
@@ -146,6 +147,7 @@ def _run_one(
     parallel_workers: int,
     db_load_parallel_tables: int,
     load_data_commit_strategy: str,
+    tsv_merge_union_schema: bool,
     overlap_batches: bool,
     rep: int,
     stamp: str,
@@ -173,6 +175,7 @@ def _run_one(
             "fast_load_session": True,
             "db_load_parallel_tables": int(db_load_parallel_tables),
             "load_data_commit_strategy": str(load_data_commit_strategy),
+            "tsv_merge_union_schema": bool(tsv_merge_union_schema),
             "overlap_batches": bool(overlap_batches),
         },
         "db_config": {
@@ -207,6 +210,7 @@ def _run_one(
         str(int(db_load_parallel_tables)),
         "--load-data-commit-strategy",
         str(load_data_commit_strategy),
+        "--tsv-merge-union-schema" if bool(tsv_merge_union_schema) else "--no-tsv-merge-union-schema",
         "--overlap-batches" if bool(overlap_batches) else "--no-overlap-batches",
         "--report",
         str(report_path),
@@ -262,6 +266,7 @@ def _run_one(
         parallel_workers=int(parallel_workers),
         db_load_parallel_tables=int(db_load_parallel_tables),
         load_data_commit_strategy=str(load_data_commit_strategy),
+        tsv_merge_union_schema=bool(tsv_merge_union_schema),
         overlap_batches=bool(overlap_batches),
         rep=int(rep),
         db_name=str(db_name),
@@ -306,6 +311,12 @@ def main() -> int:
         help="When using LOAD DATA: commit per file/table/batch (default: file)",
     )
     ap.add_argument(
+        "--tsv-merge-union-schema",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Rewrite TSV fragments to union schema to merge across schema drift (default: false)",
+    )
+    ap.add_argument(
         "--overlap-batches",
         action=argparse.BooleanOptionalAction,
         default=False,
@@ -330,6 +341,7 @@ def main() -> int:
     workers = _parse_int_list(args.workers)
     db_load_parallel_tables = int(args.db_load_parallel_tables or 0)
     load_data_commit_strategy = str(args.load_data_commit_strategy)
+    tsv_merge_union_schema = bool(args.tsv_merge_union_schema)
     overlap_batches = bool(args.overlap_batches)
     reps = int(args.reps)
 
@@ -351,6 +363,7 @@ def main() -> int:
                     parallel_workers=int(pw),
                     db_load_parallel_tables=int(db_load_parallel_tables),
                     load_data_commit_strategy=str(load_data_commit_strategy),
+                    tsv_merge_union_schema=bool(tsv_merge_union_schema),
                     overlap_batches=bool(overlap_batches),
                     rep=int(rep),
                     stamp=stamp,
@@ -362,12 +375,12 @@ def main() -> int:
     rows_sorted = sorted(rows, key=lambda r: (r.chunk_size, r.parallel_workers, r.rep))
     print("\nSummary (lower is better):")
     hdr = (
-        "chunk  pw dpl  cmt ov rep  total_ms  flat+tsv_ms  db_exec_ms  batches  warn  report"
+        "chunk  pw dpl  cmt  um ov rep  total_ms  flat+tsv_ms  db_exec_ms  batches  warn  report"
     )
     print(hdr)
     for r in rows_sorted:
         print(
-            f"{r.chunk_size:5d} {r.parallel_workers:3d} {r.db_load_parallel_tables:3d} {str(r.load_data_commit_strategy)[:4]:>4s} {int(bool(r.overlap_batches)):2d} {r.rep:3d} "
+            f"{r.chunk_size:5d} {r.parallel_workers:3d} {r.db_load_parallel_tables:3d} {str(r.load_data_commit_strategy)[:4]:>4s} {int(bool(r.tsv_merge_union_schema)):3d} {int(bool(r.overlap_batches)):2d} {r.rep:3d} "
             f"{(r.pipeline_total_ms or 0):9d} {(r.flatten_plus_tsv_ms or 0):11d} "
             f"{(r.db_load_exec_ms or 0):10d} {(r.batches_total or 0):7d} {r.warnings:4d} "
             f"{Path(r.report_path).name}"

@@ -963,6 +963,34 @@ def run_json_pipeline(
             except Exception:
                 pass
 
+            tsv_merge_union_schema = _coerce_bool(
+                dc.get("tsv_merge_union_schema", dc.get("tsv_union_merge", dc.get("load_data_union_merge", False)))
+            )
+            try:
+                report.set_artifact("tsv_merge_union_schema", bool(tsv_merge_union_schema))
+            except Exception:
+                pass
+            try:
+                tsv_union_merge_min_coverage = float(dc.get("tsv_union_merge_min_coverage", 0.8) or 0.8)
+            except Exception:
+                tsv_union_merge_min_coverage = 0.8
+            if tsv_union_merge_min_coverage < 0.0:
+                tsv_union_merge_min_coverage = 0.0
+            if tsv_union_merge_min_coverage > 1.0:
+                tsv_union_merge_min_coverage = 1.0
+            try:
+                tsv_union_merge_max_union_cols = int(dc.get("tsv_union_merge_max_union_cols", 256) or 256)
+            except Exception:
+                tsv_union_merge_max_union_cols = 256
+            if tsv_union_merge_max_union_cols < 0:
+                tsv_union_merge_max_union_cols = 0
+            try:
+                tsv_union_merge_max_missing_cols = int(dc.get("tsv_union_merge_max_missing_cols", 32) or 32)
+            except Exception:
+                tsv_union_merge_max_missing_cols = 32
+            if tsv_union_merge_max_missing_cols < 0:
+                tsv_union_merge_max_missing_cols = 0
+
             json_streaming_load = bool(dc.get("json_streaming_load", True))
             use_streaming_rows = (
                 bool(load)
@@ -1450,7 +1478,6 @@ def run_json_pipeline(
                                                 frozen_allowed_cols_by_table_original[table_original] = set(nm.columns_original)
 
                                     if load:
-                                        # Reduce LOAD DATA calls by concatenating files with identical schemas.
                                         import tempfile
                                         import uuid
 
@@ -1462,54 +1489,171 @@ def run_json_pipeline(
                                             groups.setdefault(cols_key, []).append(fi)
 
                                         merged_entries: list[dict] = []
-                                        for cols_key, group_files in groups.items():
-                                            if len(group_files) == 1:
-                                                merged_entries.append(group_files[0])
-                                                continue
 
-                                            # Merge to a single TSV to amortize LOAD DATA overhead.
-                                            tmp_path = None
-                                            with tempfile.NamedTemporaryFile(
-                                                mode="wb",
-                                                prefix=f"kisti_merge_{uuid.uuid4().hex[:8]}_",
-                                                suffix=".tsv",
-                                                delete=False,
-                                                dir=tmp_dir,
-                                            ) as out:
-                                                tmp_path = out.name
-                                                merged_path = tmp_path
+                                        # Optional: merge TSV fragments even when schemas differ by rewriting to the
+                                        # per-batch union schema (`cols`). This can drastically reduce LOAD DATA calls
+                                        # when parallel workers observe different sparse columns.
+                                        union_merged = False
+                                        if (
+                                            bool(tsv_merge_union_schema)
+                                            and len(groups) > 1
+                                            and cols
+                                            and len(cols) > 0
+                                            and (
+                                                int(tsv_union_merge_max_union_cols or 0) <= 0
+                                                or len(cols) <= int(tsv_union_merge_max_union_cols)
+                                            )
+                                        ):
+                                            union_len = float(len(cols))
+                                            try:
+                                                min_cov = min(float(len(k)) / union_len for k in groups.keys() if k)
+                                            except Exception:
+                                                min_cov = 0.0
+                                            try:
+                                                max_missing = max(int(len(cols)) - int(len(k)) for k in groups.keys() if k)
+                                            except Exception:
+                                                max_missing = int(len(cols))
+
+                                            eligible = False
+                                            try:
+                                                if int(max_missing) <= int(tsv_union_merge_max_missing_cols or 0):
+                                                    eligible = True
+                                            except Exception:
+                                                pass
+                                            if not eligible and min_cov >= float(tsv_union_merge_min_coverage or 0.0):
+                                                eligible = True
+
+                                            if eligible:
+                                                t_merge0 = time.perf_counter()
+                                                tmp_path = None
+                                                try:
+                                                    union_cols = list(cols)
+                                                    union_cols_key = tuple(union_cols)
+                                                    with tempfile.NamedTemporaryFile(
+                                                        mode="wb",
+                                                        prefix=f"kisti_union_{uuid.uuid4().hex[:8]}_",
+                                                        suffix=".tsv",
+                                                        delete=False,
+                                                        dir=tmp_dir,
+                                                    ) as out:
+                                                        tmp_path = out.name
+                                                        merged_path = tmp_path
+                                                        null_lit = b"\\N"
+
+                                                        for cols_key, group_files in groups.items():
+                                                            for gf in group_files:
+                                                                path = gf.get("path")
+                                                                if not path:
+                                                                    continue
+                                                                file_cols = tuple(gf.get("columns") or ())
+                                                                if file_cols == union_cols_key:
+                                                                    with open(str(path), "rb") as inp:
+                                                                        shutil.copyfileobj(inp, out, length=1024 * 1024)
+                                                                    continue
+
+                                                                idx = {str(c): i for i, c in enumerate(file_cols)}
+                                                                take = [idx.get(str(c)) for c in union_cols]
+                                                                with open(str(path), "rb") as inp:
+                                                                    for line in inp:
+                                                                        if not line:
+                                                                            continue
+                                                                        if line.endswith(b"\n"):
+                                                                            line = line[:-1]
+                                                                        if line.endswith(b"\r"):
+                                                                            line = line[:-1]
+                                                                        vals = line.split(b"\t")
+                                                                        out_vals = []
+                                                                        for j in take:
+                                                                            if j is None or j >= len(vals):
+                                                                                out_vals.append(null_lit)
+                                                                            else:
+                                                                                out_vals.append(vals[j])
+                                                                        out.write(b"\t".join(out_vals) + b"\n")
+
+                                                    if merged_path:
+                                                        # Delete originals after successful merge.
+                                                        for group_files in groups.values():
+                                                            for gf in group_files:
+                                                                try:
+                                                                    os.remove(str(gf.get("path")))
+                                                                except Exception:
+                                                                    pass
+
+                                                        merged_entries = [
+                                                            {
+                                                                "path": str(merged_path),
+                                                                "columns": list(union_cols),
+                                                                "rows": int(sum(int(gf.get("rows") or 0) for g in groups.values() for gf in g)),
+                                                            }
+                                                        ]
+                                                        union_merged = True
+                                                        try:
+                                                            report.bump("tsv_union_merged_tables", 1)
+                                                            report.bump(
+                                                                "tsv_union_merged_files",
+                                                                int(sum(len(g) for g in groups.values())),
+                                                            )
+                                                            report.add_time_s("tsv.merge.union", time.perf_counter() - t_merge0)
+                                                        except Exception:
+                                                            pass
+                                                except Exception:
+                                                    if tmp_path:
+                                                        try:
+                                                            os.remove(str(tmp_path))
+                                                        except Exception:
+                                                            pass
+                                                    union_merged = False
+
+                                        if not union_merged:
+                                            # Reduce LOAD DATA calls by concatenating files with identical schemas.
+                                            for cols_key, group_files in groups.items():
+                                                if len(group_files) == 1:
+                                                    merged_entries.append(group_files[0])
+                                                    continue
+
+                                                # Merge to a single TSV to amortize LOAD DATA overhead.
+                                                tmp_path = None
+                                                with tempfile.NamedTemporaryFile(
+                                                    mode="wb",
+                                                    prefix=f"kisti_merge_{uuid.uuid4().hex[:8]}_",
+                                                    suffix=".tsv",
+                                                    delete=False,
+                                                    dir=tmp_dir,
+                                                ) as out:
+                                                    tmp_path = out.name
+                                                    merged_path = tmp_path
+                                                    for gf in group_files:
+                                                        try:
+                                                            with open(str(gf.get("path")), "rb") as inp:
+                                                                shutil.copyfileobj(inp, out, length=1024 * 1024)
+                                                        except Exception:
+                                                            # Best-effort: if merge fails, fall back to loading files individually.
+                                                            merged_path = None
+                                                            break
+
+                                                if not merged_path:
+                                                    if tmp_path:
+                                                        try:
+                                                            os.remove(str(tmp_path))
+                                                        except Exception:
+                                                            pass
+                                                    merged_entries.extend(group_files)
+                                                    continue
+
+                                                # Delete originals after successful merge.
                                                 for gf in group_files:
                                                     try:
-                                                        with open(str(gf.get("path")), "rb") as inp:
-                                                            shutil.copyfileobj(inp, out, length=1024 * 1024)
-                                                    except Exception:
-                                                        # Best-effort: if merge fails, fall back to loading files individually.
-                                                        merged_path = None
-                                                        break
-
-                                            if not merged_path:
-                                                if tmp_path:
-                                                    try:
-                                                        os.remove(str(tmp_path))
+                                                        os.remove(str(gf.get("path")))
                                                     except Exception:
                                                         pass
-                                                merged_entries.extend(group_files)
-                                                continue
 
-                                            # Delete originals after successful merge.
-                                            for gf in group_files:
-                                                try:
-                                                    os.remove(str(gf.get("path")))
-                                                except Exception:
-                                                    pass
-
-                                            merged_entries.append(
-                                                {
-                                                    "path": str(merged_path),
-                                                    "columns": list(cols_key),
-                                                    "rows": int(sum(int(gf.get("rows") or 0) for gf in group_files)),
-                                                }
-                                            )
+                                                merged_entries.append(
+                                                    {
+                                                        "path": str(merged_path),
+                                                        "columns": list(cols_key),
+                                                        "rows": int(sum(int(gf.get("rows") or 0) for gf in group_files)),
+                                                    }
+                                                )
 
                                         load_groups.append(
                                             {

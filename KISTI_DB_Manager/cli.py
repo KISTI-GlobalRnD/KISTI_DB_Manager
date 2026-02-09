@@ -532,6 +532,14 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["overlap_batches"] = bool(args.overlap_batches)
     if getattr(args, "json_streaming_load", None) is not None:
         data_config["json_streaming_load"] = bool(args.json_streaming_load)
+    if getattr(args, "tsv_merge_union_schema", None) is not None:
+        data_config["tsv_merge_union_schema"] = bool(args.tsv_merge_union_schema)
+    if getattr(args, "tsv_union_merge_min_coverage", None) is not None:
+        data_config["tsv_union_merge_min_coverage"] = float(args.tsv_union_merge_min_coverage)
+    if getattr(args, "tsv_union_merge_max_union_cols", None) is not None:
+        data_config["tsv_union_merge_max_union_cols"] = int(args.tsv_union_merge_max_union_cols)
+    if getattr(args, "tsv_union_merge_max_missing_cols", None) is not None:
+        data_config["tsv_union_merge_max_missing_cols"] = int(args.tsv_union_merge_max_missing_cols)
     if getattr(args, "chunk_size", None) is not None:
         data_config["chunk_size"] = int(args.chunk_size)
 
@@ -894,6 +902,27 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Use row-based streaming TSV load when LOAD DATA is enabled (default: config or true)",
+    )
+    p_json_run.add_argument(
+        "--tsv-merge-union-schema",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Rewrite TSV fragments to union schema to merge across schema drift (reduces LOAD DATA calls; may increase TSV size).",
+    )
+    p_json_run.add_argument(
+        "--tsv-union-merge-min-coverage",
+        type=float,
+        help="Heuristic: attempt union merge when min(file_cols/union_cols) >= this (default: config or 0.8).",
+    )
+    p_json_run.add_argument(
+        "--tsv-union-merge-max-union-cols",
+        type=int,
+        help="Heuristic: do not attempt union merge if union column count exceeds this (default: config or 256; 0 disables).",
+    )
+    p_json_run.add_argument(
+        "--tsv-union-merge-max-missing-cols",
+        type=int,
+        help="Heuristic: attempt union merge when max missing columns per fragment is <= this (default: config or 32).",
     )
     p_json_run.add_argument(
         "--create",

@@ -49,6 +49,8 @@ MODES: dict[str, ModeSpec] = {
             "json_streaming_load": True,
             "parallel_workers": 8,
             "db_load_parallel_tables": 8,
+            # Merge TSV fragments across schema drift (best-effort) to reduce LOAD DATA calls.
+            "tsv_merge_union_schema": True,
             # Overlap batch N+1 flatten with batch N DB load (reduces end-to-end wall time).
             "overlap_batches": True,
             "chunk_size": 5000,
