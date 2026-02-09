@@ -942,6 +942,27 @@ def run_json_pipeline(
             except Exception:
                 pass
 
+            load_data_commit_strategy = str(
+                dc.get(
+                    "load_data_commit_strategy",
+                    dc.get("db_load_commit_strategy", dc.get("load_data_commit", "file")),
+                )
+            ).strip().lower()
+            if load_data_commit_strategy not in {"file", "table", "batch"}:
+                load_data_commit_strategy = "file"
+            # 'batch' commit only makes sense for serial (single-connection) loading. If we
+            # overlap batches or parallelize loads across tables (multiple connections), we
+            # degrade 'batch' to 'table' (per-connection transactional bundling).
+            load_data_commit_strategy_effective = load_data_commit_strategy
+            if load_data_commit_strategy == "batch" and (bool(overlap_batches) or int(db_load_parallel_tables or 0) > 1):
+                load_data_commit_strategy_effective = "table"
+            try:
+                report.set_artifact("load_data_commit_strategy", str(load_data_commit_strategy))
+                if load_data_commit_strategy_effective != load_data_commit_strategy:
+                    report.set_artifact("load_data_commit_strategy_effective", str(load_data_commit_strategy_effective))
+            except Exception:
+                pass
+
             json_streaming_load = bool(dc.get("json_streaming_load", True))
             use_streaming_rows = (
                 bool(load)
@@ -1078,6 +1099,8 @@ def run_json_pipeline(
             ) -> None:
                 if not batch_records:
                     return
+
+                import time
 
                 nonlocal batch_no, hybrid_freeze_started
                 nonlocal flatten_executor, parallel_tsv_disabled
@@ -1573,6 +1596,9 @@ def run_json_pipeline(
                                                 res["errors"].append({"type": "RuntimeError", "message": "missing thread connection"})
                                                 return res
 
+                                            commit_per_file = str(load_data_commit_strategy_effective) == "file"
+                                            commit_in_group = not commit_per_file
+
                                             for fi in entries:
                                                 path = fi.get("path")
                                                 file_cols = fi.get("columns") or []
@@ -1593,6 +1619,7 @@ def run_json_pipeline(
                                                         existing_cols=existing_cols,
                                                         load_method=db_load_method,
                                                         fast_load_state=None,
+                                                        load_data_commit=bool(commit_per_file),
                                                         local_infile_conn=conn,
                                                     )
                                                     res["loaded_any"] = True
@@ -1613,6 +1640,19 @@ def run_json_pipeline(
                                                         os.remove(str(path))
                                                     except Exception:
                                                         pass
+                                            if commit_in_group:
+                                                try:
+                                                    if res.get("loaded_any"):
+                                                        if (not res.get("ok")) and (not continue_on_error):
+                                                            conn.rollback()
+                                                        else:
+                                                            conn.commit()
+                                                    else:
+                                                        if not res.get("ok"):
+                                                            conn.rollback()
+                                                except Exception as e:
+                                                    res["ok"] = False
+                                                    res["errors"].append({"type": type(e).__name__, "message": f"commit_failed: {e}"})
                                             return res
 
                                         futs = []
@@ -1639,6 +1679,12 @@ def run_json_pipeline(
 
                                     # Serial load: keep existing behavior/timings.
                                     if load_parallel_disabled or (not db_load_parallel_tables) or int(db_load_parallel_tables) <= 1 or len(load_groups) <= 1:
+                                        commit_strategy = str(load_data_commit_strategy_effective)
+                                        commit_per_file = commit_strategy == "file"
+                                        commit_after_table = commit_strategy == "table"
+                                        commit_after_batch = commit_strategy == "batch"
+                                        batch_loaded_any = False
+
                                         for g in load_groups:
                                             nm = g.get("nm")
                                             table_sql = g.get("table_sql")
@@ -1668,6 +1714,7 @@ def run_json_pipeline(
                                                     existing_cols=_get_existing_cols(str(table_sql)),
                                                     load_method=db_load_method,
                                                     fast_load_state=fast_load_state,
+                                                    load_data_commit=bool(commit_per_file),
                                                     local_infile_conn=local_infile_conn,
                                                 )
                                                 if load_res is not None:
@@ -1681,7 +1728,24 @@ def run_json_pipeline(
                                                 except Exception:
                                                     pass
                                             if loaded_any:
+                                                batch_loaded_any = True
+                                            if loaded_any and commit_after_table:
+                                                t0 = time.perf_counter()
+                                                local_infile_conn.commit()
+                                                dt = time.perf_counter() - t0
+                                                # Keep timing semantics comparable to per-file commits.
+                                                report.add_time_s("db.load_data.exec", dt)
+                                                report.add_time_s("db.load_data.total", dt)
+                                                report.add_time_s("json.db.load", dt)
+                                            if loaded_any:
                                                 report.bump("tables_loaded", 1)
+                                        if batch_loaded_any and commit_after_batch:
+                                            t0 = time.perf_counter()
+                                            local_infile_conn.commit()
+                                            dt = time.perf_counter() - t0
+                                            report.add_time_s("db.load_data.exec", dt)
+                                            report.add_time_s("db.load_data.total", dt)
+                                            report.add_time_s("json.db.load", dt)
                                         return
 
                                     # Parallel load across tables: one LOCAL INFILE connection per thread (reused across batches).
@@ -1755,6 +1819,9 @@ def run_json_pipeline(
                                             res["errors"].append({"type": "RuntimeError", "message": "missing thread connection"})
                                             return res
 
+                                        commit_per_file = str(load_data_commit_strategy_effective) == "file"
+                                        commit_in_group = not commit_per_file
+
                                         for fi in entries:
                                             path = fi.get("path")
                                             file_cols = fi.get("columns") or []
@@ -1775,6 +1842,7 @@ def run_json_pipeline(
                                                     existing_cols=existing_cols,
                                                     load_method=db_load_method,
                                                     fast_load_state=None,
+                                                    load_data_commit=bool(commit_per_file),
                                                     local_infile_conn=conn,
                                                 )
                                                 res["loaded_any"] = True
@@ -1795,6 +1863,19 @@ def run_json_pipeline(
                                                     os.remove(str(path))
                                                 except Exception:
                                                     pass
+                                        if commit_in_group:
+                                            try:
+                                                if res.get("loaded_any"):
+                                                    if (not res.get("ok")) and (not continue_on_error):
+                                                        conn.rollback()
+                                                    else:
+                                                        conn.commit()
+                                                else:
+                                                    if not res.get("ok"):
+                                                        conn.rollback()
+                                            except Exception as e:
+                                                res["ok"] = False
+                                                res["errors"].append({"type": type(e).__name__, "message": f"commit_failed: {e}"})
                                         return res
 
                                     remaining_groups: list[dict] = []
@@ -1869,6 +1950,10 @@ def run_json_pipeline(
                                                 existing_cols = g.get("existing_cols")
                                                 if not nm or not table_sql or not entries:
                                                     continue
+                                                commit_per_file = str(load_data_commit_strategy_effective) == "file"
+                                                commit_in_group = not commit_per_file
+                                                loaded_any = False
+                                                had_error = False
                                                 for fi in entries:
                                                     path = fi.get("path")
                                                     file_cols = fi.get("columns") or []
@@ -1889,12 +1974,15 @@ def run_json_pipeline(
                                                             existing_cols=existing_cols,
                                                             load_method=db_load_method,
                                                             fast_load_state=None,
+                                                            load_data_commit=bool(commit_per_file),
                                                             local_infile_conn=local_infile_conn,
                                                         )
+                                                        loaded_any = True
                                                         report.bump("load_ok", 1)
                                                         report.bump("load_data_ok", 1)
                                                         report.bump("rows_loaded", int(fi.get("rows") or 0))
                                                     except Exception as e:
+                                                        had_error = True
                                                         report.bump("load_failed", 1)
                                                         report.warn(
                                                             stage="json_pipeline.load.parallel_tables.fallback",
@@ -1909,6 +1997,11 @@ def run_json_pipeline(
                                                             os.remove(str(path))
                                                         except Exception:
                                                             pass
+                                                if commit_in_group and local_infile_conn is not None:
+                                                    if loaded_any:
+                                                        local_infile_conn.commit()
+                                                    elif had_error:
+                                                        local_infile_conn.rollback()
                                                 report.bump("tables_loaded", 1)
                                                 if existing_cols is not None:
                                                     try:

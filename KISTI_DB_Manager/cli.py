@@ -526,6 +526,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["parallel_workers"] = int(args.parallel_workers)
     if getattr(args, "db_load_parallel_tables", None) is not None:
         data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
+    if getattr(args, "load_data_commit_strategy", None):
+        data_config["load_data_commit_strategy"] = str(args.load_data_commit_strategy)
     if getattr(args, "overlap_batches", None) is not None:
         data_config["overlap_batches"] = bool(args.overlap_batches)
     if getattr(args, "json_streaming_load", None) is not None:
@@ -875,6 +877,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--db-load-parallel-tables",
         type=int,
         help="Parallelize LOAD DATA across tables (default: config or 0/off)",
+    )
+    p_json_run.add_argument(
+        "--load-data-commit-strategy",
+        choices=["file", "table", "batch"],
+        help="When using LOAD DATA: commit per file (default), per table, or per batch. 'batch' only applies to serial DB load (no overlap, db_load_parallel_tables<=1).",
     )
     p_json_run.add_argument(
         "--overlap-batches",

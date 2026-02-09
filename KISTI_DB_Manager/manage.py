@@ -478,6 +478,8 @@ def _load_data_local_infile_tsv_file(
     file_path: str,
     columns_sql: list[str],
     report=None,
+    commit: bool = True,
+    rollback_mode: str = "full",
 ) -> None:
     """
     Bulk load an existing TSV file via LOAD DATA LOCAL INFILE.
@@ -515,10 +517,25 @@ def _load_data_local_infile_tsv_file(
     except Exception:
         t0 = None
 
+    rollback_mode_norm = str(rollback_mode or "").strip().lower()
+    use_savepoint = bool(not commit) and rollback_mode_norm in {"savepoint", "sp"}
+    sp_name = "kisti_load_data"
+
     try:
         with conn.cursor() as cur:
+            if use_savepoint:
+                try:
+                    cur.execute(f"SAVEPOINT {sp_name}")
+                except Exception:
+                    use_savepoint = False
             cur.execute(sql)
-        conn.commit()
+            if use_savepoint:
+                try:
+                    cur.execute(f"RELEASE SAVEPOINT {sp_name}")
+                except Exception:
+                    pass
+        if bool(commit):
+            conn.commit()
         if report is not None and t0 is not None:
             try:
                 import time
@@ -528,7 +545,18 @@ def _load_data_local_infile_tsv_file(
                 pass
     except Exception:
         try:
-            conn.rollback()
+            if use_savepoint:
+                try:
+                    with conn.cursor() as cur:
+                        cur.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
+                        try:
+                            cur.execute(f"RELEASE SAVEPOINT {sp_name}")
+                        except Exception:
+                            pass
+                except Exception:
+                    conn.rollback()
+            else:
+                conn.rollback()
         except Exception:
             pass
         raise
@@ -1847,6 +1875,7 @@ def fill_table_from_tsv_file(
     existing_cols: set[str] | None = None,
     load_method: str | None = None,
     fast_load_state: FastLoadState | None = None,
+    load_data_commit: bool = True,
     local_infile_conn=None,
 ):
     """
@@ -1990,6 +2019,8 @@ def fill_table_from_tsv_file(
                 file_path=str(file_path),
                 columns_sql=list(keep_cols_sql),
                 report=report,
+                commit=bool(load_data_commit),
+                rollback_mode=("savepoint" if not bool(load_data_commit) else "full"),
             )
         if report:
             try:
