@@ -796,7 +796,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
     try:
         # Backward-compatible args parsing:
         #   legacy: (index_offset, jsons, index_key, except_keys, sep, tmp_dir, record_contexts)
-        #   new:    (..., base_table, extra_column_name, allowed_cols_by_table)
+        #   new:    (..., base_table, extra_column_name, allowed_cols_by_table, excepted_expand_dict)
         if not isinstance(args, (list, tuple)) or len(args) < 7:
             raise TypeError("flatten_jsons_to_tsv_worker expects a tuple/list of length >= 7")
 
@@ -810,6 +810,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         base_table = args[7] if len(args) > 7 else None
         extra_column_name = args[8] if len(args) > 8 else None
         allowed_cols_by_table = args[9] if len(args) > 9 else None
+        excepted_expand_dict = args[10] if len(args) > 10 else False
 
         try:
             index_offset = int(index_offset or 0)
@@ -824,6 +825,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         extra_canon = None
         if extra_column_name:
             extra_canon = str(extra_column_name).replace(".", sep)
+        excepted_expand_dict = bool(excepted_expand_dict)
 
         allowed_map: dict[str, set[str]] | None = None
         if extra_canon and isinstance(allowed_cols_by_table, dict) and allowed_cols_by_table:
@@ -869,11 +871,9 @@ def _safe_flatten_jsons_to_tsv_worker(args):
                     return json.dumps(str(value), ensure_ascii=False)
 
         def _build_excepted_row(path: str, value, row: dict, context) -> dict:
-            out: dict = {}
-            if isinstance(value, dict):
+            out: dict = {"value": value}
+            if excepted_expand_dict and isinstance(value, dict):
                 out.update(value)
-            else:
-                out["value"] = value
 
             out[index_key] = row.get(index_key)
             out["__except_path__"] = str(path)
@@ -1172,6 +1172,7 @@ def extract_rows_from_jsons(
     *,
     index_key: str = "id",
     except_keys=None,
+    excepted_expand_dict: bool = False,
     sep: str = "__",
     report=None,
     quarantine=None,
@@ -1191,6 +1192,7 @@ def extract_rows_from_jsons(
     # Normalize once (string keys, trimmed) so flatten/collection keys are consistent.
     except_keys = [str(k).strip() for k in except_keys if str(k).strip()]
     except_set = set(except_keys)
+    excepted_expand_dict = bool(excepted_expand_dict)
 
     try:
         index_offset = int(index_offset or 0)
@@ -1222,11 +1224,9 @@ def extract_rows_from_jsons(
                 return json.dumps(str(value), ensure_ascii=False)
 
     def _build_excepted_row(path: str, value, row: dict, context) -> dict:
-        out: dict = {}
-        if isinstance(value, dict):
+        out: dict = {"value": value}
+        if excepted_expand_dict and isinstance(value, dict):
             out.update(value)
-        else:
-            out["value"] = value
 
         out[index_key] = row.get(index_key)
         out["__except_path__"] = str(path)
@@ -1401,6 +1401,7 @@ def extract_data_from_jsons(
     jsons,
     index_key="id",
     except_keys=None,
+    excepted_expand_dict: bool = False,
     sep="__",
     report=None,
     quarantine=None,
@@ -1478,6 +1479,7 @@ def extract_data_from_jsons(
         jsons,
         index_key=index_key,
         except_keys=except_keys,
+        excepted_expand_dict=excepted_expand_dict,
         sep=sep,
         report=report,
         quarantine=quarantine,

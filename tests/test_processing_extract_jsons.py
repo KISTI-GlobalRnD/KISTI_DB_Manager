@@ -58,10 +58,32 @@ class TestExtractDataFromJsons(unittest.TestCase):
         self.assertIn("a", excepted)
         self.assertEqual(len(excepted["a"]), 2)
         self.assertEqual(excepted["a"][0]["id"], 1)
-        self.assertEqual(excepted["a"][0]["x"], 10)
+        self.assertEqual(excepted["a"][0]["value"], {"x": 10})
+        self.assertNotIn("x", excepted["a"][0])
         self.assertEqual(excepted["a"][0]["__source_path__"], "/tmp/a.jsonl")
         self.assertEqual(excepted["a"][0]["__line_no__"], 1)
         self.assertEqual(excepted["a"][0]["__record_index__"], 0)
+
+    def test_extract_rows_excepted_expand_dict_legacy_option(self):
+        if extract_rows_from_jsons is None:
+            self.skipTest("Optional dependency missing (numpy/pandas)")
+
+        jsons = [{"id": 1, "a": {"x": 10, "y": 20}}]
+        rows_main, sub_rows, excepted = extract_rows_from_jsons(
+            jsons,
+            index_key="id",
+            except_keys=["a"],
+            excepted_expand_dict=True,
+        )
+
+        self.assertEqual(len(rows_main), 1)
+        self.assertEqual(sub_rows, {})
+        self.assertIn("a", excepted)
+        self.assertEqual(len(excepted["a"]), 1)
+        self.assertEqual(excepted["a"][0]["id"], 1)
+        self.assertEqual(excepted["a"][0]["value"], {"x": 10, "y": 20})
+        self.assertEqual(excepted["a"][0]["x"], 10)
+        self.assertEqual(excepted["a"][0]["y"], 20)
 
 
 if __name__ == "__main__":

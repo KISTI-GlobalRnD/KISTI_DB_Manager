@@ -86,6 +86,28 @@ class TestIterJsonRecords(unittest.TestCase):
             self.assertEqual(got[0][1]["line_no"], 1)
             self.assertTrue(str(got[0][1]["source_path"]).endswith("a.jsonl"))
 
+    def test_iter_json_records_supports_source_sampling(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "01.jsonl").write_text('{"id":1}\n', encoding="utf-8")
+            (root / "02.jsonl").write_text('{"id":2}\n', encoding="utf-8")
+            (root / "03.jsonl").write_text('{"id":3}\n', encoding="utf-8")
+
+            data_config = {
+                "PATH": str(root),
+                "file_glob": "*.jsonl",
+                "sample_randomize_sources": True,
+                "sample_seed": 7,
+                "sample_max_sources": 2,
+            }
+            got1 = list(_iter_json_records(data_config))
+            got2 = list(_iter_json_records(data_config))
+
+            self.assertEqual(len(got1), 2)
+            self.assertEqual(len(got2), 2)
+            self.assertEqual([x["id"] for x in got1], [x["id"] for x in got2])
+            self.assertTrue(set(x["id"] for x in got1).issubset({1, 2, 3}))
+
 
 if __name__ == "__main__":
     unittest.main()

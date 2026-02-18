@@ -1,6 +1,9 @@
 import unittest
 from unittest.mock import patch
 
+import tempfile
+from pathlib import Path
+
 
 from KISTI_DB_Manager.pipeline import run_json_pipeline
 
@@ -105,6 +108,56 @@ class TestJsonPipeline(unittest.TestCase):
         self.assertIn("name_maps_json", res.report.artifacts)
         self.assertEqual(p_create.call_count, 2)  # base + base__items
         self.assertEqual(p_load.call_count, 4)  # 2 batches * 2 tables
+
+    def test_run_json_pipeline_auto_except_detects_high_cardinality_dict_path(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            p = root / "x.jsonl"
+            lines = []
+            for i in range(12):
+                payload = {"id": i + 1, "high_map": {f"k_{i}_{j}": j for j in range(3)}, "stable": {"a": 1, "b": 2}}
+                lines.append(str(payload).replace("'", '"'))
+            p.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+            data_config = {
+                "PATH": str(root),
+                "file_name": "x.jsonl",
+                "file_type": "jsonl",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "auto_except": True,
+                "auto_except_sample_records": 12,
+                "auto_except_sample_max_sources": 1,
+                "auto_except_seed": 7,
+                "auto_except_unique_key_threshold": 10,
+                "auto_except_min_observations": 5,
+                "auto_except_novelty_threshold": 1.0,
+            }
+            db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+            seen_except_keys: list[list[str]] = []
+
+            def fake_extract(batch_records, **kwargs):
+                seen_except_keys.append(list(kwargs.get("except_keys") or []))
+                return DummyDF(["id"], rows=len(batch_records)), {}, {}
+
+            res = run_json_pipeline(
+                data_config,
+                db_config,
+                chunk_size=50,
+                extract_fn=fake_extract,
+                create=False,
+                load=False,
+                index=False,
+                optimize=False,
+                continue_on_error=False,
+            )
+
+            self.assertTrue(seen_except_keys)
+            self.assertIn("high_map", seen_except_keys[0])
+            auto_meta = (res.report.artifacts or {}).get("auto_except") or {}
+            self.assertEqual(auto_meta.get("enabled"), True)
+            self.assertIn("high_map", auto_meta.get("detected_except_keys") or [])
 
 
 if __name__ == "__main__":

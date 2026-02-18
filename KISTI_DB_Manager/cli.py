@@ -542,6 +542,20 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["tsv_union_merge_max_missing_cols"] = int(args.tsv_union_merge_max_missing_cols)
     if getattr(args, "chunk_size", None) is not None:
         data_config["chunk_size"] = int(args.chunk_size)
+    if getattr(args, "auto_except", None) is not None:
+        data_config["auto_except"] = bool(args.auto_except)
+    if getattr(args, "auto_except_sample_records", None) is not None:
+        data_config["auto_except_sample_records"] = int(args.auto_except_sample_records)
+    if getattr(args, "auto_except_sample_max_sources", None) is not None:
+        data_config["auto_except_sample_max_sources"] = int(args.auto_except_sample_max_sources)
+    if getattr(args, "auto_except_seed", None) is not None:
+        data_config["auto_except_seed"] = int(args.auto_except_seed)
+    if getattr(args, "auto_except_unique_key_threshold", None) is not None:
+        data_config["auto_except_unique_key_threshold"] = int(args.auto_except_unique_key_threshold)
+    if getattr(args, "auto_except_min_observations", None) is not None:
+        data_config["auto_except_min_observations"] = int(args.auto_except_min_observations)
+    if getattr(args, "auto_except_novelty_threshold", None) is not None:
+        data_config["auto_except_novelty_threshold"] = float(args.auto_except_novelty_threshold)
 
     create = _resolve_bool(getattr(args, "create", None), mode_spec.stage_defaults.get("create", True)) and not bool(args.dry_run)
     load = _resolve_bool(getattr(args, "load", None), mode_spec.stage_defaults.get("load", True)) and not bool(args.dry_run)
@@ -641,12 +655,29 @@ def _cmd_review_plan(args: argparse.Namespace) -> int:
         stem_src = Path(args.config)
         out_dir = str(stem_src.with_suffix("")) + "_plan"
 
+    data_overrides: dict[str, Any] = {}
+    if getattr(args, "auto_except", None) is not None:
+        data_overrides["auto_except"] = bool(args.auto_except)
+    if getattr(args, "auto_except_sample_records", None) is not None:
+        data_overrides["auto_except_sample_records"] = int(args.auto_except_sample_records)
+    if getattr(args, "auto_except_sample_max_sources", None) is not None:
+        data_overrides["auto_except_sample_max_sources"] = int(args.auto_except_sample_max_sources)
+    if getattr(args, "auto_except_seed", None) is not None:
+        data_overrides["auto_except_seed"] = int(args.auto_except_seed)
+    if getattr(args, "auto_except_unique_key_threshold", None) is not None:
+        data_overrides["auto_except_unique_key_threshold"] = int(args.auto_except_unique_key_threshold)
+    if getattr(args, "auto_except_min_observations", None) is not None:
+        data_overrides["auto_except_min_observations"] = int(args.auto_except_min_observations)
+    if getattr(args, "auto_except_novelty_threshold", None) is not None:
+        data_overrides["auto_except_novelty_threshold"] = float(args.auto_except_novelty_threshold)
+
     res = generate_review_plan(
         config_path=args.config,
         out_dir=out_dir,
         formats=args.formats,
         max_records=args.max_records,
         generate_desc=bool(args.generate_desc),
+        data_overrides=data_overrides or None,
     )
 
     print(f"out_dir: {res['out_dir']}")
@@ -925,6 +956,42 @@ def build_parser() -> argparse.ArgumentParser:
         help="Heuristic: attempt union merge when max missing columns per fragment is <= this (default: config or 32).",
     )
     p_json_run.add_argument(
+        "--auto-except",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Auto-detect high-cardinality dict paths from random sample and append them to except_keys.",
+    )
+    p_json_run.add_argument(
+        "--auto-except-sample-records",
+        type=int,
+        help="Auto-except random preflight sample size (records, default: config or 5000).",
+    )
+    p_json_run.add_argument(
+        "--auto-except-sample-max-sources",
+        type=int,
+        help="Auto-except random source cap for sampling (default: config or 64).",
+    )
+    p_json_run.add_argument(
+        "--auto-except-seed",
+        type=int,
+        help="Auto-except sampling seed (default: config or 42).",
+    )
+    p_json_run.add_argument(
+        "--auto-except-unique-key-threshold",
+        type=int,
+        help="Detect path when unique dict subkeys exceed this threshold (default: config or 512).",
+    )
+    p_json_run.add_argument(
+        "--auto-except-min-observations",
+        type=int,
+        help="Minimum dict-path observations to enable auto-except (default: config or 20).",
+    )
+    p_json_run.add_argument(
+        "--auto-except-novelty-threshold",
+        type=float,
+        help="Detect path when unique_keys/observations >= this ratio (default: config or 2.0).",
+    )
+    p_json_run.add_argument(
         "--create",
         action=argparse.BooleanOptionalAction,
         default=None,
@@ -979,6 +1046,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_plan.add_argument("--max-records", type=int, default=1000, help="Stop after N records when previewing JSON inputs")
     p_plan.add_argument("--generate-desc", action="store_true", help="(tabular) generate desc CSV first (can be slow)")
+    p_plan.add_argument(
+        "--auto-except",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable auto-except preflight during review plan (default: config).",
+    )
+    p_plan.add_argument("--auto-except-sample-records", type=int, help="Auto-except sample size (records).")
+    p_plan.add_argument("--auto-except-sample-max-sources", type=int, help="Auto-except random source cap.")
+    p_plan.add_argument("--auto-except-seed", type=int, help="Auto-except sampling seed.")
+    p_plan.add_argument("--auto-except-unique-key-threshold", type=int, help="Auto-except unique subkey threshold.")
+    p_plan.add_argument("--auto-except-min-observations", type=int, help="Auto-except min observations threshold.")
+    p_plan.add_argument("--auto-except-novelty-threshold", type=float, help="Auto-except novelty ratio threshold.")
     p_plan.set_defaults(func=_cmd_review_plan)
 
     p_preview = review_sub.add_parser("preview", help="Preview raw structure vs flattened rows (HTML/JSON)")

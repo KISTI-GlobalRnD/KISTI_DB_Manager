@@ -37,6 +37,8 @@ bash examples/smoke_real_db.sh \
   examples/configs/json_config_realdb.local.json
 ```
 
+If your JSON has explosive dict subkeys (for example OpenAlex-like payloads), enable `auto_except` in the JSON config or add `--auto-except` to `json run` / `review plan`.
+
 Multi-file JSON input template:
 - `examples/configs/json_config_multifile_realdb.template.json`
 

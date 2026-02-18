@@ -53,6 +53,18 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("schema_mode", "evolve")
     cfg.setdefault("extra_column_name", "__extra__")
     cfg.setdefault("schema_hybrid_warmup_batches", 1)
+    # Auto-except preflight (random sample -> high-cardinality dict path detection)
+    cfg.setdefault("auto_except", False)
+    cfg.setdefault("auto_except_sample_records", 5000)
+    cfg.setdefault("auto_except_sample_max_sources", 64)
+    cfg.setdefault("auto_except_seed", 42)
+    cfg.setdefault("auto_except_unique_key_threshold", 512)
+    cfg.setdefault("auto_except_min_observations", 20)
+    cfg.setdefault("auto_except_novelty_threshold", 2.0)
+    # excepted branch handling
+    # - False (default): keep excepted payload in a single `value` field (+ raw JSON/context metadata)
+    # - True: also expand dict keys as columns in excepted rows (legacy behavior; may cause column explosion)
+    cfg.setdefault("excepted_expand_dict", False)
     # DB session tuning for ingest (best-effort; may require privileges)
     cfg.setdefault("fast_load_session", False)
 
@@ -149,6 +161,14 @@ class DataConfig:
     schema_mode: str = "evolve"
     extra_column_name: str = "__extra__"
     schema_hybrid_warmup_batches: int = 1
+    auto_except: bool = False
+    auto_except_sample_records: int = 5000
+    auto_except_sample_max_sources: int = 64
+    auto_except_seed: int = 42
+    auto_except_unique_key_threshold: int = 512
+    auto_except_min_observations: int = 20
+    auto_except_novelty_threshold: float = 2.0
+    excepted_expand_dict: bool = False
     fast_load_session: bool = False
 
     @classmethod
@@ -180,6 +200,14 @@ class DataConfig:
             schema_mode=str(cfg.get("schema_mode", "evolve")),
             extra_column_name=str(cfg.get("extra_column_name", "__extra__")),
             schema_hybrid_warmup_batches=int(cfg.get("schema_hybrid_warmup_batches", 1) or 0),
+            auto_except=bool(cfg.get("auto_except", False)),
+            auto_except_sample_records=int(cfg.get("auto_except_sample_records", 5000) or 5000),
+            auto_except_sample_max_sources=int(cfg.get("auto_except_sample_max_sources", 64) or 64),
+            auto_except_seed=int(cfg.get("auto_except_seed", 42) or 42),
+            auto_except_unique_key_threshold=int(cfg.get("auto_except_unique_key_threshold", 512) or 512),
+            auto_except_min_observations=int(cfg.get("auto_except_min_observations", 20) or 20),
+            auto_except_novelty_threshold=float(cfg.get("auto_except_novelty_threshold", 2.0) or 2.0),
+            excepted_expand_dict=bool(cfg.get("excepted_expand_dict", False)),
             fast_load_session=bool(cfg.get("fast_load_session", False)),
         )
 
@@ -210,5 +238,13 @@ class DataConfig:
             "schema_mode": str(self.schema_mode),
             "extra_column_name": str(self.extra_column_name),
             "schema_hybrid_warmup_batches": int(self.schema_hybrid_warmup_batches),
+            "auto_except": bool(self.auto_except),
+            "auto_except_sample_records": int(self.auto_except_sample_records),
+            "auto_except_sample_max_sources": int(self.auto_except_sample_max_sources),
+            "auto_except_seed": int(self.auto_except_seed),
+            "auto_except_unique_key_threshold": int(self.auto_except_unique_key_threshold),
+            "auto_except_min_observations": int(self.auto_except_min_observations),
+            "auto_except_novelty_threshold": float(self.auto_except_novelty_threshold),
+            "excepted_expand_dict": bool(self.excepted_expand_dict),
             "fast_load_session": bool(self.fast_load_session),
         }

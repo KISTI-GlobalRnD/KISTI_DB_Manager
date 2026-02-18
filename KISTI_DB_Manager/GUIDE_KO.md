@@ -216,8 +216,24 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 ### `except_keys` (원본 보존 강화)
 
 - excepted 테이블에는 제외 브랜치 원문과 컨텍스트를 함께 저장
+  - 기본 동작: 제외된 dict도 컬럼으로 펼치지 않고 `value` + `__except_raw_json__`로 보존 (`excepted_expand_dict=false`)
   - `__except_raw_json__`, `__except_path__`, `__except_raw_type__`
   - 가능하면 소스 추적 컬럼(`__source_path__`, `__source_member__`, `__line_no__`, `__record_index__`)
+  - 레거시 호환이 필요하면 `excepted_expand_dict=true`로 dict 키 확장 가능(대용량에서는 컬럼 폭증 주의)
+
+### `auto_except` (랜덤 샘플 기반 자동 제외)
+
+- 목적: `abstract_inverted_index`처럼 서브키 카디널리티가 큰 dict 경로를 자동 탐지해 `except_keys`에 추가
+- 동작: JSON run 시작 전에 랜덤 소스 샘플로 dict-path 통계를 수집하고 후보를 자동 제외
+- 주요 설정:
+  - `auto_except` (기본 `false`)
+  - `auto_except_sample_records` (기본 `5000`)
+  - `auto_except_sample_max_sources` (기본 `64`)
+  - `auto_except_seed` (기본 `42`)
+  - `auto_except_unique_key_threshold` (기본 `512`)
+  - `auto_except_min_observations` (기본 `20`)
+  - `auto_except_novelty_threshold` (기본 `2.0`, `unique_keys/observations`)
+- 리포트(`run_report.artifacts.auto_except`)에 탐지 키, 샘플 프로파일, ETA 추정(소스/바이트 기준) 기록
 
 ## 추가 팁 (대용량/운영)
 

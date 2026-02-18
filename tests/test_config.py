@@ -22,6 +22,14 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["fallback_column_type"], "LONGTEXT")
         self.assertEqual(cfg["insert_retry_max"], 5)
         self.assertEqual(cfg["index_prefix_len"], 191)
+        self.assertEqual(cfg["auto_except"], False)
+        self.assertEqual(cfg["auto_except_sample_records"], 5000)
+        self.assertEqual(cfg["auto_except_sample_max_sources"], 64)
+        self.assertEqual(cfg["auto_except_seed"], 42)
+        self.assertEqual(cfg["auto_except_unique_key_threshold"], 512)
+        self.assertEqual(cfg["auto_except_min_observations"], 20)
+        self.assertEqual(cfg["auto_except_novelty_threshold"], 2.0)
+        self.assertEqual(cfg["excepted_expand_dict"], False)
 
     def test_normalize_data_config_file_sep_alias(self):
         cfg = normalize_data_config(

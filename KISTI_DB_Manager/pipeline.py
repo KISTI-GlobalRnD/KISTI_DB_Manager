@@ -94,64 +94,66 @@ def _json_loads_factory():
         return loads
 
 
-def _iter_json_records(
+def _as_string_list(value: Any) -> list[str]:
+    from pathlib import Path
+
+    if value is None:
+        return []
+    if isinstance(value, (str, Path)):
+        s = str(value).strip()
+        return [s] if s else []
+    if isinstance(value, (list, tuple, set)):
+        out: list[str] = []
+        for item in value:
+            if item is None:
+                continue
+            s = str(item).strip()
+            if s:
+                out.append(s)
+        return out
+    s = str(value).strip()
+    return [s] if s else []
+
+
+def _coerce_bool(value: Any, *, default: bool = False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, (int, float)):
+        try:
+            return int(value) != 0
+        except Exception:
+            return bool(default)
+    s = str(value).strip().lower()
+    if s in {"1", "true", "t", "yes", "y", "on"}:
+        return True
+    if s in {"0", "false", "f", "no", "n", "off", ""}:
+        return False
+    return bool(default)
+
+
+def _coerce_int(value: Any, *, default: int = 0) -> int:
+    try:
+        return int(value)
+    except Exception:
+        return int(default)
+
+
+def _resolve_json_sources(
     data_config: Mapping[str, Any],
     *,
     report: RunReport | None = None,
-    max_records: int | None = None,
-    with_context: bool = False,
-):
-    """
-    Yield JSON records from one or more inputs described by data_config.
-
-    Supports:
-    - jsonl/ndjson
-    - json (single object or array; optionally records_key within a dict)
-    - gz (jsonl by default; json if records_key is used and file contains a JSON object/array)
-    - zip (json member(s) by name, or auto-pick all .jsonl/.ndjson/.json members)
-
-    Input selection priority:
-    1) file_names / input_paths (list)
-    2) file_glob / file_patterns
-    3) file_name (single, backward compatible)
-    """
+    apply_sampling: bool = True,
+) -> list[tuple[str, Any]]:
     import glob
+    import random
     from pathlib import Path
 
     from .config import join_path
 
-    loads = _json_loads_factory()
-
     dc = coerce_data_config(data_config)
     base_path = Path(str(dc.get("PATH", "") or ""))
-    configured_file_type = str(dc.get("file_type") or "").strip().lower()
-    records_key = dc.get("records_key") or dc.get("json_records_key")
-    json_member_value = dc.get("json_file_names")
-    if json_member_value is None:
-        json_member_value = dc.get("json_file_name")
-    if json_member_value is None:
-        json_member_value = dc.get("inner_file_name")
-
-    max_records = int(max_records) if max_records is not None and int(max_records) > 0 else None
-    yielded = 0
-
-    def _as_string_list(value: Any) -> list[str]:
-        if value is None:
-            return []
-        if isinstance(value, (str, Path)):
-            s = str(value).strip()
-            return [s] if s else []
-        if isinstance(value, (list, tuple, set)):
-            out: list[str] = []
-            for item in value:
-                if item is None:
-                    continue
-                s = str(item).strip()
-                if s:
-                    out.append(s)
-            return out
-        s = str(value).strip()
-        return [s] if s else []
 
     def _resolve_path(value: str) -> Path:
         p = Path(str(value))
@@ -202,6 +204,69 @@ def _iter_json_records(
             raise FileNotFoundError(f"Input file not found ({origin}): {path}")
         if not path.is_file():
             raise FileNotFoundError(f"Input path is not a file ({origin}): {path}")
+
+    if apply_sampling:
+        sample_randomize = _coerce_bool(
+            dc.get("sample_randomize_sources", dc.get("sample_random_sources", False)),
+            default=False,
+        )
+        sample_max_sources = _coerce_int(dc.get("sample_max_sources", dc.get("sample_source_limit", 0)), default=0)
+        if sample_max_sources < 0:
+            sample_max_sources = 0
+        if sample_randomize:
+            seed_raw = dc.get("sample_seed", dc.get("sample_random_seed"))
+            seed = None
+            if seed_raw not in (None, ""):
+                try:
+                    seed = int(seed_raw)
+                except Exception:
+                    seed = None
+            rnd = random.Random(seed)
+            rnd.shuffle(deduped_sources)
+        if sample_max_sources > 0:
+            deduped_sources = deduped_sources[:sample_max_sources]
+
+    return list(deduped_sources)
+
+
+def _iter_json_records(
+    data_config: Mapping[str, Any],
+    *,
+    report: RunReport | None = None,
+    max_records: int | None = None,
+    with_context: bool = False,
+):
+    """
+    Yield JSON records from one or more inputs described by data_config.
+
+    Supports:
+    - jsonl/ndjson
+    - json (single object or array; optionally records_key within a dict)
+    - gz (jsonl by default; json if records_key is used and file contains a JSON object/array)
+    - zip (json member(s) by name, or auto-pick all .jsonl/.ndjson/.json members)
+
+    Input selection priority:
+    1) file_names / input_paths (list)
+    2) file_glob / file_patterns
+    3) file_name (single, backward compatible)
+    """
+    from pathlib import Path
+
+    loads = _json_loads_factory()
+
+    dc = coerce_data_config(data_config)
+    configured_file_type = str(dc.get("file_type") or "").strip().lower()
+    records_key = dc.get("records_key") or dc.get("json_records_key")
+    json_member_value = dc.get("json_file_names")
+    if json_member_value is None:
+        json_member_value = dc.get("json_file_name")
+    if json_member_value is None:
+        json_member_value = dc.get("inner_file_name")
+
+    source_infos = _resolve_json_sources(dc, report=report, apply_sampling=True)
+
+    max_records = int(max_records) if max_records is not None and int(max_records) > 0 else None
+    yielded = 0
 
     def _bump_bytes(n: int) -> None:
         if report is None:
@@ -419,10 +484,214 @@ def _iter_json_records(
 
         raise ValueError(f"Unsupported file_type={file_type!r} for JSON pipeline (source={path})")
 
-    for _origin, _path in deduped_sources:
+    for _origin, _path in source_infos:
         if max_records is not None and yielded >= max_records:
             break
         yield from iter_one_source(_path, source_label=str(_path))
+
+
+def _iter_dict_path_stats(
+    record: Any,
+    *,
+    key_sep: str,
+    stats: dict[str, dict[str, Any]],
+    unique_cap: int,
+) -> None:
+    stack: list[tuple[Any, str]] = [(record, "")]
+    while stack:
+        cur, path = stack.pop()
+        if type(cur) is dict or isinstance(cur, dict):
+            if path:
+                st = stats.get(path)
+                if st is None:
+                    st = {"observations": 0, "dict_keys_total": 0, "unique_keys": set()}
+                    stats[path] = st
+                st["observations"] = int(st.get("observations", 0)) + 1
+                key_count = len(cur)
+                st["dict_keys_total"] = int(st.get("dict_keys_total", 0)) + int(key_count)
+                uniq: set[str] = st.get("unique_keys") or set()
+                if len(uniq) < int(unique_cap):
+                    for k in cur.keys():
+                        uniq.add(str(k))
+                        if len(uniq) >= int(unique_cap):
+                            break
+                    st["unique_keys"] = uniq
+
+            for k, v in cur.items():
+                ks = k if type(k) is str else str(k)
+                child = f"{path}{key_sep}{ks}" if path else ks
+                if type(v) is dict or isinstance(v, dict):
+                    stack.append((v, child))
+                elif type(v) is list or isinstance(v, list):
+                    stack.append((v, child))
+            continue
+
+        if type(cur) is list or isinstance(cur, list):
+            for it in cur:
+                if type(it) is dict or isinstance(it, dict):
+                    # list item dicts share the same logical path
+                    stack.append((it, path))
+                elif type(it) is list or isinstance(it, list):
+                    stack.append((it, path))
+
+
+def _auto_detect_except_keys(
+    data_config: Mapping[str, Any],
+    *,
+    existing_except_keys: list[str] | None,
+) -> tuple[list[str], dict[str, Any]]:
+    import time
+
+    dc = coerce_data_config(data_config)
+    existing = [str(k).strip() for k in (existing_except_keys or []) if str(k).strip()]
+    existing_set = set(existing)
+    key_sep = str(dc.get("KEY_SEP", "__"))
+
+    sample_records = _coerce_int(dc.get("auto_except_sample_records", 5000), default=5000)
+    if sample_records < 1:
+        sample_records = 1
+    sample_max_sources = _coerce_int(dc.get("auto_except_sample_max_sources", 64), default=64)
+    if sample_max_sources < 1:
+        sample_max_sources = 1
+    seed = _coerce_int(dc.get("auto_except_seed", 42), default=42)
+    unique_threshold = _coerce_int(dc.get("auto_except_unique_key_threshold", 512), default=512)
+    if unique_threshold < 2:
+        unique_threshold = 2
+    min_observations = _coerce_int(dc.get("auto_except_min_observations", 20), default=20)
+    if min_observations < 1:
+        min_observations = 1
+    try:
+        novelty_threshold = float(dc.get("auto_except_novelty_threshold", 2.0) or 2.0)
+    except Exception:
+        novelty_threshold = 2.0
+    if novelty_threshold < 0.0:
+        novelty_threshold = 0.0
+    profile_topn = _coerce_int(dc.get("auto_except_profile_topn", 30), default=30)
+    if profile_topn < 1:
+        profile_topn = 1
+    unique_cap = _coerce_int(dc.get("auto_except_unique_key_cap", 200000), default=200000)
+    if unique_cap < 1024:
+        unique_cap = 1024
+
+    all_sources = _resolve_json_sources(dc, apply_sampling=False)
+    total_source_count = int(len(all_sources))
+    total_source_bytes = 0
+    for _origin, path in all_sources:
+        try:
+            total_source_bytes += int(path.stat().st_size)
+        except Exception:
+            continue
+
+    sample_dc = dict(dc)
+    sample_dc["sample_randomize_sources"] = True
+    sample_dc["sample_seed"] = int(seed)
+    sample_dc["sample_max_sources"] = int(sample_max_sources)
+
+    stats: dict[str, dict[str, Any]] = {}
+    sampled_records = 0
+    sampled_sources: set[str] = set()
+    t0 = time.perf_counter()
+    for out in _iter_json_records(sample_dc, report=None, max_records=sample_records, with_context=True):
+        record, context = out
+        if isinstance(context, Mapping):
+            sp = context.get("source_path")
+            if sp is not None:
+                sampled_sources.add(str(sp))
+        _iter_dict_path_stats(record, key_sep=key_sep, stats=stats, unique_cap=unique_cap)
+        sampled_records += 1
+    sample_duration_s = float(time.perf_counter() - t0)
+
+    profile_rows: list[dict[str, Any]] = []
+    detected: list[str] = []
+    for path, st in stats.items():
+        obs = int(st.get("observations", 0))
+        uniq_keys = st.get("unique_keys") or set()
+        unique_count = int(len(uniq_keys))
+        avg_keys = float(st.get("dict_keys_total", 0)) / float(obs) if obs > 0 else 0.0
+        novelty = float(unique_count) / float(obs) if obs > 0 else 0.0
+        is_candidate = bool(
+            obs >= min_observations and unique_count >= unique_threshold and novelty >= novelty_threshold
+        )
+        if is_candidate:
+            if path not in existing_set and str(path).split(key_sep)[-1] not in existing_set:
+                detected.append(path)
+        profile_rows.append(
+            {
+                "path": str(path),
+                "observations": int(obs),
+                "unique_keys": int(unique_count),
+                "avg_dict_keys": float(round(avg_keys, 3)),
+                "novelty_ratio": float(round(novelty, 3)),
+                "auto_except_candidate": bool(is_candidate),
+            }
+        )
+
+    profile_rows.sort(key=lambda x: (int(x.get("unique_keys", 0)), float(x.get("novelty_ratio", 0.0))), reverse=True)
+
+    effective = list(existing)
+    seen_effective = set(existing)
+    for k in sorted(set(detected)):
+        if k not in seen_effective:
+            effective.append(k)
+            seen_effective.add(k)
+
+    sampled_source_bytes = 0
+    for sp in sampled_sources:
+        try:
+            from pathlib import Path
+
+            sampled_source_bytes += int(Path(sp).stat().st_size)
+        except Exception:
+            continue
+
+    eta_by_source_s = None
+    eta_by_bytes_s = None
+    if sample_duration_s > 0.0 and sampled_sources and total_source_count > 0:
+        try:
+            eta_by_source_s = float(sample_duration_s * (float(total_source_count) / float(len(sampled_sources))))
+        except Exception:
+            eta_by_source_s = None
+    if sample_duration_s > 0.0 and sampled_source_bytes > 0 and total_source_bytes > 0:
+        try:
+            eta_by_bytes_s = float(sample_duration_s * (float(total_source_bytes) / float(sampled_source_bytes)))
+        except Exception:
+            eta_by_bytes_s = None
+
+    eta_candidates = [x for x in [eta_by_source_s, eta_by_bytes_s] if isinstance(x, (int, float)) and x > 0]
+    eta_range_s = None
+    if eta_candidates:
+        eta_range_s = [float(min(eta_candidates)), float(max(eta_candidates))]
+
+    meta = {
+        "enabled": True,
+        "sample": {
+            "records_requested": int(sample_records),
+            "records_sampled": int(sampled_records),
+            "max_sources_requested": int(sample_max_sources),
+            "sources_sampled": int(len(sampled_sources)),
+            "seed": int(seed),
+            "duration_s": float(round(sample_duration_s, 6)),
+        },
+        "thresholds": {
+            "unique_key_threshold": int(unique_threshold),
+            "min_observations": int(min_observations),
+            "novelty_threshold": float(novelty_threshold),
+        },
+        "input": {
+            "total_sources": int(total_source_count),
+            "total_source_bytes": int(total_source_bytes),
+            "sampled_source_bytes": int(sampled_source_bytes),
+        },
+        "estimate": {
+            "eta_seconds_by_source": eta_by_source_s,
+            "eta_seconds_by_bytes": eta_by_bytes_s,
+            "eta_seconds_range": eta_range_s,
+        },
+        "detected_except_keys": sorted(set(detected)),
+        "except_keys_effective": list(effective),
+        "dict_path_profile_top": list(profile_rows[: int(profile_topn)]),
+    }
+    return effective, meta
 
 
 def run_tabular_pipeline(
@@ -684,7 +953,8 @@ def run_json_pipeline(
 
     key_sep = str(key_sep or dc.get("KEY_SEP", "__"))
     index_key = str(index_key or dc.get("index_key") or "id")
-    except_keys = list(except_keys if except_keys is not None else (dc.get("except_keys") or []))
+    except_keys_input = list(except_keys if except_keys is not None else (dc.get("except_keys") or []))
+    except_keys = list(except_keys_input)
     chunk_size = int(chunk_size or dc.get("chunk_size") or dc.get("batch_size") or 1000)
     if max_records is None:
         max_records = dc.get("max_records")
@@ -725,11 +995,39 @@ def run_json_pipeline(
             )
             return JsonRunResult(name_maps={}, report=report)
 
+    auto_except_enabled = _coerce_bool(dc.get("auto_except", False), default=False)
+    auto_except_meta: dict[str, Any] | None = None
+    if auto_except_enabled:
+        try:
+            with report.timer("json.auto_except.preflight"):
+                except_keys, auto_except_meta = _auto_detect_except_keys(
+                    dc,
+                    existing_except_keys=list(except_keys),
+                )
+        except Exception as e:
+            report.warn(
+                stage="json.auto_except",
+                message="Auto-except preflight failed; falling back to configured except_keys",
+                error={"type": type(e).__name__, "message": str(e)},
+            )
+            except_keys = list(except_keys_input)
+            auto_except_meta = {
+                "enabled": True,
+                "failed": True,
+                "error": {"type": type(e).__name__, "message": str(e)},
+                "detected_except_keys": [],
+                "except_keys_effective": list(except_keys),
+            }
+    else:
+        auto_except_meta = {"enabled": False, "detected_except_keys": [], "except_keys_effective": list(except_keys)}
+
     report.bump("runs_json", 1)
     report.bump("tables_total", 1)
     report.set_artifact("index_key", index_key)
     report.set_artifact("chunk_size", chunk_size)
+    report.set_artifact("except_keys_input", list(except_keys_input))
     report.set_artifact("except_keys", list(except_keys))
+    report.set_artifact("auto_except", dict(auto_except_meta or {}))
     report.set_artifact("max_records", max_records)
     try:
         report.set_artifact("parallel_workers", int(dc.get("parallel_workers") or 0))
@@ -919,7 +1217,7 @@ def run_json_pipeline(
             except Exception:
                 pass
 
-            def _coerce_bool(v) -> bool:
+            def _coerce_bool_local(v) -> bool:
                 if isinstance(v, bool):
                     return bool(v)
                 if v is None:
@@ -936,11 +1234,20 @@ def run_json_pipeline(
                     return False
                 return bool(s)
 
-            overlap_batches = _coerce_bool(
+            overlap_batches = _coerce_bool_local(
                 dc.get("overlap_batches", dc.get("pipeline_overlap_batches", dc.get("pipeline_overlap", False)))
             )
             try:
                 report.set_artifact("overlap_batches", bool(overlap_batches))
+            except Exception:
+                pass
+
+            # excepted branch handling:
+            # - False (default): keep raw payload under `value` + metadata (prevents column explosion)
+            # - True: expand dict keys in excepted rows (legacy behavior)
+            excepted_expand_dict = _coerce_bool_local(dc.get("excepted_expand_dict", dc.get("except_expand_dict", False)))
+            try:
+                report.set_artifact("excepted_expand_dict", bool(excepted_expand_dict))
             except Exception:
                 pass
 
@@ -965,7 +1272,7 @@ def run_json_pipeline(
             except Exception:
                 pass
 
-            tsv_merge_union_schema = _coerce_bool(
+            tsv_merge_union_schema = _coerce_bool_local(
                 dc.get("tsv_merge_union_schema", dc.get("tsv_union_merge", dc.get("load_data_union_merge", False)))
             )
             try:
@@ -1300,6 +1607,7 @@ def run_json_pipeline(
                                                             base_table,
                                                             tsv_extra_column_name,
                                                             tsv_allowed_cols_by_table,
+                                                            bool(excepted_expand_dict),
                                                         ),
                                                     )
                                                 )
@@ -1341,6 +1649,7 @@ def run_json_pipeline(
                                                     base_table,
                                                     tsv_extra_column_name,
                                                     tsv_allowed_cols_by_table,
+                                                    bool(excepted_expand_dict),
                                                 )
                                             )
                                         if not isinstance(res, dict) or not res.get("ok"):
@@ -2177,6 +2486,7 @@ def run_json_pipeline(
                                     batch_records,
                                     index_key=index_key,
                                     except_keys=except_keys,
+                                    excepted_expand_dict=bool(excepted_expand_dict),
                                     sep=key_sep,
                                     report=report,
                                     quarantine=q,
@@ -2299,6 +2609,8 @@ def run_json_pipeline(
                         extract_kwargs["record_contexts"] = list(record_contexts)
                     if parallel_workers and parallel_workers > 1 and "parallel_workers" in extract_params:
                         extract_kwargs["parallel_workers"] = int(parallel_workers)
+                    if "excepted_expand_dict" in extract_params:
+                        extract_kwargs["excepted_expand_dict"] = bool(excepted_expand_dict)
 
                     with report.timer("json.flatten"):
                         df_main, df_subs, excepted = extract_fn(batch_records, **extract_kwargs)

@@ -25,7 +25,8 @@ Starting from **0.7.0**, this repository keeps a single implementation:
   - New columns: best-effort `ALTER TABLE ADD COLUMN`
   - Insert failures: best-effort widen/add failing column (default `LONGTEXT`) and retry
   - Optional **schema freeze**: keep base schema stable and store unknown fields into `__extra__`
-  - Excepted branches: preserve raw payload in excepted tables (`__except_raw_json__`, `__except_path__`, source context columns)
+  - Excepted branches: preserve raw payload in excepted tables (`value`, `__except_raw_json__`, `__except_path__`, source context columns)
+  - Optional **auto-except preflight**: random sample detects high-cardinality dict paths and appends them to `except_keys`
 - **Performance**
   - `LOAD DATA LOCAL INFILE` fast path for bulk ingest (tabular + JSON streaming rows)
   - Chunk/batch controls, parallel JSON flattening, and stage timings/throughput in `RunReport`
@@ -105,6 +106,28 @@ If you want to capture most columns early, then cap ALTER churn later (hybrid):
 ```bash
 kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-hybrid
 ```
+
+For high-cardinality dict branches (for example OpenAlex `abstract_inverted_index`), run a preflight plan first and then ingest with `--auto-except`:
+
+```bash
+# 1) preflight: predicted schema + sample profile + auto-except candidates + ETA estimate
+kisti-db-manager review plan \
+  --config path/to/json_config.json \
+  --auto-except \
+  --auto-except-sample-records 5000 \
+  --auto-except-sample-max-sources 64 \
+  --out plan_out
+
+# 2) ingest with auto-except enabled
+kisti-db-manager json run \
+  --config path/to/json_config.json \
+  --mode ingest-fast \
+  --auto-except
+```
+
+Notes:
+- `excepted_expand_dict=false` (default) prevents excepted-table column explosion by storing dict payload in `value`.
+- Tune detection thresholds if needed: `--auto-except-unique-key-threshold`, `--auto-except-min-observations`, `--auto-except-novelty-threshold`.
 
 ### Mode Defaults (important)
 

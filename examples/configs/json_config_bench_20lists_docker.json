@@ -6,7 +6,9 @@
     "table_name": "kisti_v2_json_20lists_bench",
     "KEY_SEP": "__",
     "index_key": "id",
-    "except_keys": []
+    "except_keys": [],
+    "excepted_expand_dict": false,
+    "auto_except": false
   },
   "db_config": {
     "host": "mariadb",
@@ -16,4 +18,3 @@
     "port": 3306
   }
 }
-

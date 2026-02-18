@@ -7,6 +7,8 @@
     "KEY_SEP": "__",
     "index_key": "id",
     "except_keys": [],
+    "excepted_expand_dict": false,
+    "auto_except": false,
     "chunk_size": 2,
     "auto_alter_table": true,
     "fallback_on_insert_error": true,

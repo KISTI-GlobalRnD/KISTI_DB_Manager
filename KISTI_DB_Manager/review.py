@@ -2486,6 +2486,8 @@ def _render_plan_markdown(
     file_type: str,
     max_records: int | None,
     stats: Mapping[str, Any],
+    timings_ms: Mapping[str, Any] | None,
+    artifacts: Mapping[str, Any] | None,
     issues: list[dict[str, Any]] | None,
     table_infos: list[TableInfo],
     formats: set[str],
@@ -2513,6 +2515,80 @@ def _render_plan_markdown(
     if issues:
         lines.append(f"- issues: `{len(issues)}`")
     lines.append("")
+
+    if timings_ms:
+        try:
+            total_ms = int((timings_ms or {}).get("pipeline.json.total") or 0)
+        except Exception:
+            total_ms = 0
+        if total_ms <= 0:
+            try:
+                total_ms = sum(int(v) for v in (timings_ms or {}).values() if int(v) > 0)
+            except Exception:
+                total_ms = 0
+        if total_ms > 0:
+            lines.append("## Sample Profile")
+            lines.append("")
+            lines.append(f"- total_ms: `{total_ms}`")
+            try:
+                rr = int((stats or {}).get("records_read") or 0)
+            except Exception:
+                rr = 0
+            if rr > 0:
+                rps = float(rr) / max(0.001, (float(total_ms) / 1000.0))
+                lines.append(f"- records_per_sec: `{rps:.2f}`")
+            rows: list[tuple[str, int]] = []
+            for k, v in (timings_ms or {}).items():
+                try:
+                    ms = int(v)
+                except Exception:
+                    continue
+                if ms <= 0:
+                    continue
+                rows.append((str(k), int(ms)))
+            rows = sorted(rows, key=lambda x: x[1], reverse=True)[:8]
+            if rows:
+                lines.append("- top_timings:")
+                for k, v in rows:
+                    share = (100.0 * float(v) / float(total_ms)) if total_ms > 0 else 0.0
+                    lines.append(f"  - `{k}`: `{v}ms` ({share:.1f}%)")
+            lines.append("")
+
+    auto_except = (artifacts or {}).get("auto_except") if isinstance(artifacts, Mapping) else None
+    if isinstance(auto_except, Mapping) and bool(auto_except.get("enabled")):
+        sample = auto_except.get("sample") if isinstance(auto_except.get("sample"), Mapping) else {}
+        thresholds = auto_except.get("thresholds") if isinstance(auto_except.get("thresholds"), Mapping) else {}
+        estimate = auto_except.get("estimate") if isinstance(auto_except.get("estimate"), Mapping) else {}
+        detected = list(auto_except.get("detected_except_keys") or [])
+        lines.append("## Auto Except")
+        lines.append("")
+        lines.append(f"- enabled: `{auto_except.get('enabled')}`")
+        if sample:
+            lines.append(
+                f"- sample: records `{sample.get('records_sampled')}` / requested `{sample.get('records_requested')}`, "
+                f"sources `{sample.get('sources_sampled')}` / requested `{sample.get('max_sources_requested')}`, "
+                f"duration `{sample.get('duration_s')}`s"
+            )
+        if thresholds:
+            lines.append(
+                f"- thresholds: unique_keys>={thresholds.get('unique_key_threshold')}, "
+                f"min_obs>={thresholds.get('min_observations')}, "
+                f"novelty>={thresholds.get('novelty_threshold')}"
+            )
+        eta_range = estimate.get("eta_seconds_range") if isinstance(estimate.get("eta_seconds_range"), list) else None
+        if eta_range and len(eta_range) == 2:
+            try:
+                eta_lo = float(eta_range[0])
+                eta_hi = float(eta_range[1])
+                lines.append(f"- eta_estimate_s: `{eta_lo:.1f} ~ {eta_hi:.1f}`")
+            except Exception:
+                pass
+        lines.append(f"- detected_except_keys: `{len(detected)}`")
+        for k in detected[:20]:
+            lines.append(f"  - `{k}`")
+        if len(detected) > 20:
+            lines.append(f"  - ... +{len(detected) - 20} more")
+        lines.append("")
 
     lines.append("## Notes")
     lines.append("")
@@ -2586,6 +2662,7 @@ def generate_review_plan(
     formats: str | None = None,
     max_records: int | None = 1000,
     generate_desc: bool = False,
+    data_overrides: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     Generate a pre-load review plan (no DB writes).
@@ -2593,6 +2670,7 @@ def generate_review_plan(
     - For JSON inputs: runs `run_json_pipeline(..., create/load/index/optimize=False)` on up to max_records
       and emits predicted NameMaps + DDL + schema diagrams.
     - For tabular inputs: can optionally generate a description CSV (generate_desc=True), then emits NameMap + DDL.
+    - data_overrides: optional runtime overrides for data_config (e.g., auto-except knobs).
     """
     from .pipeline import run_json_pipeline, run_tabular_pipeline
     from .quarantine import NullQuarantineWriter
@@ -2600,6 +2678,11 @@ def generate_review_plan(
 
     cfg = _load_json(config_path)
     data_config = coerce_data_config(cfg.get("data_config") or cfg.get("data") or {})
+    if data_overrides:
+        for k, v in data_overrides.items():
+            if v is None:
+                continue
+            data_config[str(k)] = v
     db_config = coerce_db_config(cfg.get("db_config") or cfg.get("db") or {})
 
     base_table = str(data_config.get("table_name") or "").strip()
@@ -2618,6 +2701,7 @@ def generate_review_plan(
     report = RunReport()
     ddls: dict[str, str] = {}
     table_infos: list[TableInfo] = []
+    rd: dict[str, Any] = {}
 
     if file_type in {"jsonl", "ndjson", "jsonlines", "json", "gz", "zip"}:
         res = run_json_pipeline(
@@ -2720,6 +2804,8 @@ def generate_review_plan(
         file_type=file_type,
         max_records=int(max_records) if max_records is not None else None,
         stats=report.stats,
+        timings_ms=report.timings_ms,
+        artifacts=(rd.get("artifacts") if isinstance(rd, Mapping) else {}) or {},
         issues=[it.to_dict() for it in report.issues] if hasattr(report, "issues") else None,
         table_infos=table_infos,
         formats=fmt,
@@ -2759,7 +2845,9 @@ def generate_review_plan(
         "mode": "plan",
         "max_records": int(max_records) if max_records is not None else None,
         "stats": dict(report.stats),
+        "timings_ms": dict(report.timings_ms),
         "issues": [it.to_dict() for it in report.issues],
+        "auto_except": ((rd.get("artifacts") or {}).get("auto_except") if isinstance(rd, Mapping) else None),
         "ddl_json": "ddl.json",
         "ddl_sql": "ddl.sql",
         "tables": [
