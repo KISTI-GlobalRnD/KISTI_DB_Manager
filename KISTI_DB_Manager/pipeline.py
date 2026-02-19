@@ -981,6 +981,15 @@ def run_json_pipeline(
         report.set_artifact("schema_hybrid_warmup_batches", int(hybrid_warmup_batches))
     report.set_artifact("auto_alter_table", bool(auto_alter_table_cfg))
     report.set_artifact("fast_load_session", bool(dc.get("fast_load_session", False)))
+    persist_tsv_files = _coerce_bool(dc.get("persist_tsv_files", dc.get("save_local_files", False)), default=False)
+    persist_tsv_dir = str(dc.get("persist_tsv_dir", dc.get("save_local_dir", "")) or "").strip()
+    if persist_tsv_files and not persist_tsv_dir:
+        from pathlib import Path
+
+        persist_tsv_dir = str(Path("runs") / f"{base_table}_{report.run_id}" / "tsv")
+    report.set_artifact("persist_tsv_files", bool(persist_tsv_files))
+    if persist_tsv_files:
+        report.set_artifact("persist_tsv_dir", persist_tsv_dir)
 
     if extract_fn is None:
         try:
@@ -1212,6 +1221,12 @@ def run_json_pipeline(
                 db_load_parallel_tables = 0
             if db_load_parallel_tables < 0:
                 db_load_parallel_tables = 0
+            if persist_tsv_files and db_load_parallel_tables > 0:
+                db_load_parallel_tables = 0
+                report.warn(
+                    stage="json_pipeline.tsv_persist",
+                    message="persist_tsv_files=true disables parallel table loading; using serial table load",
+                )
             try:
                 report.set_artifact("db_load_parallel_tables", int(db_load_parallel_tables))
             except Exception:
@@ -1237,6 +1252,12 @@ def run_json_pipeline(
             overlap_batches = _coerce_bool_local(
                 dc.get("overlap_batches", dc.get("pipeline_overlap_batches", dc.get("pipeline_overlap", False)))
             )
+            if persist_tsv_files and overlap_batches:
+                overlap_batches = False
+                report.warn(
+                    stage="json_pipeline.tsv_persist",
+                    message="persist_tsv_files=true disables overlapped batch loading; using non-overlap mode",
+                )
             try:
                 report.set_artifact("overlap_batches", bool(overlap_batches))
             except Exception:
@@ -1301,11 +1322,17 @@ def run_json_pipeline(
                 tsv_union_merge_max_missing_cols = 0
 
             json_streaming_load = bool(dc.get("json_streaming_load", True))
+            export_tsv_only = bool(persist_tsv_files) and (not bool(load))
             use_streaming_rows = (
-                bool(load)
-                and bool(json_streaming_load)
-                and str(db_load_method or "").strip().lower() in {"auto", "load_data"}
-                and local_infile_conn is not None
+                bool(json_streaming_load)
+                and (
+                    (
+                        bool(load)
+                        and str(db_load_method or "").strip().lower() in {"auto", "load_data"}
+                        and local_infile_conn is not None
+                    )
+                    or bool(export_tsv_only)
+                )
             )
 
             global_index = 0
@@ -1447,6 +1474,67 @@ def run_json_pipeline(
                 batch_idx = int(batch_no)
                 batch_no += 1
 
+                def _slug(value: str, *, max_len: int = 96) -> str:
+                    s = "".join(ch if (ch.isalnum() or ch in {"_", "-", "."}) else "_" for ch in str(value or ""))
+                    s = s.strip("._")
+                    if not s:
+                        s = "unknown"
+                    return s[:max_len]
+
+                def _finalize_tsv_file(fi: dict | None, *, table_original: str, phase: str) -> None:
+                    import os
+                    import shutil
+                    from pathlib import Path
+
+                    if not isinstance(fi, dict):
+                        return
+                    path = str(fi.get("path") or "").strip()
+                    if not path:
+                        return
+
+                    if not persist_tsv_files:
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                        return
+
+                    try:
+                        root = Path(str(persist_tsv_dir))
+                        table_dir = root / _slug(table_original, max_len=120)
+                        table_dir.mkdir(parents=True, exist_ok=True)
+
+                        src = Path(path)
+                        ext = src.suffix if src.suffix else ".tsv"
+                        base = f"b{int(batch_idx):06d}_{_slug(phase, max_len=24)}_{_slug(src.stem, max_len=120)}"
+                        dst = table_dir / f"{base}{ext}"
+                        if dst.exists():
+                            dst = table_dir / f"{base}_{src.name}"
+                        i = 1
+                        while dst.exists():
+                            dst = table_dir / f"{base}_{i}{ext}"
+                            i += 1
+
+                        shutil.move(str(src), str(dst))
+                        fi["path"] = str(dst)
+
+                        report.bump("tsv_files_persisted", 1)
+                        try:
+                            report.bump("rows_emitted", int(fi.get("rows") or 0))
+                        except Exception:
+                            pass
+                    except Exception as e:
+                        report.warn(
+                            stage="json_pipeline.tsv_persist",
+                            message="Failed to persist TSV artifact; removing temporary file",
+                            path=path,
+                            error={"type": type(e).__name__, "message": str(e)},
+                        )
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+
                 is_hybrid_warmup = schema_mode == "hybrid" and batch_idx < int(hybrid_warmup_batches)
                 if schema_mode == "evolve":
                     auto_alter_table_effective = bool(auto_alter_table_cfg)
@@ -1509,7 +1597,7 @@ def run_json_pipeline(
 
                 report.bump("batches_total", 1)
 
-                if use_streaming_rows and fast_load_state.enabled:
+                if use_streaming_rows and (fast_load_state.enabled or export_tsv_only):
                     try:
                         from .processing import extract_rows_from_jsons, _safe_flatten_jsons_to_tsv_worker
                     except Exception as e:
@@ -1788,6 +1876,13 @@ def run_json_pipeline(
                                             if tsv_freeze_active and tsv_extra_column_name:
                                                 frozen_allowed_cols_by_table_original[table_original] = set(nm.columns_original)
 
+                                    if not load:
+                                        if persist_tsv_files:
+                                            for fi in files:
+                                                _finalize_tsv_file(fi, table_original=table_original, phase="flatten")
+                                            report.bump("tables_emitted", 1)
+                                        continue
+
                                     if load:
                                         import tempfile
                                         import uuid
@@ -1975,6 +2070,9 @@ def run_json_pipeline(
                                             }
                                         )
 
+                                if not load:
+                                    return
+
                                 # Execute LOAD DATA for this batch (optionally parallel across tables).
                                 if load and load_groups:
                                     if overlap_batches and not load_parallel_disabled:
@@ -2091,10 +2189,7 @@ def run_json_pipeline(
                                                     if not continue_on_error:
                                                         break
                                                 finally:
-                                                    try:
-                                                        os.remove(str(path))
-                                                    except Exception:
-                                                        pass
+                                                    _finalize_tsv_file(fi, table_original=table_sql, phase="load")
                                             if commit_in_group:
                                                 try:
                                                     if res.get("loaded_any"):
@@ -2178,10 +2273,7 @@ def run_json_pipeline(
                                                         report.bump("rows_loaded", int(fi.get("rows") or 0))
                                                     except Exception:
                                                         pass
-                                                try:
-                                                    os.remove(str(path))
-                                                except Exception:
-                                                    pass
+                                                _finalize_tsv_file(fi, table_original=str(table_sql), phase="load")
                                             if loaded_any:
                                                 batch_loaded_any = True
                                             if loaded_any and commit_after_table:
@@ -2314,10 +2406,7 @@ def run_json_pipeline(
                                                 if not continue_on_error:
                                                     break
                                             finally:
-                                                try:
-                                                    os.remove(str(path))
-                                                except Exception:
-                                                    pass
+                                                _finalize_tsv_file(fi, table_original=table_sql, phase="load")
                                         if commit_in_group:
                                             try:
                                                 if res.get("loaded_any"):
@@ -2448,10 +2537,7 @@ def run_json_pipeline(
                                                         if not continue_on_error:
                                                             raise
                                                     finally:
-                                                        try:
-                                                            os.remove(str(path))
-                                                        except Exception:
-                                                            pass
+                                                        _finalize_tsv_file(fi, table_original=table_sql, phase="load")
                                                 if commit_in_group and local_infile_conn is not None:
                                                     if loaded_any:
                                                         local_infile_conn.commit()
@@ -2814,6 +2900,10 @@ def run_json_pipeline(
             report.set_artifact("throughput", {k: v for k, v in tp.items() if v is not None})
         except Exception:
             pass
+        if persist_tsv_files:
+            report.set_artifact("persist_tsv_dir", str(persist_tsv_dir))
+            report.set_artifact("persist_tsv_files_count", int(report.stats.get("tsv_files_persisted", 0) or 0))
+            report.set_artifact("rows_emitted", int(report.stats.get("rows_emitted", 0) or 0))
         maybe_update_artifacts()
         return JsonRunResult(name_maps=name_maps, report=report)
     finally:

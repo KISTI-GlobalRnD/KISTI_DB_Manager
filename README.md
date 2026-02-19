@@ -128,6 +128,30 @@ kisti-db-manager json run \
 Notes:
 - `excepted_expand_dict=false` (default) prevents excepted-table column explosion by storing dict payload in `value`.
 - Tune detection thresholds if needed: `--auto-except-unique-key-threshold`, `--auto-except-min-observations`, `--auto-except-novelty-threshold`.
+- JSON streaming TSV files are temporary by default (created under `tmp_dir`, deleted after load).
+
+### Local TSV Artifacts (optional)
+
+Keep generated TSV files for audit/replay:
+
+```bash
+# parse + load + keep TSV artifacts
+kisti-db-manager json run \
+  --config path/to/json_config.json \
+  --mode ingest-fast \
+  --persist-tsv-files \
+  --persist-tsv-dir /path/to/local_tsv
+```
+
+Parse only (no DB insert), keep TSV artifacts for later table-wise loading:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/json_config.json \
+  --no-load --no-index --no-optimize \
+  --persist-tsv-files \
+  --persist-tsv-dir /path/to/local_tsv
+```
 
 ### Mode Defaults (important)
 

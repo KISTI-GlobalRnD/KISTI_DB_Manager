@@ -159,6 +159,63 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(auto_meta.get("enabled"), True)
             self.assertIn("high_map", auto_meta.get("detected_except_keys") or [])
 
+    def test_run_json_pipeline_persists_tsv_artifacts_without_db_load(self):
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "tsv_out"
+            data_config = {
+                "PATH": str(Path(td)),
+                "file_name": "x.jsonl",
+                "file_type": "jsonl",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "json_streaming_load": True,
+                "db_load_method": "auto",
+                "persist_tsv_files": True,
+                "persist_tsv_dir": str(out_dir),
+            }
+            db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+            def fake_iter_records(_dc, report=None, max_records=None, with_context=False):
+                yield {"id": 1, "x": "a"}
+
+            def fake_worker(args):
+                tmp_dir = str(args[5] or td)
+                wd = tempfile.mkdtemp(prefix="worker_", dir=tmp_dir)
+                p = Path(wd) / "main.tsv"
+                p.write_text("1\ta\n", encoding="utf-8")
+                return {
+                    "ok": True,
+                    "index_offset": 0,
+                    "records_ok": 1,
+                    "records_failed": 0,
+                    "errors": [],
+                    "timings_ms": {"flatten_ms": 1, "tsv_write_ms": 1},
+                    "workdir": str(wd),
+                    "main": {"path": str(p), "columns": ["id", "x"], "rows": 1},
+                    "subs": {},
+                    "excepted": {},
+                }
+
+            with patch("KISTI_DB_Manager.pipeline._iter_json_records", side_effect=fake_iter_records), patch(
+                "KISTI_DB_Manager.processing._safe_flatten_jsons_to_tsv_worker",
+                side_effect=fake_worker,
+            ):
+                res = run_json_pipeline(
+                    data_config,
+                    db_config,
+                    chunk_size=10,
+                    create=False,
+                    load=False,
+                    index=False,
+                    optimize=False,
+                    continue_on_error=False,
+                )
+
+            persisted = sorted(out_dir.rglob("*.tsv"))
+            self.assertEqual(len(persisted), 1)
+            self.assertEqual((res.report.stats or {}).get("tsv_files_persisted"), 1)
+            self.assertEqual((res.report.stats or {}).get("rows_emitted"), 1)
+
 
 if __name__ == "__main__":
     unittest.main()

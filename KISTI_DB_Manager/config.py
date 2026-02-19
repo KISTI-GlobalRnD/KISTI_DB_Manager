@@ -21,6 +21,10 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     # Backward compatible aliases
     if "FILE_SEP" in cfg and "SEP" not in cfg:
         cfg["SEP"] = cfg["FILE_SEP"]
+    if "save_local_files" in cfg and "persist_tsv_files" not in cfg:
+        cfg["persist_tsv_files"] = cfg["save_local_files"]
+    if "save_local_dir" in cfg and "persist_tsv_dir" not in cfg:
+        cfg["persist_tsv_dir"] = cfg["save_local_dir"]
 
     cfg.setdefault("SEP", DEFAULT_FILE_SEP)  # file delimiter
     cfg.setdefault("KEY_SEP", DEFAULT_KEY_SEP)  # nested key delimiter
@@ -67,6 +71,9 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("excepted_expand_dict", False)
     # DB session tuning for ingest (best-effort; may require privileges)
     cfg.setdefault("fast_load_session", False)
+    # Optional local TSV artifacts from JSON streaming backend.
+    cfg.setdefault("persist_tsv_files", False)
+    cfg.setdefault("persist_tsv_dir", "")
 
     return cfg
 
@@ -170,6 +177,8 @@ class DataConfig:
     auto_except_novelty_threshold: float = 2.0
     excepted_expand_dict: bool = False
     fast_load_session: bool = False
+    persist_tsv_files: bool = False
+    persist_tsv_dir: str = ""
 
     @classmethod
     def from_mapping(cls, data_config: Mapping[str, Any]) -> "DataConfig":
@@ -209,6 +218,8 @@ class DataConfig:
             auto_except_novelty_threshold=float(cfg.get("auto_except_novelty_threshold", 2.0) or 2.0),
             excepted_expand_dict=bool(cfg.get("excepted_expand_dict", False)),
             fast_load_session=bool(cfg.get("fast_load_session", False)),
+            persist_tsv_files=bool(cfg.get("persist_tsv_files", False)),
+            persist_tsv_dir=str(cfg.get("persist_tsv_dir", "")),
         )
 
     def to_dict(self) -> dict[str, Any]:
@@ -247,4 +258,6 @@ class DataConfig:
             "auto_except_novelty_threshold": float(self.auto_except_novelty_threshold),
             "excepted_expand_dict": bool(self.excepted_expand_dict),
             "fast_load_session": bool(self.fast_load_session),
+            "persist_tsv_files": bool(self.persist_tsv_files),
+            "persist_tsv_dir": str(self.persist_tsv_dir),
         }

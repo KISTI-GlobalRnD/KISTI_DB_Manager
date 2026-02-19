@@ -46,6 +46,50 @@ class TestCLIJson(unittest.TestCase):
             self.assertIn("run_id", saved)
             self.assertIn("issues", saved)
 
+    def test_json_run_passes_persist_tsv_options(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+            report_path = f"{td}/report.json"
+
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "tbl",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            fake_report.warn(stage="t", message="w")
+
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as p_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
+                rc = main(
+                    [
+                        "json",
+                        "run",
+                        "--config",
+                        cfg_path,
+                        "--persist-tsv-files",
+                        "--persist-tsv-dir",
+                        f"{td}/tsv_out",
+                        "--report",
+                        report_path,
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            args, kwargs = p_run.call_args
+            data_cfg = args[0]
+            self.assertEqual(data_cfg["persist_tsv_files"], True)
+            self.assertEqual(data_cfg["persist_tsv_dir"], f"{td}/tsv_out")
+
 
 if __name__ == "__main__":
     unittest.main()

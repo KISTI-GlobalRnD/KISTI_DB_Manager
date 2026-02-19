@@ -30,6 +30,8 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["auto_except_min_observations"], 20)
         self.assertEqual(cfg["auto_except_novelty_threshold"], 2.0)
         self.assertEqual(cfg["excepted_expand_dict"], False)
+        self.assertEqual(cfg["persist_tsv_files"], False)
+        self.assertEqual(cfg["persist_tsv_dir"], "")
 
     def test_normalize_data_config_file_sep_alias(self):
         cfg = normalize_data_config(

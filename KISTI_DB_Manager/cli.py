@@ -540,6 +540,10 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["tsv_union_merge_max_union_cols"] = int(args.tsv_union_merge_max_union_cols)
     if getattr(args, "tsv_union_merge_max_missing_cols", None) is not None:
         data_config["tsv_union_merge_max_missing_cols"] = int(args.tsv_union_merge_max_missing_cols)
+    if getattr(args, "persist_tsv_files", None) is not None:
+        data_config["persist_tsv_files"] = bool(args.persist_tsv_files)
+    if getattr(args, "persist_tsv_dir", None):
+        data_config["persist_tsv_dir"] = str(args.persist_tsv_dir)
     if getattr(args, "chunk_size", None) is not None:
         data_config["chunk_size"] = int(args.chunk_size)
     if getattr(args, "auto_except", None) is not None:
@@ -939,6 +943,16 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="Rewrite TSV fragments to union schema to merge across schema drift (reduces LOAD DATA calls; may increase TSV size).",
+    )
+    p_json_run.add_argument(
+        "--persist-tsv-files",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Keep JSON streaming TSV artifacts on local disk (default: config or false).",
+    )
+    p_json_run.add_argument(
+        "--persist-tsv-dir",
+        help="Directory to save persisted TSV artifacts (default: runs/<table>_<run_id>/tsv).",
     )
     p_json_run.add_argument(
         "--tsv-union-merge-min-coverage",
