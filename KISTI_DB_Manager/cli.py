@@ -581,6 +581,14 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     report = RunReport()
 
     report.set_artifact("mode", mode_spec.name)
+    # Fast progress tracking: when --report is provided, also emit a small progress snapshot
+    # periodically during the run. This makes it easy to locate the last shard/line after crashes.
+    if args.report:
+        try:
+            data_config.setdefault("progress_path", str(args.report) + ".progress.json")
+            data_config.setdefault("progress_interval_s", 10.0)
+        except Exception:
+            pass
 
     res = run_json_pipeline(
         data_config,

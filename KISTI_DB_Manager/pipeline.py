@@ -991,6 +991,75 @@ def run_json_pipeline(
     if persist_tsv_files:
         report.set_artifact("persist_tsv_dir", persist_tsv_dir)
 
+    # Best-effort progress checkpointing (for crash recovery / quick shard detection).
+    # This intentionally writes a tiny JSON snapshot periodically without waiting for the final report.
+    progress_path = str(dc.get("progress_path") or "").strip()
+    try:
+        progress_interval_s = float(dc.get("progress_interval_s", 10.0) or 0.0)
+    except Exception:
+        progress_interval_s = 0.0
+    if progress_interval_s < 0:
+        progress_interval_s = 0.0
+    last_progress_write_t = 0.0
+
+    def _write_progress_snapshot(
+        *,
+        stage: str,
+        ctx: Mapping[str, Any] | None = None,
+        extra: Mapping[str, Any] | None = None,
+        force: bool = False,
+    ) -> None:
+        nonlocal last_progress_write_t
+        if not progress_path:
+            return
+
+        now_s = time.time()
+        if not force:
+            if progress_interval_s <= 0:
+                return
+            if (now_s - float(last_progress_write_t)) < float(progress_interval_s):
+                return
+        last_progress_write_t = float(now_s)
+
+        try:
+            import os
+            from datetime import datetime, timezone
+            from pathlib import Path
+
+            payload: dict[str, Any] = {
+                "run_id": getattr(report, "run_id", None),
+                "table": base_table,
+                "updated_at_utc": datetime.now(timezone.utc).isoformat(),
+                "stage": str(stage),
+                "pid": int(os.getpid()),
+                "cursor": {
+                    "source_path": None if ctx is None else ctx.get("source_path"),
+                    "source_member": None if ctx is None else ctx.get("source_member"),
+                    "line_no": None if ctx is None else ctx.get("line_no"),
+                    "record_index": None if ctx is None else ctx.get("record_index"),
+                },
+                "stats": {
+                    "records_read": int(report.stats.get("records_read", 0)),
+                    "batches_total": int(report.stats.get("batches_total", 0)),
+                    "rows_loaded": int(report.stats.get("rows_loaded", 0)),
+                    "tables_loaded": int(report.stats.get("tables_loaded", 0)),
+                },
+            }
+            if extra:
+                payload["extra"] = dict(extra)
+
+            out = Path(progress_path)
+            out.parent.mkdir(parents=True, exist_ok=True)
+            tmp = out.with_name(out.name + ".tmp")
+            with open(tmp, "w", encoding="utf-8") as f:
+                import json as _json
+
+                f.write(_json.dumps(payload, ensure_ascii=False, indent=2))
+            os.replace(tmp, out)
+        except Exception:
+            # Never fail the ingest because checkpointing failed.
+            return
+
     if extract_fn is None:
         try:
             from .processing import extract_data_from_jsons as extract_fn
@@ -1473,6 +1542,13 @@ def run_json_pipeline(
                 nonlocal frozen_allowed_cols_by_table_original
                 batch_idx = int(batch_no)
                 batch_no += 1
+                if record_contexts:
+                    _write_progress_snapshot(
+                        stage="flush_batch",
+                        ctx=record_contexts[-1],
+                        extra={"batch_idx": int(batch_idx), "index_offset": int(index_offset), "batch_records": int(len(batch_records))},
+                        force=True,
+                    )
 
                 def _slug(value: str, *, max_len: int = 96) -> str:
                     s = "".join(ch if (ch.isalnum() or ch in {"_", "-", "."}) else "_" for ch in str(value or ""))
@@ -2824,6 +2900,7 @@ def run_json_pipeline(
                     report.warn(stage="json_pipeline", message="Non-dict JSON record encountered; skipping", dtype=type(record).__name__)
                     continue
                 rec_ctx.setdefault("record_index", int(global_index))
+                _write_progress_snapshot(stage="read", ctx=rec_ctx)
                 if not batch:
                     batch_index_offset = global_index
                 batch.append(record)
