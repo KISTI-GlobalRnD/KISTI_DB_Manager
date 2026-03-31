@@ -20,7 +20,7 @@ If a path looks like `abstract_inverted_index`, run a plan first.
 
 ```bash
 kisti-db-manager review plan \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --auto-except \
   --auto-except-sample-records 5000 \
   --auto-except-sample-max-sources 64 \
@@ -31,7 +31,7 @@ Then run the parse:
 
 ```bash
 kisti-db-manager json run \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --mode parse-parquet-safe \
   --auto-except
 ```
@@ -40,9 +40,9 @@ kisti-db-manager json run \
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
-  runs/<parse_parquet_run_dir> \
-  --dotenv .env \
-  --db-name openalex_20260225_raw_yjk \
+  runs/<openalex_parse_run_dir> \
+  --dotenv path/to/.env \
+  --db-name target_openalex_db \
   --staging-writer duckdb \
   --parallel-tables 4 \
   --parallel-files-per-table 4 \

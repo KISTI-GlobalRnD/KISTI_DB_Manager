@@ -88,7 +88,7 @@ kisti-db-manager json run --config path/to/json_config.json --report json_report
 Schema viewer notes:
 - `review schema-viewer` writes `schema_viewer.html`, `schema_viewer.json`, `schema.svg`, and `schema.mmd`.
 - With DB access it uses real table metadata; with `--no-db` it falls back to config/report-derived predicted schema.
-- The HTML is self-contained and keeps the GoldenSet-style pattern: sticky nav, summary cards, inline SVG, logical depth groups, searchable table catalog, and DDL preview.
+- The HTML is self-contained and keeps the standalone schema-contract viewer pattern: sticky nav, summary cards, inline SVG, logical depth groups, searchable table catalog, and DDL preview.
 
 ### Quick Start (JSON, large data)
 
@@ -96,32 +96,32 @@ Recommended 2-step flow:
 
 ```bash
 # 1) ingest only (skip index/optimize)
-kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
+kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast
 
 # 2) build indexes + optimize after ingest
-kisti-db-manager json run --config path/to/json_config.json --mode finalize
+kisti-db-manager json run --config path/to/openalex_config.json --mode finalize
 ```
 
 If your goal is local parquet generation first, use an explicit parquet mode instead of relying on `default`:
 
 ```bash
 # parquet-first with config-driven batch size/workers
-kisti-db-manager json run --config path/to/json_config.json --mode parse-parquet
+kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet
 
 # parquet-first with conservative settings for large nested sources
-kisti-db-manager json run --config path/to/json_config.json --mode parse-parquet-safe
+kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe
 ```
 
 If schema drift is heavy and ALTER is too expensive:
 
 ```bash
-kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-freeze
+kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast-freeze
 ```
 
 If you want to capture most columns early, then cap ALTER churn later (hybrid):
 
 ```bash
-kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast-hybrid
+kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast-hybrid
 ```
 
 For high-cardinality dict branches (for example OpenAlex `abstract_inverted_index`), run a preflight plan first and then ingest with `--auto-except`:
@@ -129,7 +129,7 @@ For high-cardinality dict branches (for example OpenAlex `abstract_inverted_inde
 ```bash
 # 1) preflight: predicted schema + sample profile + auto-except candidates + ETA estimate
 kisti-db-manager review plan \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --auto-except \
   --auto-except-sample-records 5000 \
   --auto-except-sample-max-sources 64 \
@@ -137,7 +137,7 @@ kisti-db-manager review plan \
 
 # 2) ingest with auto-except enabled
 kisti-db-manager json run \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --mode ingest-fast \
   --auto-except
 ```
@@ -156,14 +156,14 @@ Default run behavior keeps flattened parquet artifacts on local disk before DB l
 
 ```bash
 kisti-db-manager json run \
-  --config path/to/json_config.json
+  --config path/to/openalex_config.json
 ```
 
 Change the parquet artifact directory explicitly:
 
 ```bash
 kisti-db-manager json run \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --persist-parquet-dir /path/to/local_parquet
 ```
 
@@ -171,7 +171,7 @@ Disable parquet persistence explicitly:
 
 ```bash
 kisti-db-manager json run \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --no-persist-parquet-files
 ```
 
@@ -179,15 +179,15 @@ Materialize persisted parquet artifacts into DB later (MVP helper script):
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
-  runs/<parse_parquet_run_dir> \
-  --dotenv .env
+  runs/<openalex_parse_run_dir> \
+  --dotenv path/to/.env
 ```
 
 Notes:
 - This is a separate post-parse materialization step for `parse-parquet*` runs.
-- It resumes from `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`.
+- It resumes from `runs/<openalex_parse_run_dir>/parquet_materialize/progress.json`.
 - `--file-chunk-rows N` checkpoints large parquet files in smaller row chunks so a restart can resume within a file instead of replaying the whole parquet batch.
-- `--db-name openalex_20260225_raw_yjk` overrides the target database without editing the original parse config.
+- `--db-name target_openalex_db` overrides the target database without editing the original parse config.
 - `--parallel-tables N` lets independent parquet table directories load in parallel.
 - `--parallel-files-per-table N` lets a single large parquet table load multiple parquet batches concurrently.
 - Default materializer staging is `--staging-writer duckdb`, which stages into `/dev/shm` when available and then uses `LOAD DATA LOCAL INFILE`.
@@ -200,7 +200,7 @@ Keep generated TSV files for audit/replay:
 ```bash
 # direct insert-first fast mode + keep TSV artifacts
 kisti-db-manager json run \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --mode ingest-fast \
   --persist-tsv-files \
   --persist-tsv-dir /path/to/local_tsv
@@ -210,7 +210,7 @@ Parse only (no DB insert), keep TSV artifacts for later table-wise loading:
 
 ```bash
 kisti-db-manager json run \
-  --config path/to/json_config.json \
+  --config path/to/openalex_config.json \
   --mode ingest-fast \
   --no-load --no-index --no-optimize \
   --persist-tsv-files \

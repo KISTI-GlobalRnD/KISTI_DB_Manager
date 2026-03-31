@@ -28,7 +28,7 @@ kisti-db-manager review pack --config path/to/config.json --report run_report.js
 kisti-db-manager review schema-viewer --config path/to/config.json --report run_report.json --out schema_viewer_out
 kisti-db-manager review diff before_review.json after_review.json --out-dir review_diff_out
 kisti-db-manager review preview --config path/to/config.json --out preview_out
-kisti-db-manager review plan --config path/to/json_config.json --out plan_out
+kisti-db-manager review plan --config path/to/openalex_config.json --out plan_out
 ```
 
 ## Tabular
@@ -40,18 +40,18 @@ kisti-db-manager tabular run --config path/to/config.json --report run_report.js
 ## JSON
 
 ```bash
-kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
-kisti-db-manager json run --config path/to/json_config.json --mode finalize
-kisti-db-manager json run --config path/to/json_config.json --mode parse-parquet-safe
+kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast
+kisti-db-manager json run --config path/to/openalex_config.json --mode finalize
+kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe
 ```
 
 ## Parquet materialize helper
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
-  runs/<parse_parquet_run_dir> \
-  --dotenv .env \
-  --db-name openalex_20260225_raw_yjk \
+  runs/<openalex_parse_run_dir> \
+  --dotenv path/to/.env \
+  --db-name target_openalex_db \
   --staging-writer duckdb \
   --parallel-tables 4 \
   --parallel-files-per-table 4 \

@@ -7,7 +7,7 @@ This chapter covers the package-side review outputs rather than dataset-specific
 ### Review plan
 
 ```bash
-kisti-db-manager review plan --config path/to/config.json --out plan_out
+kisti-db-manager review plan --config path/to/openalex_config.json --out plan_out
 ```
 
 Use this before a large run when you need predicted schema, DDL, auto-except profiling, and a quick preflight check.
@@ -55,9 +55,10 @@ The recommended pattern is:
 2. store the artifact outside `docs/`
 3. link it manually only when you explicitly want to publish it
 
-Current local artifact convention:
+Recommended local artifact convention:
 
-- `artifacts/schema_viewers/<name>/`
+- keep viewer outputs outside `docs/`
+- use any ignored local output directory such as `schema_viewer_out/`
 
 ## OpenAlex as the public example
 

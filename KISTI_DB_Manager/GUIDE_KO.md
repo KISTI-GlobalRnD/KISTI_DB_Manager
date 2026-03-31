@@ -223,14 +223,14 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
-  runs/<parse_parquet_run_dir> \
-  --dotenv .env
+  runs/<openalex_parse_run_dir> \
+  --dotenv path/to/.env
 ```
 
 - 이 스크립트는 `parse-parquet*` run이 만든 parquet를 입력으로 받아 DB 적재만 별도로 수행한다.
-- 진행 상태는 `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`에 남는다.
+- 진행 상태는 `runs/<openalex_parse_run_dir>/parquet_materialize/progress.json`에 남는다.
 - `--file-chunk-rows N`을 주면 큰 parquet 파일도 더 작은 row chunk 단위로 checkpoint를 남겨, 중간 중단 시 파일 처음부터 다시 넣지 않고 이어서 재개할 수 있다.
-- `--db-name openalex_20260225_raw_yjk`로 원래 parse config를 바꾸지 않고 대상 DB만 덮어쓸 수 있다.
+- `--db-name target_openalex_db`로 원래 parse config를 바꾸지 않고 대상 DB만 덮어쓸 수 있다.
 - `--parallel-tables N`으로 서로 다른 parquet table 디렉터리를 병렬 적재할 수 있다.
 - `--parallel-files-per-table N`으로 하나의 큰 parquet table 안에서 여러 parquet batch를 동시에 적재할 수 있다.
 - 기본 staging은 `--staging-writer duckdb`이며, 가능하면 `/dev/shm`에 staging 파일을 만들고 `LOAD DATA LOCAL INFILE`로 적재한다.
@@ -284,7 +284,7 @@ python scripts/oa_materialize_parquet_to_db.py \
 
 ## 스키마 뷰어 (HTML)
 
-GoldenSet 쪽의 self-contained schema contract viewer 패턴을 참고한 HTML 스키마 뷰어를 별도 커맨드로 생성할 수 있다.
+standalone schema contract viewer 패턴을 참고한 HTML 스키마 뷰어를 별도 커맨드로 생성할 수 있다.
 
 ```bash
 kisti-db-manager review schema-viewer \

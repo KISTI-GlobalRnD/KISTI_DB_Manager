@@ -22,7 +22,7 @@ That means a restart usually replays at most the current batch rather than the f
 
 `oa_materialize_parquet_to_db.py` stores progress at:
 
-- `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`
+- `runs/<openalex_parse_run_dir>/parquet_materialize/progress.json`
 
 The materializer now supports two resume granularities:
 
@@ -35,8 +35,8 @@ Example:
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
-  runs/<parse_parquet_run_dir> \
-  --dotenv .env \
+  runs/<openalex_parse_run_dir> \
+  --dotenv path/to/.env \
   --file-chunk-rows 5000
 ```
 

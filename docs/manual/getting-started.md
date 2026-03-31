@@ -26,8 +26,8 @@ Recommended combinations:
 kisti-db-manager version
 kisti-db-manager modes
 kisti-db-manager report profile path/to/run_report.json --top 10
-kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
-kisti-db-manager json run --config path/to/json_config.json --mode finalize
+kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast
+kisti-db-manager json run --config path/to/openalex_config.json --mode finalize
 ```
 
 ## Recommended large-data flow
@@ -35,22 +35,22 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 For DB-first ingest:
 
 ```bash
-kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
-kisti-db-manager json run --config path/to/json_config.json --mode finalize
+kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast
+kisti-db-manager json run --config path/to/openalex_config.json --mode finalize
 ```
 
 For local parquet-first workflows:
 
 ```bash
-kisti-db-manager json run --config path/to/json_config.json --mode parse-parquet-safe
+kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe
 ```
 
 Then materialize later:
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
-  runs/<parse_parquet_run_dir> \
-  --dotenv .env
+  runs/<openalex_parse_run_dir> \
+  --dotenv path/to/.env
 ```
 
 ## Decision rule

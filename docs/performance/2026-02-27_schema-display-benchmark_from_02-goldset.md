@@ -1,9 +1,9 @@
-# Schema Display Benchmark from 02_GoldSet
+# Schema Display Benchmark from a Standalone Contract Viewer
 
-## Source project
-- `/home/kimyoungjin06/Desktop/Workspace/1.2.8.TwinPaper_Module02_GoldenSet`
+## Reference implementation
+- A separate standalone schema-contract viewer implementation used as the UI/UX benchmark.
 
-## What 02_GoldSet does well
+## What the reference viewer does well
 - Builds a single payload JSON first, then renders a standalone HTML viewer from the payload.
 - Splits responsibilities cleanly:
 - payload builder (`_build_payload`)
@@ -54,4 +54,4 @@
 - print `schema_preview_json` and `schema_preview_html` next to existing schema artifacts
 
 ## Notes
-- 02_GoldSet uses static artifact generation (not a live web server); this matches current batch-style architecture and is low-risk to port.
+- The reference viewer uses static artifact generation (not a live web server); this matches the current batch-style architecture and is low-risk to port.
