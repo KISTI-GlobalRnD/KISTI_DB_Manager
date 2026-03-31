@@ -48,7 +48,8 @@ Use this when you want a self-contained HTML schema catalog with:
 
 ## Public OpenAlex example
 
-The public docs can keep a static OpenAlex example because the source dataset is open and reproducible.
+The public docs keep a static OpenAlex example because the source dataset is open and reproducible.
+This example is generated from the latest OpenAlex review-plan output, so it reflects the current predicted schema path rather than an older DB-backed artifact.
 
 Example schema SVG:
 
