@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="760" viewBox="0 0 1440 760" role="img" aria-labelledby="title desc">
+  <title id="title">KISTI DB Manager Package Architecture</title>
+  <desc id="desc">Public example dataset goes through parse and materialize paths, with review and operations modules around the pipeline.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" x2="1" y1="0" y2="1">
+      <stop offset="0%" stop-color="#f6faf8"/>
+      <stop offset="100%" stop-color="#eef4f1"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" x2="0" y1="0" y2="1">
+      <stop offset="0%" stop-color="#ffffff"/>
+      <stop offset="100%" stop-color="#f8fbfa"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#172127" flood-opacity="0.10"/>
+    </filter>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="5" orient="auto">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#0f766e"/>
+    </marker>
+  </defs>
+
+  <rect width="1440" height="760" fill="url(#bg)"/>
+
+  <text x="72" y="70" font-family="ui-sans-serif, system-ui, sans-serif" font-size="34" font-weight="700" fill="#172127">
+    KISTI_DB_Manager Architecture
+  </text>
+  <text x="72" y="106" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" fill="#5e6a6f">
+    Public docs focus on the package, using OpenAlex as the representative open dataset example.
+  </text>
+
+  <rect x="72" y="150" width="1296" height="150" rx="28" fill="url(#panel)" stroke="#d6ddd8" filter="url(#shadow)"/>
+  <text x="104" y="196" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="700" fill="#0f766e">Public Example Dataset</text>
+  <rect x="104" y="218" width="248" height="50" rx="16" fill="#dcf3ee" stroke="#89d7c7"/>
+  <text x="228" y="250" text-anchor="middle" font-family="ui-sans-serif, system-ui, sans-serif" font-size="18" font-weight="700" fill="#115e59">OpenAlex</text>
+  <text x="392" y="250" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">open, reproducible, public-facing example</text>
+
+  <rect x="72" y="334" width="1296" height="236" rx="28" fill="url(#panel)" stroke="#d6ddd8" filter="url(#shadow)"/>
+  <text x="104" y="380" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="700" fill="#0f766e">Core Package Layers</text>
+
+  <rect x="104" y="406" width="252" height="124" rx="22" fill="#ffffff" stroke="#d6ddd8"/>
+  <text x="130" y="438" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700" fill="#172127">1. Parse / Flatten</text>
+  <text x="130" y="470" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">`json run`</text>
+  <text x="130" y="498" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">DB-first: `ingest-fast*`</text>
+  <text x="130" y="524" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">Artifact-first: `parse-parquet*`</text>
+
+  <rect x="420" y="406" width="252" height="124" rx="22" fill="#ffffff" stroke="#d6ddd8"/>
+  <text x="446" y="438" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700" fill="#172127">2. Materialize / Load</text>
+  <text x="446" y="470" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">MariaDB / MySQL target</text>
+  <text x="446" y="498" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">`oa_materialize_parquet_to_db.py`</text>
+  <text x="446" y="524" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">DuckDB staging + LOAD DATA</text>
+
+  <rect x="736" y="406" width="292" height="124" rx="22" fill="#ffffff" stroke="#d6ddd8"/>
+  <text x="762" y="438" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700" fill="#172127">3. Review / Operate</text>
+  <text x="762" y="470" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">`review plan / pack / preview / schema-viewer`</text>
+  <text x="762" y="498" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">`report *`, quarantine summary</text>
+  <text x="762" y="524" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#5e6a6f">restart / resume / profiling</text>
+
+  <rect x="1092" y="406" width="244" height="124" rx="22" fill="#fffaf0" stroke="#f3c98b"/>
+  <text x="1118" y="438" font-family="ui-sans-serif, system-ui, sans-serif" font-size="20" font-weight="700" fill="#172127">Artifacts</text>
+  <text x="1118" y="470" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#7a5a14">parquet</text>
+  <text x="1118" y="498" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#7a5a14">run report / quarantine</text>
+  <text x="1118" y="524" font-family="ui-sans-serif, system-ui, sans-serif" font-size="15" fill="#7a5a14">HTML / SVG review outputs</text>
+
+  <path d="M 356 468 C 384 468, 392 468, 420 468" stroke="#0f766e" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 672 468 C 700 468, 708 468, 736 468" stroke="#0f766e" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+  <path d="M 1028 468 C 1052 468, 1066 468, 1092 468" stroke="#0f766e" stroke-width="4" fill="none" marker-end="url(#arrow)"/>
+
+  <rect x="72" y="604" width="1296" height="106" rx="28" fill="url(#panel)" stroke="#d6ddd8" filter="url(#shadow)"/>
+  <text x="104" y="646" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" font-weight="700" fill="#0f766e">Public Documentation Policy</text>
+  <text x="104" y="678" font-family="ui-sans-serif, system-ui, sans-serif" font-size="16" fill="#172127">
+    Public docs explain the package and use OpenAlex as the open example. Commercial dataset runbooks and generated local artifacts stay outside gh-pages.
+  </text>
+</svg>

@@ -1,4 +1,6 @@
-# Restart & Recovery
+# Chapter 6. Restart & Recovery
+
+This chapter explains which checkpoints exist, what resume granularity is guaranteed, and what replay still happens after interruption.
 
 ## Parse stage
 

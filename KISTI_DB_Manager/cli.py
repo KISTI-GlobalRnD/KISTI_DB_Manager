@@ -777,6 +777,36 @@ def _cmd_review_preview(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_review_schema_viewer(args: argparse.Namespace) -> int:
+    from .review_schema import generate_schema_viewer
+
+    out_dir = args.out
+    if not out_dir:
+        stem_src = Path(args.config)
+        out_dir = str(stem_src.with_suffix("")) + "_schema_viewer"
+
+    res = generate_schema_viewer(
+        config_path=args.config,
+        out_dir=out_dir,
+        report_path=args.report,
+        quarantine_path=args.quarantine,
+        formats=args.formats,
+        db_enabled=not bool(args.no_db),
+        exact_counts=bool(args.exact_counts),
+        sample_rows=int(args.sample_rows) if args.sample_rows is not None else None,
+        sample_max_tables=int(args.sample_max_tables),
+    )
+
+    print(f"out_dir: {res['out_dir']}")
+    print(f"schema_viewer_html: {res['schema_viewer_html']}")
+    print(f"schema_viewer_json: {res['schema_viewer_json']}")
+    print(f"schema_svg: {res['schema_svg']}")
+    if res.get("schema_png"):
+        print(f"schema_png: {res['schema_png']}")
+    print(f"schema_mmd: {res['schema_mmd']}")
+    return 0
+
+
 def _cmd_review_diff(args: argparse.Namespace) -> int:
     from .review_diff import diff_review_files, render_review_diff_markdown, write_review_diff_report
 
@@ -1148,6 +1178,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_preview.add_argument("--max-nodes", type=int, default=5000, help="Max raw nodes per record (default: 5000)")
     p_preview.add_argument("--max-union-nodes", type=int, default=20000, help="Max union nodes in HTML/JSON (default: 20000)")
     p_preview.set_defaults(func=_cmd_review_preview)
+
+    p_schema = review_sub.add_parser("schema-viewer", help="Generate a self-contained schema viewer HTML/JSON")
+    p_schema.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")
+    p_schema.add_argument("--report", help="Optional RunReport JSON to enrich table mapping/DDL/issues")
+    p_schema.add_argument("--quarantine", help="Optional Quarantine JSONL to overlay per-table counts")
+    p_schema.add_argument("--out", help="Output directory (default: <config>_schema_viewer)")
+    p_schema.add_argument(
+        "--formats",
+        default="html,svg,mmd",
+        help="Comma-separated: html,svg,png,mmd (default: html,svg,mmd)",
+    )
+    p_schema.add_argument("--no-db", action="store_true", help="Skip DB introspection (works with config/report only)")
+    p_schema.add_argument("--exact-counts", dest="exact_counts", action="store_true", help="Use COUNT(*) per table (slow)")
+    p_schema.add_argument("--sample-rows", type=int, default=0, help="Embed LIMIT N samples per table in HTML (default: 0/off)")
+    p_schema.add_argument("--sample-max-tables", type=int, default=20, help="Max tables to sample when --sample-rows>0 (default: 20)")
+    p_schema.set_defaults(func=_cmd_review_schema_viewer)
 
     p_rdiff = review_sub.add_parser("diff", help="Diff two review/plan JSON outputs (review.json/plan.json)")
     p_rdiff.add_argument("before", help="Path to before review.json (or plan.json)")

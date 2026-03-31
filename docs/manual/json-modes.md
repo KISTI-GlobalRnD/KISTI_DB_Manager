@@ -1,4 +1,6 @@
-# JSON Modes
+# Chapter 3. JSON Modes
+
+This chapter maps each `json run` mode to its operational purpose so you can choose the correct execution path before a long ingest starts.
 
 ## Rule of thumb
 

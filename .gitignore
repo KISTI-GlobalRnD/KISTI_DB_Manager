@@ -1,6 +1,8 @@
 # Self Added
 gitignore
 runs/
+artifacts/
+internal_docs/
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

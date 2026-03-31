@@ -1,4 +1,6 @@
-# Getting Started
+# Chapter 2. Getting Started
+
+This chapter covers install, base CLI, and the first decision point between DB-first and parquet-first operation.
 
 ## Install
 

@@ -25,6 +25,7 @@ kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_ou
 
 ```bash
 kisti-db-manager review pack --config path/to/config.json --report run_report.json --out review_out
+kisti-db-manager review schema-viewer --config path/to/config.json --report run_report.json --out schema_viewer_out
 kisti-db-manager review diff before_review.json after_review.json --out-dir review_diff_out
 kisti-db-manager review preview --config path/to/config.json --out preview_out
 kisti-db-manager review plan --config path/to/json_config.json --out plan_out

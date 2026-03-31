@@ -1,4 +1,6 @@
-# OpenAlex Workflow
+# Chapter 4. OpenAlex Example Workflow
+
+This chapter uses OpenAlex as the public example dataset for the package: preflight, parse-parquet, materialize, and the current best-known load path.
 
 ## Recommended default
 

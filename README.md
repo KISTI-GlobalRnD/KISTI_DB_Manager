@@ -35,6 +35,7 @@ Starting from **0.7.0**, this repository keeps a single implementation:
 - **Review/visualization**
   - Review pack generation (md/html/svg) and schema diagrams (optional extras)
   - HTML UI (search/depth/focus + SVG/PNG export) for `review pack` and `review diff`
+  - Self-contained schema viewer HTML (`review schema-viewer`) with summary cards, logical groups, DDL preview, and searchable table catalog
 
 ## Schema visualization (Data_Sample)
 
@@ -77,11 +78,17 @@ kisti-db-manager report diff path/to/before.json path/to/after.json --out diff.m
 kisti-db-manager report profile path/to/run_report.json --top 10
 kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_out
 kisti-db-manager review pack --config path/to/config.json --report run_report.json --out review_out
+kisti-db-manager review schema-viewer --config path/to/config.json --report run_report.json --out schema_viewer_out
 kisti-db-manager review diff path/to/before_review.json path/to/after_review.json --out-dir review_diff_out
 kisti-db-manager review preview --config path/to/config.json --out preview_out  # raw vs flatten + union exceptions
 kisti-db-manager tabular run --config path/to/config.json --report run_report.json --quarantine quarantine.jsonl
 kisti-db-manager json run --config path/to/json_config.json --report json_report.json --quarantine quarantine.jsonl
 ```
+
+Schema viewer notes:
+- `review schema-viewer` writes `schema_viewer.html`, `schema_viewer.json`, `schema.svg`, and `schema.mmd`.
+- With DB access it uses real table metadata; with `--no-db` it falls back to config/report-derived predicted schema.
+- The HTML is self-contained and keeps the GoldenSet-style pattern: sticky nav, summary cards, inline SVG, logical depth groups, searchable table catalog, and DDL preview.
 
 ### Quick Start (JSON, large data)
 

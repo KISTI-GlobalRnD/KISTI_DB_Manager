@@ -281,3 +281,28 @@ python scripts/oa_materialize_parquet_to_db.py \
 - ingest 단계에서는 `index/optimize`를 분리(`--mode ingest-fast` → `--mode finalize`)
 - 스키마 드리프트가 “가끔”이면 evolve(기본)도 충분히 효율적일 수 있음
 - 드리프트가 “자주/많이”면 freeze가 운영상 안정적(속도/성공률 관점)
+
+## 스키마 뷰어 (HTML)
+
+GoldenSet 쪽의 self-contained schema contract viewer 패턴을 참고한 HTML 스키마 뷰어를 별도 커맨드로 생성할 수 있다.
+
+```bash
+kisti-db-manager review schema-viewer \
+  --config path/to/config.json \
+  --report run_report.json \
+  --out schema_viewer_out
+```
+
+- 출력물:
+  - `schema_viewer.html`
+  - `schema_viewer.json`
+  - `schema.svg`
+  - `schema.mmd`
+- 특징:
+  - sticky nav
+  - summary cards
+  - inline SVG schema
+  - depth 기반 logical groups
+  - searchable table catalog
+  - per-table DDL preview / columns / indexes / sample rows
+- `--no-db`를 주면 DB introspection 없이도 config + report 기반 예측 스키마로 viewer를 만들 수 있다.
