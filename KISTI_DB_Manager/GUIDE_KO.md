@@ -229,6 +229,7 @@ python scripts/oa_materialize_parquet_to_db.py \
 
 - 이 스크립트는 `parse-parquet*` run이 만든 parquet를 입력으로 받아 DB 적재만 별도로 수행한다.
 - 진행 상태는 `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`에 남는다.
+- `--db-name openalex_20260225_raw_yjk`로 원래 parse config를 바꾸지 않고 대상 DB만 덮어쓸 수 있다.
 - `--parallel-tables N`으로 서로 다른 parquet table 디렉터리를 병렬 적재할 수 있다.
 - `--parallel-files-per-table N`으로 하나의 큰 parquet table 안에서 여러 parquet batch를 동시에 적재할 수 있다.
 - 기본 staging은 `--staging-writer duckdb`이며, 가능하면 `/dev/shm`에 staging 파일을 만들고 `LOAD DATA LOCAL INFILE`로 적재한다.

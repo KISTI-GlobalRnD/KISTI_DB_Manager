@@ -130,6 +130,7 @@ def main() -> int:
     ap.add_argument("--config", required=True, help="JSON config path containing db_config/data_config")
     ap.add_argument("--report", help="Output JSON report path")
     ap.add_argument("--dotenv", default=".env", help="dotenv-like file used to restore masked DB password")
+    ap.add_argument("--db-name", default=None, help="Override target database name from config.json")
     ap.add_argument("--table", action="append", default=[], help="Parquet table directory name to benchmark (repeatable)")
     ap.add_argument("--max-tables", type=int, default=4, help="Maximum number of table dirs to benchmark")
     ap.add_argument("--max-files-per-table", type=int, default=1, help="Number of parquet files per table to load")
@@ -149,12 +150,15 @@ def main() -> int:
         coerce_db_config(cfg.get("db_config") or {}),
         dotenv_path=Path(args.dotenv).expanduser().resolve() if args.dotenv else None,
     )
+    if args.db_name:
+        db_config["database"] = str(args.db_name).strip()
     data_config = coerce_data_config(cfg.get("data_config") or {}, inplace=False)
     staging_dir = str(args.staging_dir or _default_staging_dir())
 
     report = RunReport()
     report.set_artifact("parquet_root", str(parquet_root))
     report.set_artifact("config_path", str(Path(args.config).expanduser().resolve()))
+    report.set_artifact("db_name", str(db_config.get("database") or ""))
     report.set_artifact("load_method", args.load_method)
     report.set_artifact("staging_writer", args.staging_writer)
     report.set_artifact("staging_dir", staging_dir)

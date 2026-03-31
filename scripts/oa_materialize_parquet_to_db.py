@@ -729,6 +729,7 @@ def main() -> int:
     ap.add_argument("--progress", help="Progress JSON path (default: <run_dir>/parquet_materialize/progress.json)")
     ap.add_argument("--report", help="Report JSON path (default: <run_dir>/parquet_materialize/run_report.json)")
     ap.add_argument("--dotenv", default=".env", help="dotenv-like file used to restore masked DB password")
+    ap.add_argument("--db-name", default=None, help="Override target database name from config.json")
     ap.add_argument("--table", action="append", default=[], help="Parquet table directory name to materialize (repeatable)")
     ap.add_argument("--max-tables", type=int, default=None)
     ap.add_argument("--max-files-per-table", type=int, default=None)
@@ -750,6 +751,8 @@ def main() -> int:
         coerce_db_config(cfg.get("db_config") or {}, inplace=False),
         dotenv_path=Path(args.dotenv).expanduser().resolve() if args.dotenv else None,
     )
+    if args.db_name:
+        db_config["database"] = str(args.db_name).strip()
 
     parquet_root = Path(
         args.parquet_root
@@ -776,6 +779,7 @@ def main() -> int:
     report = RunReport()
     report.set_artifact("run_dir", str(run_dir))
     report.set_artifact("parquet_root", str(parquet_root))
+    report.set_artifact("db_name", str(db_config.get("database") or ""))
     report.set_artifact("selected_tables", selected_tables)
     report.set_artifact("load_method", str(args.load_method))
     report.set_artifact("staging_writer", str(args.staging_writer))

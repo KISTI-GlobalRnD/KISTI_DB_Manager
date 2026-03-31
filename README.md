@@ -179,6 +179,7 @@ python scripts/oa_materialize_parquet_to_db.py \
 Notes:
 - This is a separate post-parse materialization step for `parse-parquet*` runs.
 - It resumes from `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`.
+- `--db-name openalex_20260225_raw_yjk` overrides the target database without editing the original parse config.
 - `--parallel-tables N` lets independent parquet table directories load in parallel.
 - `--parallel-files-per-table N` lets a single large parquet table load multiple parquet batches concurrently.
 - Default materializer staging is `--staging-writer duckdb`, which stages into `/dev/shm` when available and then uses `LOAD DATA LOCAL INFILE`.
