@@ -1,79 +1,79 @@
 # OpenAlex Parquet Materializer Plan (2026-03-31)
 
-- 목적: `parse-parquet*`로 생성한 parquet 아티팩트를 canonical raw layer로 두고, 이후 `MariaDB/MySQL` 적재를 별도 materialization 단계로 수행한다.
-- 배경: 현재는 `raw JSON -> flatten -> DB` 경로는 강하지만, `parquet -> DB`는 독립 모듈이 없다. 따라서 local-first 작업과 full raw DB 적재를 동시에 만족시키기 어렵다.
+- Goal: keep `parse-parquet*` parquet artifacts as the canonical raw layer, and run `MariaDB/MySQL` load as a separate materialization stage afterward.
+- Background: the package is strong at `raw JSON -> flatten -> DB`, but it did not have an independent `parquet -> DB` module. That made it difficult to satisfy both local-first work and full raw DB loading.
 
-## 결론
+## Conclusion
 
-- `raw -> flatten/parquet`는 한 번만 수행한다.
-- 그 결과물(parquet)을 기준으로:
-  - 로컬 분석은 바로 시작한다.
-  - DB 적재는 `parquet materializer`가 담당한다.
-- 즉 파싱은 1회, materialization은 2종이다.
+- Run `raw -> flatten/parquet` only once.
+- From that canonical parquet output:
+  - start local analytical work immediately
+  - let the `parquet materializer` handle DB loading later
+- In other words, parsing happens once and materialization has two consumers.
 
-## 목표
+## Goals
 
-- raw JSON 재파싱 없이 parquet만으로 DB 적재 가능
-- 테이블/배치 단위 resume 가능
-- 일부 테이블만 선택 적재 가능
-- 생성된 parquet를 canonical artifact로 취급
-- 적재 결과와 진행률을 JSON report/progress로 남김
+- Allow DB loading from parquet without reparsing raw JSON
+- Support resume at table/batch granularity
+- Allow selective loading of only some tables
+- Treat generated parquet as the canonical artifact
+- Record load results and progress in JSON report/progress files
 
-## 비목표
+## Non-Goals
 
-- MariaDB가 parquet를 직접 읽게 만드는 것
-- single-pass로 parquet와 MariaDB row-store를 동시에 최적화하는 것
-- 기존 `json run` 전체 경로를 당장 대체하는 것
+- Making MariaDB read parquet directly
+- Optimizing parquet and MariaDB row-store in the same single pass
+- Replacing the full existing `json run` path immediately
 
-## 왜 별도 모듈이 필요한가
+## Why a Separate Module Is Needed
 
-현재 `parquet -> DB`를 단순히 구현하면 내부적으로 다음으로 흐른다.
+A naive `parquet -> DB` implementation currently becomes:
 
-1. parquet 읽기
-2. `DataFrame` 생성
-3. 임시 TSV 생성
+1. read parquet
+2. build a `DataFrame`
+3. generate a temporary TSV
 4. `LOAD DATA LOCAL INFILE`
 
-이 방식은 기능은 되지만, full raw OpenAlex 규모에서는 end-to-end 비용이 크다. 따라서 `parquet materializer`는 다음 두 가지를 명시적으로 책임져야 한다.
+This works functionally, but it is expensive at full raw OpenAlex scale. The `parquet materializer` therefore needs to take explicit responsibility for two things:
 
-- raw JSON 재파싱 없이 DB 적재만 수행
-- 적재 단위를 테이블/파일 수준으로 관리하여 재개와 선별 적재를 지원
+- performing DB loading without reparsing raw JSON
+- managing load units at table/file level so restart and selective loading stay practical
 
-## MVP 범위
+## MVP Scope
 
-### 입력
+### Inputs
 
 - parquet root
-- 기존 run의 `config.json`
+- `config.json` from the original run
 - optional `.env` path
 - optional table allowlist
 
-### 출력
+### Outputs
 
 - target DB tables
 - `progress.json`
 - `run_report.json`
 
-### 동작
+### Behavior
 
-1. parquet root의 table 디렉터리 스캔
-2. 각 table 디렉터리의 `b*.parquet` 순서대로 처리
-3. 첫 파일 기준으로 target table 생성
-4. 각 parquet 파일을 읽어 batch 단위로 적재
-5. 파일 단위 checkpoint 저장
-6. 재실행 시 마지막 완료 파일 이후부터 resume
+1. Scan table directories under the parquet root
+2. Process `b*.parquet` files in each table directory in order
+3. Create the target table from the first file
+4. Read each parquet file and load it batch by batch
+5. Save file-level checkpoints
+6. On restart, resume after the last completed file
 
-## 운영 요구사항
+## Operational Requirements
 
-- `config.json`에 password가 `***`로 마스킹된 경우 `.env`에서 복원 가능해야 함
-- target table prefix 지원
-- overwrite/append 중 append 기본
-- 일부 table만 적재하는 `--table` 옵션 필요
-- 기본적으로 DROP/RECREATE 하지 않음
+- If `config.json` masks the password as `***`, it must be recoverable from `.env`
+- Support target table prefixes
+- Default to append rather than overwrite
+- Provide `--table` for partial loading
+- Do not `DROP/RECREATE` by default
 
-## 추천 progress 계약
+## Recommended Progress Contract
 
-`progress.json` 예시:
+Example `progress.json`:
 
 ```json
 {
@@ -95,38 +95,38 @@
 }
 ```
 
-## MVP 구현 원칙
+## MVP Implementation Principle
 
-- 기존 `manage.create_table_from_columns`
-- 기존 `manage.fill_table_from_dataframe`
-- 기존 `LOAD DATA LOCAL INFILE`
+- existing `manage.create_table_from_columns`
+- existing `manage.fill_table_from_dataframe`
+- existing `LOAD DATA LOCAL INFILE`
 
-를 재사용한다.
+should all be reused.
 
-즉 MVP는 “완전히 새로운 DB loader”가 아니라,
-**기존 적재 로직을 parquet artifact 기준으로 재배치한 materializer**다.
+So the MVP is not a completely new DB loader.
+It is **a materializer that reorganizes the existing load logic around parquet artifacts**.
 
-## 이후 최적화 단계
+## Later Optimization Stages
 
 ### Phase 2
 
-- file-level resume를 넘어 per-table high-watermark 최적화
-- `name_maps_json`를 최종 report에서 직접 읽는 경로 추가
-- 병렬 table loading
-- large table 우선순위 정책
+- go beyond file-level resume and optimize per-table high-watermarks
+- add a path that reads `name_maps_json` directly from the final report
+- parallelize table loading
+- add large-table priority policy
 
 ### Phase 3
 
-- parquet row-group/chunk 기반 메모리 절감
-- DuckDB/pyarrow 기반 staged CSV/TSV 생성 실험
-- materializer 전용 CLI subcommand 편입
+- reduce memory use through parquet row-group/chunk handling
+- experiment with DuckDB/pyarrow staged CSV/TSV generation
+- promote the materializer to a dedicated CLI subcommand
 
-## 판단 기준
+## Decision Rule
 
-- 로컬 작업 우선이면 `parse-parquet*`는 유지
-- DB 완주 속도 우선이면 `ingest-fast*`가 여전히 강함
-- 둘을 함께 만족시키려면 `parquet materializer`가 필요
+- If local work is the priority, keep `parse-parquet*`
+- If DB completion speed is the priority, `ingest-fast*` remains stronger
+- If both need to be satisfied, the package needs a `parquet materializer`
 
-즉 이 문서의 결론은 하나다.
+The conclusion of this document is simple:
 
-- `parquet -> MariaDB`는 소비자 기능이 아니라, 이제 모듈의 핵심 기능으로 봐야 한다.
+- `parquet -> MariaDB` is no longer just a consumer-side convenience; it should be treated as a core module capability.

@@ -1,7 +1,7 @@
 # Design Notes Overview
 
-이 섹션은 운영 매뉴얼보다 한 단계 아래의 설계/성능 노트입니다.
-실행 방법보다 "왜 이렇게 설계했는가"와 "어디가 병목이었는가"를 남깁니다.
+This section contains design and performance notes that sit one level below the operational manual.
+It focuses less on how to run the package and more on why the package is structured this way and where the real bottlenecks were found.
 
 ## Current note groups
 
@@ -12,5 +12,5 @@
 
 ## Reading rule
 
-- 먼저 Manual을 읽고
-- 구현 이유나 성능 판단 근거가 필요할 때 이 섹션으로 내려오는 것이 맞습니다.
+- Read the Manual first
+- Come here when you need implementation rationale or performance evidence

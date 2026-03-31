@@ -1,7 +1,7 @@
 # Manual Overview
 
-이 섹션은 운영 매뉴얼입니다.
-핵심 목표는 "어떤 데이터를 어떤 모드로 어떤 순서로 돌릴지"를 빠르게 판단하게 하는 것입니다.
+This section is the operational manual.
+The goal is to help you decide quickly which data to run, which mode to choose, and in what order to execute the workflow.
 
 ## Recommended reading order
 
@@ -14,13 +14,13 @@
 
 ## Audience
 
-- 신규 운영자: 설치, mode 선택, 기본 실행 흐름 파악
-- 대용량 운영 담당자: restart/resume, parquet/materialize 분리 이해
-- 분석 파이프라인 담당자: OpenAlex 예시와 review artifact 흐름 확인
+- New operators: installation, mode selection, and the base execution flow
+- Large-scale operators: restart/resume behavior and the split between parquet generation and materialization
+- Downstream pipeline owners: OpenAlex examples and review artifact flow
 
 ## Decision map
 
-- DB 완주 속도가 우선이면 `ingest-fast*`
-- 로컬 artifact와 재사용성이 우선이면 `parse-parquet*`
-- OpenAlex는 기본적으로 `parse-parquet-safe -> materialize`
-- schema inspection이 목적이면 `review plan / pack / preview / schema-viewer`
+- If DB completion speed is the priority, start with `ingest-fast*`
+- If local artifacts and reuse are the priority, start with `parse-parquet*`
+- For OpenAlex, the default recommendation is `parse-parquet-safe -> materialize`
+- If schema inspection is the goal, use `review plan / pack / preview / schema-viewer`
