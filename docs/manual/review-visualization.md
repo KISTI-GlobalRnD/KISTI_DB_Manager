@@ -49,9 +49,21 @@ Use this when you want a self-contained HTML schema catalog with:
 - searchable table list
 - per-table DDL, columns, indexes, and sample rows
 
-## Public OpenAlex example
+## Public OpenAlex examples
 
-The public docs keep a static OpenAlex example because the source dataset is open and reproducible.
+The public docs keep static OpenAlex examples because the source dataset is open and reproducible.
+Use them to understand what the package produces before you run it on your own data.
+
+### Interactive raw-vs-flatten preview
+
+This example is generated from the latest OpenAlex preview output.
+It shows the raw JSON structure, the flattened base/subtable view, union exceptions, and the OpenAlex abstract spotlight for `abstract_inverted_index`.
+
+- Open the interactive preview: [`openalex_preview/preview.html`](../examples/openalex_preview/preview.html)
+- Download the preview payload: [`openalex_preview/preview.json`](../examples/openalex_preview/preview.json)
+
+### Predicted schema SVG
+
 This example is generated from the latest OpenAlex review-plan output, so it reflects the current predicted schema path rather than an older DB-backed artifact.
 
 Example schema SVG:
@@ -59,7 +71,8 @@ Example schema SVG:
 ![OpenAlex schema example](../assets/openalex_schema_example.svg){ width="100%" }
 
 - Download the raw SVG: [`openalex_schema_example.svg`](../assets/openalex_schema_example.svg)
-- Generate your own viewer locally with `review schema-viewer` when you need a run-specific artifact.
+- Generate your own schema viewer locally with `review schema-viewer` when you need a run-specific artifact.
+- Generate your own raw-vs-flatten preview locally with `review preview` when you need a run-specific artifact.
 
 ## Public docs vs generated artifacts
 
