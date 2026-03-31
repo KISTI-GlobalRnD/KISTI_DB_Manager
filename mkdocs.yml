@@ -1,0 +1,40 @@
+site_name: KISTI_DB_Manager Docs
+site_description: MariaDB/MySQL ingest, flattening, and OpenAlex operations manual
+site_url: https://kisti-globalrnd.github.io/KISTI_DB_Manager/
+repo_url: https://github.com/KISTI-GlobalRnD/KISTI_DB_Manager
+repo_name: KISTI-GlobalRnD/KISTI_DB_Manager
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.tracking
+    - navigation.top
+    - search.highlight
+    - search.share
+    - content.code.copy
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Manual:
+      - Getting Started: manual/getting-started.md
+      - JSON Modes: manual/json-modes.md
+      - OpenAlex Workflow: manual/openalex-workflow.md
+      - Restart & Recovery: manual/restart-recovery.md
+  - Reference:
+      - CLI Quick Reference: reference/cli.md
+      - Examples: reference/examples.md
+  - Design Notes:
+      - 2026-02-09 Ingest Tuning: performance/2026-02-09_ingest_tuning.md
+      - 2026-02-27 Schema Display Benchmark: performance/2026-02-27_schema-display-benchmark_from_02-goldset.md
+      - 2026-03-31 Parquet Materializer Plan: performance/2026-03-31_parquet_materializer_plan.md
