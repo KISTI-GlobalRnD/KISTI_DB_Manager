@@ -46,6 +46,17 @@ Use this when you want a self-contained HTML schema catalog with:
 - searchable table list
 - per-table DDL, columns, indexes, and sample rows
 
+## Public OpenAlex example
+
+The public docs can keep a static OpenAlex example because the source dataset is open and reproducible.
+
+Example schema SVG:
+
+![OpenAlex schema example](../assets/openalex_schema_example.svg){ width="100%" }
+
+- Download the raw SVG: [`openalex_schema_example.svg`](../assets/openalex_schema_example.svg)
+- Generate your own viewer locally with `review schema-viewer` when you need a run-specific artifact.
+
 ## Public docs vs generated artifacts
 
 Generated viewer artifacts are not part of the public docs surface by default.
