@@ -19,8 +19,30 @@ def _stage(create: bool, load: bool, index: bool, optimize: bool) -> dict[str, b
 MODES: dict[str, ModeSpec] = {
     "default": ModeSpec(
         name="default",
-        description="Full pipeline (create+load+index+optimize) with config-driven behavior.",
+        description="Full pipeline (create+load+index+optimize) with config-driven behavior. Prefer explicit parse-parquet or ingest-fast* modes for production runs.",
         data_overrides={},
+        stage_defaults=_stage(True, True, True, True),
+    ),
+    "parse-parquet": ModeSpec(
+        name="parse-parquet",
+        description="Parquet-first JSON path: flatten into local parquet artifacts before optional DB stages.",
+        data_overrides={
+            "json_streaming_load": False,
+            "persist_parquet_files": True,
+            "persist_tsv_files": False,
+        },
+        stage_defaults=_stage(True, True, True, True),
+    ),
+    "parse-parquet-safe": ModeSpec(
+        name="parse-parquet-safe",
+        description="Parquet-first JSON path with conservative batch settings for large/nested inputs.",
+        data_overrides={
+            "json_streaming_load": False,
+            "persist_parquet_files": True,
+            "persist_tsv_files": False,
+            "parallel_workers": 0,
+            "chunk_size": 5000,
+        },
         stage_defaults=_stage(True, True, True, True),
     ),
     "ingest-fast": ModeSpec(
@@ -29,6 +51,8 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
+            "persist_parquet_files": False,
+            "persist_tsv_files": False,
             # NOTE: `parallel_workers>0` enables a ProcessPool-based flatten/TSV pipeline.
             # It can speed up end-to-end ingest when TSV generation is a bottleneck, but it
             # adds worker startup overhead and should be benchmarked on real data.
@@ -47,6 +71,8 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
+            "persist_parquet_files": False,
+            "persist_tsv_files": False,
             "parallel_workers": 8,
             "db_load_parallel_tables": 8,
             # Merge TSV fragments across schema drift (best-effort) to reduce LOAD DATA calls.
@@ -64,6 +90,8 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
+            "persist_parquet_files": False,
+            "persist_tsv_files": False,
             "parallel_workers": 0,
             "chunk_size": 20000,
             "fast_load_session": True,
@@ -79,6 +107,8 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "auto",
             "json_streaming_load": True,
+            "persist_parquet_files": False,
+            "persist_tsv_files": False,
             "parallel_workers": 0,
             "chunk_size": 20000,
             "fast_load_session": True,
@@ -95,6 +125,8 @@ MODES: dict[str, ModeSpec] = {
         data_overrides={
             "db_load_method": "to_sql",
             "json_streaming_load": False,
+            "persist_parquet_files": False,
+            "persist_tsv_files": False,
             "parallel_workers": 0,
             "chunk_size": 1000,
             "fast_load_session": False,

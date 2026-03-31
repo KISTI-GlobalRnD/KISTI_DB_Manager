@@ -30,6 +30,9 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["auto_except_min_observations"], 20)
         self.assertEqual(cfg["auto_except_novelty_threshold"], 2.0)
         self.assertEqual(cfg["excepted_expand_dict"], False)
+        self.assertEqual(cfg["json_streaming_load"], False)
+        self.assertEqual(cfg["persist_parquet_files"], True)
+        self.assertEqual(cfg["persist_parquet_dir"], "")
         self.assertEqual(cfg["persist_tsv_files"], False)
         self.assertEqual(cfg["persist_tsv_dir"], "")
 

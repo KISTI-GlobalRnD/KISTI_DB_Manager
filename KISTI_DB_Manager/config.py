@@ -21,10 +21,10 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     # Backward compatible aliases
     if "FILE_SEP" in cfg and "SEP" not in cfg:
         cfg["SEP"] = cfg["FILE_SEP"]
-    if "save_local_files" in cfg and "persist_tsv_files" not in cfg:
-        cfg["persist_tsv_files"] = cfg["save_local_files"]
-    if "save_local_dir" in cfg and "persist_tsv_dir" not in cfg:
-        cfg["persist_tsv_dir"] = cfg["save_local_dir"]
+    if "save_local_files" in cfg and "persist_parquet_files" not in cfg:
+        cfg["persist_parquet_files"] = cfg["save_local_files"]
+    if "save_local_dir" in cfg and "persist_parquet_dir" not in cfg:
+        cfg["persist_parquet_dir"] = cfg["save_local_dir"]
 
     cfg.setdefault("SEP", DEFAULT_FILE_SEP)  # file delimiter
     cfg.setdefault("KEY_SEP", DEFAULT_KEY_SEP)  # nested key delimiter
@@ -49,7 +49,7 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("index_prefix_len", 191)
     # JSON pipeline performance knobs
     cfg.setdefault("parallel_workers", 0)  # ProcessPool workers for JSON flatten (0/1 disables)
-    cfg.setdefault("json_streaming_load", True)  # rows -> TSV -> LOAD DATA (no DataFrame build)
+    cfg.setdefault("json_streaming_load", False)  # parquet-first/DataFrame path by default
     # Schema drift strategy (JSON-oriented)
     # - "evolve": add new columns (ALTER TABLE) when needed
     # - "freeze": do not ALTER; store unknown fields into extra_column_name (requires extra col)
@@ -71,7 +71,10 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("excepted_expand_dict", False)
     # DB session tuning for ingest (best-effort; may require privileges)
     cfg.setdefault("fast_load_session", False)
-    # Optional local TSV artifacts from JSON streaming backend.
+    # Default JSON path: persist parquet locally before DB load.
+    cfg.setdefault("persist_parquet_files", True)
+    cfg.setdefault("persist_parquet_dir", "")
+    # Optional local TSV artifacts from the streaming LOAD DATA backend.
     cfg.setdefault("persist_tsv_files", False)
     cfg.setdefault("persist_tsv_dir", "")
 
@@ -164,7 +167,7 @@ class DataConfig:
     index_prefix_len: int = 191
     db_load_method: str = "auto"
     parallel_workers: int = 0
-    json_streaming_load: bool = True
+    json_streaming_load: bool = False
     schema_mode: str = "evolve"
     extra_column_name: str = "__extra__"
     schema_hybrid_warmup_batches: int = 1
@@ -177,6 +180,8 @@ class DataConfig:
     auto_except_novelty_threshold: float = 2.0
     excepted_expand_dict: bool = False
     fast_load_session: bool = False
+    persist_parquet_files: bool = True
+    persist_parquet_dir: str = ""
     persist_tsv_files: bool = False
     persist_tsv_dir: str = ""
 
@@ -205,7 +210,7 @@ class DataConfig:
             index_prefix_len=int(cfg.get("index_prefix_len", 191)),
             db_load_method=str(cfg.get("db_load_method", "auto")),
             parallel_workers=int(cfg.get("parallel_workers", 0) or 0),
-            json_streaming_load=bool(cfg.get("json_streaming_load", True)),
+            json_streaming_load=bool(cfg.get("json_streaming_load", False)),
             schema_mode=str(cfg.get("schema_mode", "evolve")),
             extra_column_name=str(cfg.get("extra_column_name", "__extra__")),
             schema_hybrid_warmup_batches=int(cfg.get("schema_hybrid_warmup_batches", 1) or 0),
@@ -218,6 +223,8 @@ class DataConfig:
             auto_except_novelty_threshold=float(cfg.get("auto_except_novelty_threshold", 2.0) or 2.0),
             excepted_expand_dict=bool(cfg.get("excepted_expand_dict", False)),
             fast_load_session=bool(cfg.get("fast_load_session", False)),
+            persist_parquet_files=bool(cfg.get("persist_parquet_files", True)),
+            persist_parquet_dir=str(cfg.get("persist_parquet_dir", "")),
             persist_tsv_files=bool(cfg.get("persist_tsv_files", False)),
             persist_tsv_dir=str(cfg.get("persist_tsv_dir", "")),
         )
@@ -258,6 +265,8 @@ class DataConfig:
             "auto_except_novelty_threshold": float(self.auto_except_novelty_threshold),
             "excepted_expand_dict": bool(self.excepted_expand_dict),
             "fast_load_session": bool(self.fast_load_session),
+            "persist_parquet_files": bool(self.persist_parquet_files),
+            "persist_parquet_dir": str(self.persist_parquet_dir),
             "persist_tsv_files": bool(self.persist_tsv_files),
             "persist_tsv_dir": str(self.persist_tsv_dir),
         }

@@ -95,6 +95,16 @@ kisti-db-manager json run --config path/to/json_config.json --mode ingest-fast
 kisti-db-manager json run --config path/to/json_config.json --mode finalize
 ```
 
+If your goal is local parquet generation first, use an explicit parquet mode instead of relying on `default`:
+
+```bash
+# parquet-first with config-driven batch size/workers
+kisti-db-manager json run --config path/to/json_config.json --mode parse-parquet
+
+# parquet-first with conservative settings for large nested sources
+kisti-db-manager json run --config path/to/json_config.json --mode parse-parquet-safe
+```
+
 If schema drift is heavy and ALTER is too expensive:
 
 ```bash
@@ -126,16 +136,60 @@ kisti-db-manager json run \
 ```
 
 Notes:
-- `excepted_expand_dict=false` (default) prevents excepted-table column explosion by storing dict payload in `value`.
+- `excepted_expand_dict=false` (default) prevents excepted-table column explosion by storing nested payloads as JSON strings in `value`/`__except_raw_json__`.
 - Tune detection thresholds if needed: `--auto-except-unique-key-threshold`, `--auto-except-min-observations`, `--auto-except-novelty-threshold`.
-- JSON streaming TSV files are temporary by default (created under `tmp_dir`, deleted after load).
+- Default JSON path is parquet-first: flattened batch files are saved under `runs/<table>_<run_id>/parquet` before DB load.
+- Prefer explicit `parse-parquet*` or `ingest-fast*` modes for production runs; avoid relying on `default`.
+- `ingest-fast*` modes remain direct insert-first/streaming modes for maximum throughput.
+- `persist_parquet_files=true` and `json_streaming_load=true` are mutually exclusive and now fail fast at CLI validation time.
 
-### Local TSV Artifacts (optional)
+### Local Parquet Artifacts (default)
+
+Default run behavior keeps flattened parquet artifacts on local disk before DB load:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/json_config.json
+```
+
+Change the parquet artifact directory explicitly:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/json_config.json \
+  --persist-parquet-dir /path/to/local_parquet
+```
+
+Disable parquet persistence explicitly:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/json_config.json \
+  --no-persist-parquet-files
+```
+
+Materialize persisted parquet artifacts into DB later (MVP helper script):
+
+```bash
+python scripts/oa_materialize_parquet_to_db.py \
+  runs/<parse_parquet_run_dir> \
+  --dotenv .env
+```
+
+Notes:
+- This is a separate post-parse materialization step for `parse-parquet*` runs.
+- It resumes from `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`.
+- `--parallel-tables N` lets independent parquet table directories load in parallel.
+- `--parallel-files-per-table N` lets a single large parquet table load multiple parquet batches concurrently.
+- Default materializer staging is `--staging-writer duckdb`, which stages into `/dev/shm` when available and then uses `LOAD DATA LOCAL INFILE`.
+- For stable parquet schemas, the materializer can bypass pandas and stage directly from parquet via DuckDB; schema-drift cases fall back to the DataFrame path.
+
+### Local TSV Artifacts (fast/streaming path only)
 
 Keep generated TSV files for audit/replay:
 
 ```bash
-# parse + load + keep TSV artifacts
+# direct insert-first fast mode + keep TSV artifacts
 kisti-db-manager json run \
   --config path/to/json_config.json \
   --mode ingest-fast \
@@ -148,10 +202,16 @@ Parse only (no DB insert), keep TSV artifacts for later table-wise loading:
 ```bash
 kisti-db-manager json run \
   --config path/to/json_config.json \
+  --mode ingest-fast \
   --no-load --no-index --no-optimize \
   --persist-tsv-files \
   --persist-tsv-dir /path/to/local_tsv
 ```
+
+Notes:
+- Parquet persistence is the normalized default; TSV persistence is optional and only applies to the streaming `LOAD DATA` path.
+- If `persist_tsv_dir` is omitted, artifacts are saved under `runs/<table>_<run_id>/tsv`.
+- Current implementation favors artifact safety over peak ingest speed; persisted TSVs disable overlapped batches and parallel table loading.
 
 ### Mode Defaults (important)
 

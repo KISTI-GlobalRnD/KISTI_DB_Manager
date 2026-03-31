@@ -208,12 +208,70 @@ def _json_dumps_best_effort(obj) -> str:
         return json.dumps(obj, ensure_ascii=False)
 
 
+def _write_load_data_stage_with_duckdb(
+    *,
+    df,
+    columns: list[str],
+    file_path: str,
+    report=None,
+) -> None:
+    """
+    Write a LOAD DATA-compatible tab-delimited staging file using DuckDB.
+
+    The resulting file uses CSV quoting rules with:
+    - DELIMITER '\\t'
+    - NULLSTR '\\N'
+    - QUOTE '"'
+    - ESCAPE '"'
+
+    MySQL/MariaDB can consume this with
+    `FIELDS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\\\\'`.
+    """
+    import duckdb
+    import json
+    import time
+
+    def dq(ident: str) -> str:
+        return '"' + str(ident).replace('"', '""') + '"'
+
+    cols = [str(c) for c in (columns or [])]
+    if not cols:
+        return
+
+    t0 = time.perf_counter()
+    con = duckdb.connect(database=":memory:")
+    try:
+        con.register("kisti_input_df", df)
+        select_sql = ", ".join(dq(c) for c in cols)
+        copy_sql = (
+            f"COPY (SELECT {select_sql} FROM kisti_input_df) "
+            f"TO {json.dumps(str(file_path))} "
+            "(FORMAT CSV, HEADER FALSE, DELIMITER '\t', NULLSTR '\\N', QUOTE '\"', ESCAPE '\"');"
+        )
+        con.execute(copy_sql)
+    finally:
+        try:
+            con.unregister("kisti_input_df")
+        except Exception:
+            pass
+        con.close()
+    if report is not None:
+        try:
+            ms = int(round((time.perf_counter() - t0) * 1000.0))
+            report.add_time_ms("db.load_data.stage_write", ms)
+            report.add_time_ms("db.load_data.duckdb_stage_write", ms)
+        except Exception:
+            pass
+
+
 def _load_data_local_infile_dataframe(
     *,
     conn,
     table_name: str,
     df,
     columns: list[str],
+    staging_writer: str | None = None,
+    staging_dir: str | None = None,
     report=None,
 ) -> None:
     """
@@ -228,9 +286,13 @@ def _load_data_local_infile_dataframe(
     if not columns:
         return
 
+    staging_writer_norm = str(staging_writer or "python").strip().lower()
+    if staging_writer_norm not in {"python", "duckdb"}:
+        raise ValueError(f"Unsupported staging_writer: {staging_writer}")
+    staging_dir_norm = str(staging_dir or "/tmp").strip() or "/tmp"
+
     tmp_path = None
     try:
-        tsv_ms = None
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
@@ -238,9 +300,27 @@ def _load_data_local_infile_dataframe(
             prefix=f"kisti_load_{qi(table_name)}_",
             suffix=".tsv",
             delete=False,
-            dir="/tmp",
+            dir=staging_dir_norm,
         ) as f:
             tmp_path = f.name
+
+        if staging_writer_norm == "duckdb":
+            _write_load_data_stage_with_duckdb(
+                df=df,
+                columns=columns,
+                file_path=tmp_path,
+                report=report,
+            )
+            _load_data_local_infile_tabular_file(
+                conn=conn,
+                table_name=table_name,
+                file_path=tmp_path,
+                sep="\t",
+                columns_expr=[f"`{qi(c)}`" for c in columns],
+                ignore_lines=0,
+                report=report,
+            )
+        else:
             # Write rows (no header) with MySQL escape sequences.
             t0 = None
             try:
@@ -249,55 +329,57 @@ def _load_data_local_infile_dataframe(
                 t0 = time.perf_counter()
             except Exception:
                 t0 = None
-            escape = _mysql_escape_load_data_value
-            write = f.write
-            for row in df.itertuples(index=False, name=None):
-                write("\t".join(escape(v) for v in row) + "\n")
+            with open(tmp_path, "w", encoding="utf-8", newline="\n") as f:
+                escape = _mysql_escape_load_data_value
+                write = f.write
+                for row in df.itertuples(index=False, name=None):
+                    write("\t".join(escape(v) for v in row) + "\n")
             if report is not None and t0 is not None:
                 try:
                     import time
 
                     tsv_ms = int(round((time.perf_counter() - t0) * 1000.0))
+                    report.add_time_ms("db.load_data.stage_write", tsv_ms)
                     report.add_time_ms("db.load_data.tsv_write", tsv_ms)
                 except Exception:
                     pass
 
-        sql = (
-            "LOAD DATA LOCAL INFILE "
-            + _sql_quote_string(tmp_path)
-            + f" INTO TABLE `{qi(table_name)}` "
-            + "CHARACTER SET utf8mb4 "
-            + "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
-            + "LINES TERMINATED BY '\\n' "
-            + "("
-            + ", ".join(f"`{qi(c)}`" for c in columns)
-            + ");"
-        )
+            sql = (
+                "LOAD DATA LOCAL INFILE "
+                + _sql_quote_string(tmp_path)
+                + f" INTO TABLE `{qi(table_name)}` "
+                + "CHARACTER SET utf8mb4 "
+                + "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
+                + "LINES TERMINATED BY '\\n' "
+                + "("
+                + ", ".join(f"`{qi(c)}`" for c in columns)
+                + ");"
+            )
 
-        try:
-            t0 = None
             try:
-                import time
-
-                t0 = time.perf_counter()
-            except Exception:
                 t0 = None
-            with conn.cursor() as cur:
-                cur.execute(sql)
-            conn.commit()
-            if report is not None and t0 is not None:
                 try:
                     import time
 
-                    report.add_time_s("db.load_data.exec", time.perf_counter() - t0)
+                    t0 = time.perf_counter()
+                except Exception:
+                    t0 = None
+                with conn.cursor() as cur:
+                    cur.execute(sql)
+                conn.commit()
+                if report is not None and t0 is not None:
+                    try:
+                        import time
+
+                        report.add_time_s("db.load_data.exec", time.perf_counter() - t0)
+                    except Exception:
+                        pass
+            except Exception:
+                try:
+                    conn.rollback()
                 except Exception:
                     pass
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            raise
+                raise
     finally:
         if tmp_path:
             try:
@@ -1379,6 +1461,8 @@ def fill_table_from_dataframe(
     load_method: str | None = None,
     fast_load_state: FastLoadState | None = None,
     local_infile_conn=None,
+    load_data_staging_writer: str | None = None,
+    load_data_staging_dir: str | None = None,
 ) -> NameMap:
     """
     Insert a pandas DataFrame into an existing table, with best-effort schema drift handling.
@@ -1547,6 +1631,8 @@ def fill_table_from_dataframe(
                     table_name=table_name,
                     df=df,
                     columns=list(getattr(df, "columns", [])),
+                    staging_writer=load_data_staging_writer,
+                    staging_dir=load_data_staging_dir,
                     report=report,
                 )
             if report:

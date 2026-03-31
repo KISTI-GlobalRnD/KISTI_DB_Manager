@@ -207,6 +207,45 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
     - 실제 DB 로딩 wall-time은 `db.load_data.exec.wall`도 함께 확인 권장
 - CLI: `--overlap-batches` / `--no-overlap-batches`
 
+### `persist_parquet_files` (기본 로컬 parquet 아티팩트)
+
+- 기본값: `true`
+- 목적:
+  - JSON flatten 결과를 배치별 parquet 파일로 먼저 남기고 그 다음 DB 적재
+- 저장 위치:
+  - `persist_parquet_dir`를 지정하지 않으면 `runs/<table>_<run_id>/parquet`
+- 주의:
+  - `persist_parquet_files=true`면 streaming `LOAD DATA` 경로 대신 DataFrame/parquet-first 경로를 사용
+  - 운영에서는 `default`에 기대기보다 `--mode parse-parquet` 또는 `--mode parse-parquet-safe`를 명시하는 편이 안전
+  - 즉, 최고 속도가 목적이면 `ingest-fast*` 모드 또는 `--no-persist-parquet-files --json-streaming-load` 조합이 더 맞음
+
+후속 DB 적재(MVP):
+
+```bash
+python scripts/oa_materialize_parquet_to_db.py \
+  runs/<parse_parquet_run_dir> \
+  --dotenv .env
+```
+
+- 이 스크립트는 `parse-parquet*` run이 만든 parquet를 입력으로 받아 DB 적재만 별도로 수행한다.
+- 진행 상태는 `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`에 남는다.
+- `--parallel-tables N`으로 서로 다른 parquet table 디렉터리를 병렬 적재할 수 있다.
+- `--parallel-files-per-table N`으로 하나의 큰 parquet table 안에서 여러 parquet batch를 동시에 적재할 수 있다.
+- 기본 staging은 `--staging-writer duckdb`이며, 가능하면 `/dev/shm`에 staging 파일을 만들고 `LOAD DATA LOCAL INFILE`로 적재한다.
+- parquet 스키마가 안정적이면 pandas를 거치지 않고 `parquet -> DuckDB staging -> MariaDB`로 바로 간다. 파일별 스키마 드리프트가 생기면 DataFrame 경로로 자동 fallback 한다.
+
+### `persist_tsv_files` (로컬 백업용 TSV 아티팩트)
+
+- 기본값: `false`
+- 목적:
+  - streaming `LOAD DATA` 경로에서 생성된 TSV 조각을 로컬 디스크에 남겨 재실행/감사/부분 재적재에 활용
+- 저장 위치:
+  - `persist_tsv_dir`를 지정하지 않으면 `runs/<table>_<run_id>/tsv`
+- 주의:
+  - `persist_tsv_files=true`는 streaming 경로(`json_streaming_load=true`)에서만 허용
+  - 현재 구현에서는 안전한 파일 보존을 우선해서 `persist_tsv_files=true`면 `overlap_batches`와 `db_load_parallel_tables`를 비활성화함
+  - 최고 속도 경로에서는 기본적으로 꺼져 있음. 필요할 때만 `--persist-tsv-files`로 켜는 게 맞음
+
 ### `schema_mode=freeze` + `extra_column_name`
 
 - 스키마가 계속 바뀌는 데이터에서 “ALTER 반복” 병목을 피하기 위한 전략
@@ -216,7 +255,7 @@ kisti-db-manager json run --config path/to/json_config.json --mode finalize
 ### `except_keys` (원본 보존 강화)
 
 - excepted 테이블에는 제외 브랜치 원문과 컨텍스트를 함께 저장
-  - 기본 동작: 제외된 dict도 컬럼으로 펼치지 않고 `value` + `__except_raw_json__`로 보존 (`excepted_expand_dict=false`)
+  - 기본 동작: 제외된 dict/list는 컬럼으로 펼치지 않고 JSON 문자열(`value` + `__except_raw_json__`)로 보존 (`excepted_expand_dict=false`)
   - `__except_raw_json__`, `__except_path__`, `__except_raw_type__`
   - 가능하면 소스 추적 컬럼(`__source_path__`, `__source_member__`, `__line_no__`, `__record_index__`)
   - 레거시 호환이 필요하면 `excepted_expand_dict=true`로 dict 키 확장 가능(대용량에서는 컬럼 폭증 주의)

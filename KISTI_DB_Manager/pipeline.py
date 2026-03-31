@@ -255,6 +255,31 @@ def _iter_json_records(
     loads = _json_loads_factory()
 
     dc = coerce_data_config(data_config)
+    resume_cursor_raw = dc.get("_resume_cursor")
+    if resume_cursor_raw is None:
+        resume_cursor_raw = dc.get("resume_cursor")
+    resume_source_path: str | None = None
+    resume_source_member: str | None = None
+    resume_line_no: int | None = None
+    resume_skip_until_line_no: int | None = None
+    resume_idx: int | None = None
+    try:
+        resume_backtrack_lines = int(dc.get("resume_backtrack_lines", 0) or 0)
+    except Exception:
+        resume_backtrack_lines = 0
+    if resume_backtrack_lines < 0:
+        resume_backtrack_lines = 0
+    if isinstance(resume_cursor_raw, Mapping):
+        resume_source_path = str(resume_cursor_raw.get("source_path") or "").strip() or None
+        resume_source_member = str(resume_cursor_raw.get("source_member") or "").strip() or None
+        try:
+            ln = resume_cursor_raw.get("line_no")
+            resume_line_no = int(ln) if ln not in (None, "") else None
+        except Exception:
+            resume_line_no = None
+    if resume_line_no is not None and resume_line_no >= 0:
+        resume_skip_until_line_no = max(0, int(resume_line_no) - int(resume_backtrack_lines))
+
     configured_file_type = str(dc.get("file_type") or "").strip().lower()
     records_key = dc.get("records_key") or dc.get("json_records_key")
     json_member_value = dc.get("json_file_names")
@@ -264,6 +289,25 @@ def _iter_json_records(
         json_member_value = dc.get("inner_file_name")
 
     source_infos = _resolve_json_sources(dc, report=report, apply_sampling=True)
+    if resume_source_path:
+        try:
+            resume_abs = str(Path(resume_source_path).expanduser().resolve())
+        except Exception:
+            resume_abs = resume_source_path
+        for i, (_origin, p) in enumerate(source_infos):
+            try:
+                if str(p.resolve()) == resume_abs:
+                    resume_idx = int(i)
+                    break
+            except Exception:
+                if str(p) == resume_abs:
+                    resume_idx = int(i)
+                    break
+        if resume_idx is not None and resume_idx > 0:
+            source_infos = source_infos[resume_idx:]
+        if resume_idx is None:
+            # Safety: if we can't find the resume file in the configured sources, ignore resume cursor.
+            resume_skip_until_line_no = None
 
     max_records = int(max_records) if max_records is not None and int(max_records) > 0 else None
     yielded = 0
@@ -321,7 +365,13 @@ def _iter_json_records(
             return
         yield _record_output(obj, context)
 
-    def iter_jsonl_fileobj(f, *, source_label: str, source_member: str | None = None):
+    def iter_jsonl_fileobj(
+        f,
+        *,
+        source_label: str,
+        source_member: str | None = None,
+        skip_until_line_no: int | None = None,
+    ):
         import time
 
         line_no = 0
@@ -329,6 +379,12 @@ def _iter_json_records(
             line_no += 1
             if max_records is not None and yielded >= max_records:
                 return
+            if skip_until_line_no is not None and int(skip_until_line_no) > 0 and int(line_no) <= int(skip_until_line_no):
+                try:
+                    _bump_bytes(len(raw))
+                except Exception:
+                    pass
+                continue
             line = raw.strip()
             if not line:
                 continue
@@ -357,14 +413,20 @@ def _iter_json_records(
                 context["source_member"] = str(source_member)
             yield _record_output(obj, context)
 
-    def iter_one_source(path: Path, *, source_label: str):
+    def iter_one_source(
+        path: Path,
+        *,
+        source_label: str,
+        skip_until_line_no: int | None = None,
+        skip_member: str | None = None,
+    ):
         import time
 
         file_type = configured_file_type or path.suffix.lstrip(".").lower()
 
         if file_type in {"jsonl", "ndjson", "jsonlines"}:
             with open(path, "rb") as f:
-                yield from iter_jsonl_fileobj(f, source_label=source_label)
+                yield from iter_jsonl_fileobj(f, source_label=source_label, skip_until_line_no=skip_until_line_no)
             return
 
         if file_type == "json":
@@ -395,11 +457,11 @@ def _iter_json_records(
                         _add_parse_time(time.perf_counter() - t1)
                     except Exception:
                         f.seek(0)
-                        yield from iter_jsonl_fileobj(f, source_label=source_label)
+                        yield from iter_jsonl_fileobj(f, source_label=source_label, skip_until_line_no=skip_until_line_no)
                     else:
                         yield from emit(obj, context={"source_path": source_label})
                 else:
-                    yield from iter_jsonl_fileobj(f, source_label=source_label)
+                    yield from iter_jsonl_fileobj(f, source_label=source_label, skip_until_line_no=skip_until_line_no)
             return
 
         if file_type == "zip":
@@ -444,8 +506,14 @@ def _iter_json_records(
                         member_label = f"{source_label}::{member}"
                         suffix = Path(member).suffix.lower()
                         if suffix in {".jsonl", ".ndjson"}:
+                            member_skip = None
+                            if skip_until_line_no is not None and skip_member and str(skip_member) == str(member):
+                                member_skip = int(skip_until_line_no)
                             yield from iter_jsonl_fileobj(
-                                fp, source_label=source_label, source_member=str(member)
+                                fp,
+                                source_label=source_label,
+                                source_member=str(member),
+                                skip_until_line_no=member_skip,
                             )
                             continue
 
@@ -475,19 +543,34 @@ def _iter_json_records(
                                     context={"source_path": source_label, "source_member": str(member)},
                                 )
                             else:
+                                member_skip = None
+                                if skip_until_line_no is not None and skip_member and str(skip_member) == str(member):
+                                    member_skip = int(skip_until_line_no)
                                 yield from iter_jsonl_fileobj(
                                     io.BytesIO(raw),
                                     source_label=source_label,
                                     source_member=str(member),
+                                    skip_until_line_no=member_skip,
                                 )
             return
 
         raise ValueError(f"Unsupported file_type={file_type!r} for JSON pipeline (source={path})")
 
+    skip_next = None
+    if resume_idx is not None and resume_skip_until_line_no is not None and int(resume_skip_until_line_no) > 0:
+        skip_next = int(resume_skip_until_line_no)
+
     for _origin, _path in source_infos:
         if max_records is not None and yielded >= max_records:
             break
-        yield from iter_one_source(_path, source_label=str(_path))
+        yield from iter_one_source(
+            _path,
+            source_label=str(_path),
+            skip_until_line_no=skip_next,
+            skip_member=resume_source_member,
+        )
+        # Apply resume skipping only to the first matching source.
+        skip_next = None
 
 
 def _iter_dict_path_stats(
@@ -981,7 +1064,17 @@ def run_json_pipeline(
         report.set_artifact("schema_hybrid_warmup_batches", int(hybrid_warmup_batches))
     report.set_artifact("auto_alter_table", bool(auto_alter_table_cfg))
     report.set_artifact("fast_load_session", bool(dc.get("fast_load_session", False)))
-    persist_tsv_files = _coerce_bool(dc.get("persist_tsv_files", dc.get("save_local_files", False)), default=False)
+    persist_parquet_files = _coerce_bool(dc.get("persist_parquet_files", True), default=True)
+    persist_parquet_dir = str(dc.get("persist_parquet_dir", "") or "").strip()
+    if persist_parquet_files and not persist_parquet_dir:
+        from pathlib import Path
+
+        persist_parquet_dir = str(Path("runs") / f"{base_table}_{report.run_id}" / "parquet")
+    report.set_artifact("persist_parquet_files", bool(persist_parquet_files))
+    if persist_parquet_files:
+        report.set_artifact("persist_parquet_dir", persist_parquet_dir)
+
+    persist_tsv_files = _coerce_bool(dc.get("persist_tsv_files", False), default=False)
     persist_tsv_dir = str(dc.get("persist_tsv_dir", dc.get("save_local_dir", "")) or "").strip()
     if persist_tsv_files and not persist_tsv_dir:
         from pathlib import Path
@@ -1001,6 +1094,22 @@ def run_json_pipeline(
     if progress_interval_s < 0:
         progress_interval_s = 0.0
     last_progress_write_t = 0.0
+    last_loaded_snapshot: dict[str, Any] | None = None
+    if progress_path:
+        # Preserve the last known "loaded" cursor across restarts until we produce a new one.
+        try:
+            from pathlib import Path
+
+            import json as _json
+
+            p = Path(progress_path)
+            if p.exists():
+                prev = _json.loads(p.read_text(encoding="utf-8") or "{}")
+                loaded = prev.get("loaded")
+                if isinstance(loaded, dict) and isinstance(loaded.get("cursor"), dict) and loaded.get("cursor", {}).get("source_path"):
+                    last_loaded_snapshot = dict(loaded)
+        except Exception:
+            last_loaded_snapshot = None
 
     def _write_progress_snapshot(
         *,
@@ -1010,6 +1119,7 @@ def run_json_pipeline(
         force: bool = False,
     ) -> None:
         nonlocal last_progress_write_t
+        nonlocal last_loaded_snapshot
         if not progress_path:
             return
 
@@ -1040,13 +1150,38 @@ def run_json_pipeline(
                 },
                 "stats": {
                     "records_read": int(report.stats.get("records_read", 0)),
+                    "records_ok": int(report.stats.get("records_ok", 0)),
+                    "records_failed": int(report.stats.get("records_failed", 0)),
                     "batches_total": int(report.stats.get("batches_total", 0)),
                     "rows_loaded": int(report.stats.get("rows_loaded", 0)),
                     "tables_loaded": int(report.stats.get("tables_loaded", 0)),
+                    "parquet_batches_total": int(report.stats.get("parquet_batches_total", 0)),
+                    "parquet_files_persisted": int(report.stats.get("parquet_files_persisted", 0)),
+                    "parquet_rows_emitted": int(report.stats.get("parquet_rows_emitted", 0)),
+                },
+                "timings_ms": {
+                    "json.flatten": int(report.timings_ms.get("json.flatten", 0) or 0),
+                    "json.parquet.persist": int(report.timings_ms.get("json.parquet.persist", 0) or 0),
+                    "json.db.load": int(report.timings_ms.get("json.db.load", 0) or 0),
                 },
             }
             if extra:
                 payload["extra"] = dict(extra)
+
+            # Track the last fully-loaded cursor separately so crash recovery can skip within a shard.
+            if str(stage) == "loaded" and (payload.get("cursor") or {}).get("source_path"):
+                last_loaded_snapshot = {
+                    "updated_at_utc": payload.get("updated_at_utc"),
+                    "cursor": dict(payload.get("cursor") or {}),
+                    "stats": dict(payload.get("stats") or {}),
+                }
+                if "extra" in payload:
+                    try:
+                        last_loaded_snapshot["extra"] = dict(payload.get("extra") or {})
+                    except Exception:
+                        pass
+            if last_loaded_snapshot:
+                payload["loaded"] = last_loaded_snapshot
 
             out = Path(progress_path)
             out.parent.mkdir(parents=True, exist_ok=True)
@@ -1390,7 +1525,13 @@ def run_json_pipeline(
             if tsv_union_merge_max_missing_cols < 0:
                 tsv_union_merge_max_missing_cols = 0
 
-            json_streaming_load = bool(dc.get("json_streaming_load", True))
+            json_streaming_load = bool(dc.get("json_streaming_load", False))
+            if persist_parquet_files and json_streaming_load:
+                json_streaming_load = False
+                report.warn(
+                    stage="json_pipeline.parquet_persist",
+                    message="persist_parquet_files=true disables streaming LOAD DATA; using DataFrame parquet-first path",
+                )
             export_tsv_only = bool(persist_tsv_files) and (not bool(load))
             use_streaming_rows = (
                 bool(json_streaming_load)
@@ -1413,6 +1554,8 @@ def run_json_pipeline(
             pending_load_futures: list[Any] = []
             pending_load_workdirs: list[str] = []
             pending_load_submitted_at: float | None = None
+            pending_load_checkpoint_ctx: dict[str, Any] | None = None
+            pending_load_checkpoint_extra: dict[str, Any] | None = None
 
             def _cleanup_workdirs(workdirs: list[str]) -> None:
                 if not workdirs:
@@ -1434,7 +1577,10 @@ def run_json_pipeline(
                 work in the next batch, we drain these futures so schema/cache stay consistent.
                 """
                 nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
+                nonlocal pending_load_checkpoint_ctx, pending_load_checkpoint_extra
                 if not pending_load_futures:
+                    pending_load_checkpoint_ctx = None
+                    pending_load_checkpoint_extra = None
                     # Best-effort cleanup if a caller attached workdirs without futures.
                     if pending_load_workdirs:
                         _cleanup_workdirs(pending_load_workdirs)
@@ -1448,10 +1594,14 @@ def run_json_pipeline(
                 futures = list(pending_load_futures)
                 workdirs = list(pending_load_workdirs)
                 submitted_at = pending_load_submitted_at
+                checkpoint_ctx = pending_load_checkpoint_ctx
+                checkpoint_extra = pending_load_checkpoint_extra
 
                 pending_load_futures = []
                 pending_load_workdirs = []
                 pending_load_submitted_at = None
+                pending_load_checkpoint_ctx = None
+                pending_load_checkpoint_extra = None
 
                 t0 = time.perf_counter()
                 try:
@@ -1523,6 +1673,8 @@ def run_json_pipeline(
                         report.add_time_s("db.load_data.total.wall", wall_dt)
 
                     _cleanup_workdirs(workdirs)
+                    if checkpoint_ctx:
+                        _write_progress_snapshot(stage="loaded", ctx=checkpoint_ctx, extra=checkpoint_extra, force=True)
 
             def flush_batch(
                 batch_records: list[dict],
@@ -1539,6 +1691,7 @@ def run_json_pipeline(
                 nonlocal flatten_executor, parallel_tsv_disabled
                 nonlocal load_executor, load_tls, load_conns, load_conns_lock, load_parallel_disabled
                 nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
+                nonlocal pending_load_checkpoint_ctx, pending_load_checkpoint_extra
                 nonlocal frozen_allowed_cols_by_table_original
                 batch_idx = int(batch_no)
                 batch_no += 1
@@ -1549,6 +1702,21 @@ def run_json_pipeline(
                         extra={"batch_idx": int(batch_idx), "index_offset": int(index_offset), "batch_records": int(len(batch_records))},
                         force=True,
                     )
+
+                def _batch_progress_extra(
+                    *,
+                    mode: str,
+                    parquet: Mapping[str, Any] | None = None,
+                ) -> dict[str, Any]:
+                    payload: dict[str, Any] = {
+                        "batch_idx": int(batch_idx),
+                        "index_offset": int(index_offset),
+                        "batch_records": int(len(batch_records)),
+                        "mode": str(mode),
+                    }
+                    if parquet:
+                        payload["parquet"] = dict(parquet)
+                    return payload
 
                 def _slug(value: str, *, max_len: int = 96) -> str:
                     s = "".join(ch if (ch.isalnum() or ch in {"_", "-", "."}) else "_" for ch in str(value or ""))
@@ -1610,6 +1778,39 @@ def run_json_pipeline(
                             os.remove(path)
                         except Exception:
                             pass
+
+                def _persist_parquet_table(df: Any, *, table_original: str) -> None:
+                    from pathlib import Path
+
+                    root = Path(str(persist_parquet_dir))
+                    table_dir = root / _slug(table_original, max_len=120)
+                    table_dir.mkdir(parents=True, exist_ok=True)
+
+                    base = f"b{int(batch_idx):06d}"
+                    dst = table_dir / f"{base}.parquet"
+                    i = 1
+                    while dst.exists():
+                        dst = table_dir / f"{base}_{i}.parquet"
+                        i += 1
+
+                    parquet_df = df
+                    reset_index = getattr(parquet_df, "reset_index", None)
+                    if callable(reset_index):
+                        try:
+                            parquet_df = reset_index(drop=True)
+                        except Exception:
+                            parquet_df = df
+
+                    try:
+                        parquet_df.to_parquet(str(dst), index=False)
+                    except TypeError:
+                        parquet_df.to_parquet(str(dst))
+
+                    report.bump("parquet_files_persisted", 1)
+                    try:
+                        report.bump("parquet_rows_emitted", int(len(df)))
+                    except Exception:
+                        pass
 
                 is_hybrid_warmup = schema_mode == "hybrid" and batch_idx < int(hybrid_warmup_batches)
                 if schema_mode == "evolve":
@@ -2297,6 +2498,11 @@ def run_json_pipeline(
 
                                         if futs:
                                             # Attach to pending list and return; keep workdirs until drained.
+                                            pending_load_checkpoint_ctx = dict(record_contexts[-1]) if record_contexts else None
+                                            pending_load_checkpoint_extra = _batch_progress_extra(
+                                                mode="overlap",
+                                                parquet=parquet_progress,
+                                            )
                                             pending_load_futures = list(futs)
                                             pending_load_workdirs = list(workdirs)
                                             pending_load_submitted_at = time.perf_counter()
@@ -2808,6 +3014,49 @@ def run_json_pipeline(
                                     except_key=str(ex_key),
                                 )
 
+                parquet_progress: dict[str, Any] | None = None
+                if persist_parquet_files and tables:
+                    parquet_files_before = int(report.stats.get("parquet_files_persisted", 0) or 0)
+                    parquet_rows_before = int(report.stats.get("parquet_rows_emitted", 0) or 0)
+                    parquet_tables_written = 0
+                    parquet_t0 = time.perf_counter()
+                    try:
+                        with report.timer("json.parquet.persist"):
+                            for table_original, df in tables.items():
+                                cols = list(getattr(df, "columns", []))
+                                if not cols:
+                                    continue
+                                _persist_parquet_table(df, table_original=table_original)
+                                parquet_tables_written += 1
+                    except Exception as e:
+                        report.exception(
+                            stage="json_pipeline.parquet_persist",
+                            message="Failed to persist parquet artifact; skipping DB work for this batch",
+                            exc=e,
+                        )
+                        if not continue_on_error:
+                            raise
+                        return
+                    parquet_progress = {
+                        "tables": int(parquet_tables_written),
+                        "files_delta": int(int(report.stats.get("parquet_files_persisted", 0) or 0) - parquet_files_before),
+                        "rows_delta": int(int(report.stats.get("parquet_rows_emitted", 0) or 0) - parquet_rows_before),
+                        "duration_ms": int(round((time.perf_counter() - parquet_t0) * 1000.0)),
+                    }
+                    if parquet_tables_written > 0:
+                        report.bump("parquet_batches_total", 1)
+                    report.set_artifact("latest_parquet_batch", dict(parquet_progress))
+                    if record_contexts:
+                        _write_progress_snapshot(
+                            stage="parquet_persisted",
+                            ctx=record_contexts[-1],
+                            extra=_batch_progress_extra(
+                                mode="pre_load" if load else "parse_only",
+                                parquet=parquet_progress,
+                            ),
+                            force=True,
+                        )
+
                 # If the previous batch is still loading, wait before doing any DB work for this batch.
                 if overlap_batches:
                     _drain_pending_loads()
@@ -2885,6 +3134,23 @@ def run_json_pipeline(
                                 report.bump("rows_loaded", int(len(df)))
                             except Exception:
                                 pass
+
+                # If we reached here, this batch's DB load completed synchronously.
+                # Emit a "loaded" checkpoint so crash recovery can resume within the current shard.
+                if load and record_contexts:
+                    _write_progress_snapshot(
+                        stage="loaded",
+                        ctx=record_contexts[-1],
+                        extra=_batch_progress_extra(mode="sync", parquet=parquet_progress),
+                        force=True,
+                    )
+                elif record_contexts:
+                    _write_progress_snapshot(
+                        stage="batch_done",
+                        ctx=record_contexts[-1],
+                        extra=_batch_progress_extra(mode="parse_only", parquet=parquet_progress),
+                        force=True,
+                    )
 
             batch_index_offset = 0
             for rec_out in _iter_json_records(dc, report=report, max_records=max_records, with_context=True):
@@ -2966,6 +3232,15 @@ def run_json_pipeline(
             if flatten_ms > 0:
                 tp["json.flatten.records_per_s"] = per_s(records_ok or records_read, flatten_ms)
 
+            parquet_persist_ms = int(report.timings_ms.get("json.parquet.persist", 0) or 0)
+            parquet_files_persisted = int(report.stats.get("parquet_files_persisted", 0) or 0)
+            parquet_rows_emitted = int(report.stats.get("parquet_rows_emitted", 0) or 0)
+            parquet_batches_total = int(report.stats.get("parquet_batches_total", 0) or 0)
+            if parquet_persist_ms > 0:
+                tp["json.parquet.persist.files_per_s"] = per_s(parquet_files_persisted, parquet_persist_ms)
+                tp["json.parquet.persist.rows_per_s"] = per_s(parquet_rows_emitted, parquet_persist_ms)
+                tp["json.parquet.persist.batches_per_s"] = per_s(parquet_batches_total, parquet_persist_ms)
+
             load_ms = int(report.timings_ms.get("json.db.load", 0) or 0)
             if load_ms > 0:
                 tp["json.db.load.rows_per_s"] = per_s(rows_loaded, load_ms)
@@ -2981,6 +3256,11 @@ def run_json_pipeline(
             report.set_artifact("persist_tsv_dir", str(persist_tsv_dir))
             report.set_artifact("persist_tsv_files_count", int(report.stats.get("tsv_files_persisted", 0) or 0))
             report.set_artifact("rows_emitted", int(report.stats.get("rows_emitted", 0) or 0))
+        if persist_parquet_files:
+            report.set_artifact("persist_parquet_dir", str(persist_parquet_dir))
+            report.set_artifact("persist_parquet_batches_count", int(report.stats.get("parquet_batches_total", 0) or 0))
+            report.set_artifact("persist_parquet_files_count", int(report.stats.get("parquet_files_persisted", 0) or 0))
+            report.set_artifact("parquet_rows_emitted", int(report.stats.get("parquet_rows_emitted", 0) or 0))
         maybe_update_artifacts()
         return JsonRunResult(name_maps=name_maps, report=report)
     finally:

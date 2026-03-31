@@ -2,6 +2,8 @@ import unittest
 from unittest.mock import patch
 
 import tempfile
+import types
+import sys
 from pathlib import Path
 
 
@@ -15,6 +17,12 @@ class DummyDF:
 
     def __len__(self):
         return self._rows
+
+    def reset_index(self, drop=True):
+        return self
+
+    def to_parquet(self, path, *args, **kwargs):
+        Path(path).write_text("dummy parquet", encoding="utf-8")
 
 
 class TestJsonPipeline(unittest.TestCase):
@@ -31,6 +39,7 @@ class TestJsonPipeline(unittest.TestCase):
             "file_type": "jsonl",
             "table_name": "base",
             "KEY_SEP": "__",
+            "persist_parquet_files": False,
         }
         db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -63,6 +72,7 @@ class TestJsonPipeline(unittest.TestCase):
             "file_type": "jsonl",
             "table_name": "base",
             "KEY_SEP": "__",
+            "persist_parquet_files": False,
         }
         db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -132,6 +142,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "auto_except_unique_key_threshold": 10,
                 "auto_except_min_observations": 5,
                 "auto_except_novelty_threshold": 1.0,
+                "persist_parquet_files": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -170,6 +181,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "KEY_SEP": "__",
                 "json_streaming_load": True,
                 "db_load_method": "auto",
+                "persist_parquet_files": False,
                 "persist_tsv_files": True,
                 "persist_tsv_dir": str(out_dir),
             }
@@ -196,9 +208,15 @@ class TestJsonPipeline(unittest.TestCase):
                     "excepted": {},
                 }
 
-            with patch("KISTI_DB_Manager.pipeline._iter_json_records", side_effect=fake_iter_records), patch(
-                "KISTI_DB_Manager.processing._safe_flatten_jsons_to_tsv_worker",
-                side_effect=fake_worker,
+            fake_processing = types.SimpleNamespace(
+                extract_data_from_jsons=lambda *args, **kwargs: None,
+                extract_rows_from_jsons=lambda *args, **kwargs: None,
+                _safe_flatten_jsons_to_tsv_worker=fake_worker,
+            )
+
+            with patch("KISTI_DB_Manager.pipeline._iter_json_records", side_effect=fake_iter_records), patch.dict(
+                sys.modules,
+                {"KISTI_DB_Manager.processing": fake_processing},
             ):
                 res = run_json_pipeline(
                     data_config,
@@ -215,6 +233,56 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(len(persisted), 1)
             self.assertEqual((res.report.stats or {}).get("tsv_files_persisted"), 1)
             self.assertEqual((res.report.stats or {}).get("rows_emitted"), 1)
+
+    def test_run_json_pipeline_persists_parquet_artifacts_before_db_load(self):
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "parquet_out"
+            data_config = {
+                "PATH": str(Path(td)),
+                "file_name": "x.jsonl",
+                "file_type": "jsonl",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "json_streaming_load": False,
+                "persist_parquet_files": True,
+                "persist_parquet_dir": str(out_dir),
+            }
+            db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+            def fake_iter_records(_dc, report=None, max_records=None, with_context=False):
+                yield {"id": 1, "x": "a"}
+
+            def fake_extract(batch_records, **_kwargs):
+                return DummyDF(["id", "x"], rows=len(batch_records)), {"items": DummyDF(["id", "items__x"], rows=1)}, {}
+
+            parquet_seen_during_load: list[bool] = []
+
+            def fake_load(df, *_args, **_kwargs):
+                parquet_seen_during_load.append(bool(list(out_dir.rglob("*.parquet"))))
+                return _kwargs.get("name_map")
+
+            with patch("KISTI_DB_Manager.pipeline._iter_json_records", side_effect=fake_iter_records), patch(
+                "KISTI_DB_Manager.manage.fill_table_from_dataframe",
+                side_effect=fake_load,
+            ):
+                res = run_json_pipeline(
+                    data_config,
+                    db_config,
+                    chunk_size=10,
+                    extract_fn=fake_extract,
+                    create=False,
+                    load=True,
+                    index=False,
+                    optimize=False,
+                    continue_on_error=False,
+                )
+
+            persisted = sorted(out_dir.rglob("*.parquet"))
+            self.assertEqual(len(persisted), 2)
+            self.assertEqual((res.report.stats or {}).get("parquet_files_persisted"), 2)
+            self.assertEqual((res.report.stats or {}).get("parquet_rows_emitted"), 2)
+            self.assertTrue(parquet_seen_during_load)
+            self.assertTrue(all(parquet_seen_during_load))
 
 
 if __name__ == "__main__":

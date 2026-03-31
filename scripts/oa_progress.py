@@ -9,7 +9,8 @@ Why this exists:
 
 This script reads:
 - run_dir/config.json (for data_config.PATH and optional data_config.file_names)
-- run_dir/pid (PID of the running job)
+- run_dir/pid (PID of the running job; optional if systemd is used)
+- run_dir/systemd_unit (systemd unit name; optional)
 and uses lsof to find the currently-open OpenAlex source file.
 """
 
@@ -60,7 +61,7 @@ def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _read_pid(run_dir: Path) -> int:
+def _read_pid_file(run_dir: Path) -> int:
     pid_path = run_dir / "pid"
     if not pid_path.exists():
         raise FileNotFoundError(f"pid file not found: {pid_path}")
@@ -94,6 +95,79 @@ def _lsof_open_files(pid: int) -> list[str]:
     return out.splitlines()
 
 
+def _read_systemd_unit(run_dir: Path) -> Optional[str]:
+    p = run_dir / "systemd_unit"
+    if not p.exists():
+        return None
+    try:
+        unit = p.read_text(encoding="utf-8").strip()
+    except Exception:
+        return None
+    return unit or None
+
+
+def _systemd_main_pid(unit: str) -> Optional[int]:
+    unit = str(unit or "").strip()
+    if not unit:
+        return None
+    try:
+        cp = subprocess.run(
+            ["systemctl", "--user", "show", "-p", "MainPID", "--value", unit],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        return None
+
+    raw = (cp.stdout or "").strip()
+    try:
+        pid = int(raw)
+    except Exception:
+        return None
+    if pid <= 0:
+        return None
+    return pid
+
+
+def _resolve_pid(run_dir: Path) -> tuple[int, bool]:
+    """
+    Returns (pid, alive).
+
+    Priority:
+    1) run_dir/pid if present and alive
+    2) systemd unit MainPID if run_dir/systemd_unit exists
+    3) run_dir/pid if present (even if not alive)
+    """
+
+    pid_from_file: Optional[int] = None
+    try:
+        pid_from_file = _read_pid_file(run_dir)
+    except Exception:
+        pid_from_file = None
+
+    if pid_from_file is not None and _pid_alive(pid_from_file):
+        return int(pid_from_file), True
+
+    unit = _read_systemd_unit(run_dir)
+    pid_from_systemd = _systemd_main_pid(unit) if unit else None
+    if pid_from_systemd is not None and _pid_alive(pid_from_systemd):
+        # Keep compatibility with older tooling (and oa_progress' own JSON schema)
+        # by writing pid back to run_dir/pid.
+        try:
+            (run_dir / "pid").write_text(str(int(pid_from_systemd)), encoding="utf-8")
+        except Exception:
+            pass
+        return int(pid_from_systemd), True
+
+    if pid_from_file is not None:
+        return int(pid_from_file), False
+    if pid_from_systemd is not None:
+        return int(pid_from_systemd), False
+    return 0, False
+
+
 def _find_open_works_file(lines: list[str], *, base_path: str) -> tuple[Optional[str], Optional[str]]:
     base = str(base_path or "").rstrip("/")
     for line in lines:
@@ -123,8 +197,7 @@ def probe_run(run_dir: Path, *, write_json: bool = True) -> ProgressProbe:
     if isinstance(file_names, list):
         file_list = [str(x) for x in file_names if x is not None]
 
-    pid = _read_pid(run_dir)
-    alive = _pid_alive(pid)
+    pid, alive = _resolve_pid(run_dir)
     open_abs = None
     open_rel = None
     idx = None
@@ -139,7 +212,7 @@ def probe_run(run_dir: Path, *, write_json: bool = True) -> ProgressProbe:
             except ValueError:
                 idx = None
 
-    probe = ProgressProbe(
+    probe_dict: dict[str, Any] = ProgressProbe(
         timestamp_utc=_utc_now_iso(),
         run_dir=str(run_dir),
         pid=int(pid),
@@ -148,13 +221,36 @@ def probe_run(run_dir: Path, *, write_json: bool = True) -> ProgressProbe:
         open_source_rel=open_rel,
         file_index=idx,
         file_count=total,
-    )
+    ).to_dict()
 
     if write_json:
         out_path = run_dir / "progress_external.json"
-        out_path.write_text(json.dumps(probe.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
+        # Never clobber the last-known shard with nulls: after a crash/restart, we still want
+        # progress_external.json to point at the last observed file so oa_resume_slice_config.py can work.
+        if not probe_dict.get("open_source_rel") and out_path.exists():
+            try:
+                prev = _read_json(out_path)
+                prev_rel = prev.get("open_source_rel")
+                if prev_rel:
+                    probe_dict["open_source_rel"] = prev_rel
+                    probe_dict["open_source_abs"] = prev.get("open_source_abs")
+                    probe_dict["file_index"] = prev.get("file_index")
+                    probe_dict["file_count"] = prev.get("file_count")
+            except Exception:
+                pass
 
-    return probe
+        out_path.write_text(json.dumps(probe_dict, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    return ProgressProbe(
+        timestamp_utc=str(probe_dict.get("timestamp_utc") or ""),
+        run_dir=str(probe_dict.get("run_dir") or ""),
+        pid=int(probe_dict.get("pid") or 0),
+        alive=bool(probe_dict.get("alive")),
+        open_source_abs=probe_dict.get("open_source_abs"),
+        open_source_rel=probe_dict.get("open_source_rel"),
+        file_index=probe_dict.get("file_index"),
+        file_count=probe_dict.get("file_count"),
+    )
 
 
 def main() -> int:

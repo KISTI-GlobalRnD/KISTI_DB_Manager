@@ -871,14 +871,18 @@ def _safe_flatten_jsons_to_tsv_worker(args):
                     return json.dumps(str(value), ensure_ascii=False)
 
         def _build_excepted_row(path: str, value, row: dict, context) -> dict:
-            out: dict = {"value": value}
+            raw_json = _json_dumps_best_effort(value)
+            store_raw_object = bool(excepted_expand_dict)
+            stored_value = value if store_raw_object else raw_json if isinstance(value, (dict, list, tuple, set)) else value
+
+            out: dict = {"value": stored_value}
             if excepted_expand_dict and isinstance(value, dict):
                 out.update(value)
 
             out[index_key] = row.get(index_key)
             out["__except_path__"] = str(path)
             out["__except_raw_type__"] = type(value).__name__
-            out["__except_raw_json__"] = _json_dumps_best_effort(value)
+            out["__except_raw_json__"] = raw_json
 
             if isinstance(context, dict):
                 source_path = context.get("source_path")
@@ -1224,14 +1228,18 @@ def extract_rows_from_jsons(
                 return json.dumps(str(value), ensure_ascii=False)
 
     def _build_excepted_row(path: str, value, row: dict, context) -> dict:
-        out: dict = {"value": value}
+        raw_json = _json_dumps_best_effort(value)
+        store_raw_object = bool(excepted_expand_dict)
+        stored_value = value if store_raw_object else raw_json if isinstance(value, (dict, list, tuple, set)) else value
+
+        out: dict = {"value": stored_value}
         if excepted_expand_dict and isinstance(value, dict):
             out.update(value)
 
         out[index_key] = row.get(index_key)
         out["__except_path__"] = str(path)
         out["__except_raw_type__"] = type(value).__name__
-        out["__except_raw_json__"] = _json_dumps_best_effort(value)
+        out["__except_raw_json__"] = raw_json
 
         if isinstance(context, dict):
             source_path = context.get("source_path")

@@ -83,19 +83,51 @@ def _strip_base(abs_path: str, *, base: str) -> str:
     return a
 
 
-def _extract_resume_rel(run_dir: Path, *, base_path: str) -> Optional[str]:
+def _extract_resume_info(run_dir: Path, *, base_path: str) -> Optional[dict[str, Any]]:
+    """
+    Return best-effort resume info:
+    - source_rel: relative path matching config.file_names
+    - source_abs: absolute path (if known)
+    - line_no/record_index: from internal progress when available
+    """
+
     # Prefer internal progress checkpoint if present.
     internal = run_dir / "run_report.json.progress.json"
     if internal.exists():
         try:
             pj = _read_json(internal)
-            cur = pj.get("cursor") or {}
+
+            cur: dict[str, Any] = {}
+            stage = pj.get("stage")
+            updated_at_utc = pj.get("updated_at_utc")
+
+            # Newer pipeline writes a sticky "loaded" cursor; prefer it to reduce duplicates on resume.
+            loaded = pj.get("loaded")
+            if isinstance(loaded, dict):
+                lc = loaded.get("cursor")
+                if isinstance(lc, dict) and lc.get("source_path"):
+                    cur = dict(lc)
+                    stage = "loaded"
+                    updated_at_utc = loaded.get("updated_at_utc") or updated_at_utc
+                else:
+                    cur = dict(pj.get("cursor") or {})
+            else:
+                cur = dict(pj.get("cursor") or {})
+
             src = cur.get("source_path")
             if src:
-                rel = _strip_base(str(src), base=base_path)
-                rel = rel.strip()
+                rel = _strip_base(str(src), base=base_path).strip()
                 if rel:
-                    return rel
+                    return {
+                        "source_rel": rel,
+                        "source_abs": str(src),
+                        "source_member": cur.get("source_member"),
+                        "line_no": cur.get("line_no"),
+                        "record_index": cur.get("record_index"),
+                        "stage": stage,
+                        "updated_at_utc": updated_at_utc,
+                        "from": "internal",
+                    }
         except Exception:
             pass
 
@@ -105,7 +137,17 @@ def _extract_resume_rel(run_dir: Path, *, base_path: str) -> Optional[str]:
             pj = _read_json(external)
             rel = str(pj.get("open_source_rel") or "").strip()
             if rel:
-                return rel
+                abs_path = str(pj.get("open_source_abs") or "").strip() or None
+                return {
+                    "source_rel": rel,
+                    "source_abs": abs_path,
+                    "source_member": None,
+                    "line_no": None,
+                    "record_index": None,
+                    "stage": "external",
+                    "updated_at_utc": pj.get("timestamp_utc"),
+                    "from": "external",
+                }
         except Exception:
             pass
 
@@ -115,7 +157,17 @@ def _extract_resume_rel(run_dir: Path, *, base_path: str) -> Optional[str]:
         if isinstance(pj, dict):
             rel = str(pj.get("open_source_rel") or "").strip()
             if rel:
-                return rel
+                abs_path = str(pj.get("open_source_abs") or "").strip() or None
+                return {
+                    "source_rel": rel,
+                    "source_abs": abs_path,
+                    "source_member": None,
+                    "line_no": None,
+                    "record_index": None,
+                    "stage": "external_log",
+                    "updated_at_utc": pj.get("timestamp_utc"),
+                    "from": "external_log",
+                }
 
     return None
 
@@ -172,7 +224,8 @@ def main() -> int:
         print("[resume-slice] empty data_config.file_names; skip")
         return 0
 
-    resume_rel = _extract_resume_rel(run_dir, base_path=base_path)
+    resume = _extract_resume_info(run_dir, base_path=base_path)
+    resume_rel = None if not isinstance(resume, dict) else str(resume.get("source_rel") or "").strip()
     if not resume_rel:
         print("[resume-slice] no progress snapshot found; skip")
         return 0
@@ -182,22 +235,10 @@ def main() -> int:
         print(f"[resume-slice] resume shard not in file_names: {resume_rel}")
         return 0
 
-    if idx <= 0:
-        print(f"[resume-slice] already aligned (idx={idx}, shard={normalized_rel})")
-        return 0
-
-    new_list = file_names[idx:]
+    new_list = file_names[idx:] if int(idx) > 0 else list(file_names)
     if not new_list:
         print("[resume-slice] slicing would make file_names empty; skip")
         return 0
-
-    # Backup original config as-is.
-    try:
-        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        bak = cfg_path.with_name(cfg_path.name + f".bak.{ts}")
-        bak.write_bytes(cfg_path.read_bytes())
-    except Exception:
-        pass
 
     # Update config in-memory.
     dc["file_names"] = new_list
@@ -220,11 +261,68 @@ def main() -> int:
     meta["start_rel"] = _strip_works_prefix(str(normalized_rel))
     if new_start is not None:
         meta["start_index_1based"] = int(new_start)
+    # Extra debug fields (best-effort)
+    try:
+        meta["resume_stage"] = str(resume.get("stage") or "") if isinstance(resume, dict) else ""
+    except Exception:
+        meta["resume_stage"] = ""
+    if isinstance(resume, dict):
+        meta["resume_updated_at_utc"] = resume.get("updated_at_utc")
+        meta["resume_line_no"] = resume.get("line_no")
+        meta["resume_record_index"] = resume.get("record_index")
     meta["remaining_files"] = int(len(new_list))
     meta["first_file"] = _strip_works_prefix(str(new_list[0]))
     meta["last_file"] = _strip_works_prefix(str(new_list[-1]))
     dc["_resume_meta"] = meta
+
+    # Persist a best-effort line-level cursor so the pipeline can skip within the first shard on restart.
+    resume_abs = None
+    if isinstance(resume, dict):
+        resume_abs = str(resume.get("source_abs") or "").strip() or None
+        if not resume_abs and base_path and resume_rel:
+            try:
+                resume_abs = str((Path(base_path) / str(resume_rel)).resolve())
+            except Exception:
+                resume_abs = str(Path(base_path) / str(resume_rel))
+    new_cursor: dict[str, Any] | None = None
+    if resume_abs:
+        def _coerce_int(v):
+            try:
+                if v in (None, ""):
+                    return None
+                return int(v)
+            except Exception:
+                return None
+
+        stage = None if not isinstance(resume, dict) else str(resume.get("stage") or "").strip().lower()
+        allow_line_resume = stage == "loaded"
+        new_cursor = {
+            "source_path": str(resume_abs),
+            "source_member": None if not isinstance(resume, dict) else (resume.get("source_member") or None),
+            "line_no": None if (not allow_line_resume) or (not isinstance(resume, dict)) else _coerce_int(resume.get("line_no")),
+            "record_index": None
+            if (not allow_line_resume) or (not isinstance(resume, dict))
+            else _coerce_int(resume.get("record_index")),
+        }
+
+    old_cursor = dc.get("_resume_cursor")
+    cursor_changed = bool(new_cursor) and (not isinstance(old_cursor, dict) or old_cursor != new_cursor)
+    sliced = bool(int(idx) > 0)
+    if (not sliced) and (not cursor_changed):
+        print(f"[resume-slice] already aligned (idx={idx}, shard={normalized_rel})")
+        return 0
+
+    if new_cursor:
+        dc["_resume_cursor"] = new_cursor
     cfg["data_config"] = dc
+
+    # Backup original config as-is.
+    try:
+        ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        bak = cfg_path.with_name(cfg_path.name + f".bak.{ts}")
+        bak.write_bytes(cfg_path.read_bytes())
+    except Exception:
+        pass
 
     # Atomic rewrite.
     try:
@@ -235,10 +333,14 @@ def main() -> int:
         print(f"[resume-slice] failed to write config.json: {e}")
         return 0
 
-    print(
-        f"[resume-slice] updated file_names: dropped {idx} file(s); "
-        f"next shard={normalized_rel}; remaining={len(new_list)}"
-    )
+    if sliced:
+        print(
+            f"[resume-slice] updated file_names: dropped {idx} file(s); "
+            f"next shard={normalized_rel}; remaining={len(new_list)}"
+        )
+    else:
+        ln = None if not isinstance(resume, dict) else resume.get("line_no")
+        print(f"[resume-slice] updated resume cursor: shard={normalized_rel}, line_no={ln}")
     return 0
 
 

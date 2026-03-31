@@ -19,6 +19,10 @@ class MissingDependencyError(RuntimeError):
     """Raised when an optional dependency group is required but not installed."""
 
 
+class ConfigValidationError(ValueError):
+    """Raised when CLI/config options resolve to an invalid pipeline combination."""
+
+
 def _ensure_optional_deps(feature: str, modules: list[str], *, extras: list[str]) -> None:
     missing: list[str] = []
     for mod in modules:
@@ -37,6 +41,33 @@ def _ensure_optional_deps(feature: str, modules: list[str], *, extras: list[str]
         f"{feature} requires missing dependencies: {miss}. "
         f"Install with: pip install -e '.[{extras_arg}]'"
     )
+
+
+def _validate_json_run_config(data_config: Mapping[str, Any], *, mode_name: str) -> None:
+    streaming = bool(data_config.get("json_streaming_load", False))
+    persist_parquet = bool(data_config.get("persist_parquet_files", False))
+    persist_tsv = bool(data_config.get("persist_tsv_files", False))
+
+    errors: list[str] = []
+    if persist_parquet and streaming:
+        errors.append(
+            "persist_parquet_files=true cannot be combined with json_streaming_load=true; "
+            "use --mode parse-parquet or disable one of the two options."
+        )
+    if persist_tsv and not streaming:
+        errors.append(
+            "persist_tsv_files=true requires json_streaming_load=true; "
+            "use --mode ingest-fast or disable TSV persistence."
+        )
+    if persist_parquet and persist_tsv:
+        errors.append(
+            "persist_parquet_files=true cannot be combined with persist_tsv_files=true; "
+            "choose one artifact strategy."
+        )
+
+    if errors:
+        mode_hint = f" mode={mode_name!r}" if str(mode_name or "").strip() else ""
+        raise ConfigValidationError("Invalid json run configuration" + mode_hint + ": " + " ".join(errors))
 
 
 def _cmd_version(_args: argparse.Namespace) -> int:
@@ -506,9 +537,12 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     data_config = cfg.get("data_config") or cfg.get("data") or {}
     db_config = cfg.get("db_config") or cfg.get("db") or {}
+    from .config import coerce_data_config, coerce_db_config
 
     from .modes import apply_mode, resolve_mode_name
 
+    data_config = coerce_data_config(data_config, inplace=isinstance(data_config, dict))
+    db_config = coerce_db_config(db_config, inplace=isinstance(db_config, dict))
     mode_name = resolve_mode_name(getattr(args, "mode", None), data_config)
     mode_spec = apply_mode(mode_name, data_config)
 
@@ -532,6 +566,10 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["overlap_batches"] = bool(args.overlap_batches)
     if getattr(args, "json_streaming_load", None) is not None:
         data_config["json_streaming_load"] = bool(args.json_streaming_load)
+    if getattr(args, "persist_parquet_files", None) is not None:
+        data_config["persist_parquet_files"] = bool(args.persist_parquet_files)
+    if getattr(args, "persist_parquet_dir", None):
+        data_config["persist_parquet_dir"] = str(args.persist_parquet_dir)
     if getattr(args, "tsv_merge_union_schema", None) is not None:
         data_config["tsv_merge_union_schema"] = bool(args.tsv_merge_union_schema)
     if getattr(args, "tsv_union_merge_min_coverage", None) is not None:
@@ -566,7 +604,12 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     index = _resolve_bool(getattr(args, "index", None), mode_spec.stage_defaults.get("index", True)) and not bool(args.dry_run)
     optimize = _resolve_bool(getattr(args, "optimize", None), mode_spec.stage_defaults.get("optimize", True)) and not bool(args.dry_run)
 
-    _ensure_optional_deps("json run", ["numpy", "pandas", "tqdm", "orjson", "xmltodict"], extras=["json"])
+    _validate_json_run_config(data_config, mode_name=mode_spec.name)
+
+    json_modules = ["numpy", "pandas", "tqdm", "orjson", "xmltodict"]
+    if bool(data_config.get("persist_parquet_files", False)):
+        json_modules.append("pyarrow")
+    _ensure_optional_deps("json run", json_modules, extras=["json"])
     if create or load or index or optimize:
         db_mods = ["pymysql"]
         if load:
@@ -581,6 +624,12 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     report = RunReport()
 
     report.set_artifact("mode", mode_spec.name)
+    report.set_artifact(
+        "json_execution_path",
+        "streaming-load"
+        if bool(data_config.get("json_streaming_load", False))
+        else "parquet-first",
+    )
     # Fast progress tracking: when --report is provided, also emit a small progress snapshot
     # periodically during the run. This makes it easy to locate the last shard/line after crashes.
     if args.report:
@@ -944,7 +993,17 @@ def build_parser() -> argparse.ArgumentParser:
         "--json-streaming-load",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Use row-based streaming TSV load when LOAD DATA is enabled (default: config or true)",
+        help="Use row-based streaming TSV load when LOAD DATA is enabled (default: config or false)",
+    )
+    p_json_run.add_argument(
+        "--persist-parquet-files",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Save flattened parquet artifacts on local disk before DB load (default: config or true).",
+    )
+    p_json_run.add_argument(
+        "--persist-parquet-dir",
+        help="Directory to save parquet artifacts (default: runs/<table>_<run_id>/parquet).",
     )
     p_json_run.add_argument(
         "--tsv-merge-union-schema",
@@ -1117,7 +1176,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except MissingDependencyError as e:
+    except (MissingDependencyError, ConfigValidationError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
