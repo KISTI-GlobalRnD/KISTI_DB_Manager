@@ -30,6 +30,8 @@ class TestReviewSvg(unittest.TestCase):
         self.assertIn(">authorships</text>", svg)
         self.assertIn(">excepted/abstract_inverted_index</text>", svg)
         self.assertIn('fill="#FFF8C5"', svg)
+        self.assertIn('class="edge-card"', svg)
+        self.assertIn("1:N", svg)
 
 
 if __name__ == "__main__":

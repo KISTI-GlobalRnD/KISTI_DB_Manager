@@ -526,6 +526,22 @@ def render_simple_svg(
         more_h = 18 if len(cols) > len(visible) else 0
         return max(box_h, header_h + sub_h + metric_h + len(visible) * row_h + more_h + footer_h)
 
+    def _cardinality_marker(x: int, y: int, *, side: str, kind: str) -> list[str]:
+        if side not in {"left", "right"}:
+            return []
+        dx = 1 if side == "right" else -1
+        out: list[str] = []
+        if kind == "one":
+            bx = x + (dx * 5)
+            out.append(f'<line class="edge-card" x1="{bx}" y1="{y - 7}" x2="{bx}" y2="{y + 7}" />')
+            return out
+        px = x + (dx * 2)
+        ex = x + (dx * 12)
+        out.append(f'<line class="edge-card" x1="{px}" y1="{y}" x2="{ex}" y2="{y}" />')
+        out.append(f'<line class="edge-card" x1="{px}" y1="{y}" x2="{ex}" y2="{y - 6}" />')
+        out.append(f'<line class="edge-card" x1="{px}" y1="{y}" x2="{ex}" y2="{y + 6}" />')
+        return out
+
     def depth(name: str) -> int:
         if name == base_table:
             return 0
@@ -591,8 +607,12 @@ def render_simple_svg(
     lines.append(".col-key { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; font-weight: 700; fill: #0550ae; }")
     lines.append(".col-more { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #6b7280; }")
     lines.append(".edge { stroke: #64748B; stroke-width: 1.5; fill: none; }")
+    lines.append(".edge-card { stroke: #64748B; stroke-width: 1.3; fill: none; }")
     lines.append(".edge-label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #475467; }")
     lines.append(".node { cursor: pointer; }")
+    lines.append(".node.selected .box, .node.selected .head { stroke: #0f766e; stroke-width: 2.5; }")
+    lines.append(".node.selected .col-name, .node.selected .col-key { fill: #0f172a; font-weight: 700; }")
+    lines.append(".edge.selected + .edge-label, .edge.selected ~ .edge-card { stroke: #0f766e; fill: #0f766e; }")
     lines.append(".diff-added .box { stroke: #1a7f37; stroke-width: 2; }")
     lines.append(".diff-removed .box { stroke: #cf222e; stroke-width: 2; }")
     lines.append(".diff-changed .box { stroke: #bf8700; stroke-width: 2; }")
@@ -614,6 +634,7 @@ def render_simple_svg(
         c_info = name_to_info.get(child)
         p_sql = p_info.name_sql if p_info is not None else parent
         c_sql = c_info.name_sql if c_info is not None else child
+        lines.append('<g class="edge-group">')
         lines.append(
             f'<path class="edge" data-parent="{_svg_escape(parent)}" data-child="{_svg_escape(child)}" '
             f'data-parent-sql="{_svg_escape(p_sql)}" data-child-sql="{_svg_escape(c_sql)}" '
@@ -621,6 +642,9 @@ def render_simple_svg(
         )
         edge_text = _truncate_middle(f"{label} · 1:N", max_chars=28)
         lines.append(f'<text class="edge-label" x="{mid}" y="{int((y1 + y2) / 2) - 6}" text-anchor="middle">{_svg_escape(edge_text)}</text>')
+        lines.extend(_cardinality_marker(x1, y1, side="right", kind="one"))
+        lines.extend(_cardinality_marker(x2, y2, side="left", kind="many"))
+        lines.append("</g>")
 
     for name in tables:
         x, y = pos.get(name, (30, 30))

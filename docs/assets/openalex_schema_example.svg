@@ -10,54 +10,184 @@
 .col-key { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; font-weight: 700; fill: #0550ae; }
 .col-more { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #6b7280; }
 .edge { stroke: #64748B; stroke-width: 1.5; fill: none; }
+.edge-card { stroke: #64748B; stroke-width: 1.3; fill: none; }
 .edge-label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #475467; }
 .node { cursor: pointer; }
+.node.selected .box, .node.selected .head { stroke: #0f766e; stroke-width: 2.5; }
+.node.selected .col-name, .node.selected .col-key { fill: #0f172a; font-weight: 700; }
+.edge.selected + .edge-label, .edge.selected ~ .edge-card { stroke: #0f766e; fill: #0f766e; }
 .diff-added .box { stroke: #1a7f37; stroke-width: 2; }
 .diff-removed .box { stroke: #cf222e; stroke-width: 2; }
 .diff-changed .box { stroke: #bf8700; stroke-width: 2; }
 </style>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__authorships" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__authorships" d="M 390 264 C 420 264, 420 174, 450 174" />
 <text class="edge-label" x="420" y="213" text-anchor="middle">authorships · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="174" x2="438" y2="174" />
+<line class="edge-card" x1="448" y1="174" x2="438" y2="168" />
+<line class="edge-card" x1="448" y1="174" x2="438" y2="180" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__best_oa_location__source__host_organization_lineage" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_best_oa_location_source_host_organization_lineage" d="M 390 264 C 840 264, 840 105, 1290 105" />
 <text class="edge-label" x="840" y="178" text-anchor="middle">best_oa_locat…_lineage · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="1288" y1="105" x2="1278" y2="105" />
+<line class="edge-card" x1="1288" y1="105" x2="1278" y2="99" />
+<line class="edge-card" x1="1288" y1="105" x2="1278" y2="111" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__best_oa_location__source__host_organization_lineage_names" data-parent-sql="openalex_works_20260225" data-child-sql="works_best_oa_location_source_host_organization_lineage_names" d="M 390 264 C 840 264, 840 299, 1290 299" />
 <text class="edge-label" x="840" y="275" text-anchor="middle">best_oa_locat…ge_names · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="1288" y1="299" x2="1278" y2="299" />
+<line class="edge-card" x1="1288" y1="299" x2="1278" y2="293" />
+<line class="edge-card" x1="1288" y1="299" x2="1278" y2="305" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__best_oa_location__source__issn" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__best_oa_location__source__issn" d="M 390 264 C 840 264, 840 493, 1290 493" />
 <text class="edge-label" x="840" y="372" text-anchor="middle">best_oa_locat…ce__issn · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="1288" y1="493" x2="1278" y2="493" />
+<line class="edge-card" x1="1288" y1="493" x2="1278" y2="487" />
+<line class="edge-card" x1="1288" y1="493" x2="1278" y2="499" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__concepts" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__concepts" d="M 390 264 C 420 264, 420 477, 450 477" />
 <text class="edge-label" x="420" y="364" text-anchor="middle">concepts · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="477" x2="438" y2="477" />
+<line class="edge-card" x1="448" y1="477" x2="438" y2="471" />
+<line class="edge-card" x1="448" y1="477" x2="438" y2="483" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__corresponding_author_ids" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__corresponding_author_ids" d="M 390 264 C 420 264, 420 711, 450 711" />
 <text class="edge-label" x="420" y="481" text-anchor="middle">corresponding…thor_ids · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="711" x2="438" y2="711" />
+<line class="edge-card" x1="448" y1="711" x2="438" y2="705" />
+<line class="edge-card" x1="448" y1="711" x2="438" y2="717" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__corresponding_institution_ids" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__corresponding_institution_ids" d="M 390 264 C 420 264, 420 905, 450 905" />
 <text class="edge-label" x="420" y="578" text-anchor="middle">corresponding…tion_ids · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="905" x2="438" y2="905" />
+<line class="edge-card" x1="448" y1="905" x2="438" y2="899" />
+<line class="edge-card" x1="448" y1="905" x2="438" y2="911" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__counts_by_year" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__counts_by_year" d="M 390 264 C 420 264, 420 1109, 450 1109" />
 <text class="edge-label" x="420" y="680" text-anchor="middle">counts_by_year · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="1109" x2="438" y2="1109" />
+<line class="edge-card" x1="448" y1="1109" x2="438" y2="1103" />
+<line class="edge-card" x1="448" y1="1109" x2="438" y2="1115" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__excepted__abstract_inverted_index" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__excepted__abstract_inverted_index" d="M 390 264 C 630 264, 630 164, 870 164" />
 <text class="edge-label" x="630" y="208" text-anchor="middle">excepted__abs…ed_index · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="868" y1="164" x2="858" y2="164" />
+<line class="edge-card" x1="868" y1="164" x2="858" y2="158" />
+<line class="edge-card" x1="868" y1="164" x2="858" y2="170" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__funders" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__funders" d="M 390 264 C 420 264, 420 1333, 450 1333" />
 <text class="edge-label" x="420" y="792" text-anchor="middle">funders · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="1333" x2="438" y2="1333" />
+<line class="edge-card" x1="448" y1="1333" x2="438" y2="1327" />
+<line class="edge-card" x1="448" y1="1333" x2="438" y2="1339" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__indexed_in" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__indexed_in" d="M 390 264 C 420 264, 420 1547, 450 1547" />
 <text class="edge-label" x="420" y="899" text-anchor="middle">indexed_in · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="1547" x2="438" y2="1547" />
+<line class="edge-card" x1="448" y1="1547" x2="438" y2="1541" />
+<line class="edge-card" x1="448" y1="1547" x2="438" y2="1553" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__keywords" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__keywords" d="M 390 264 C 420 264, 420 1761, 450 1761" />
 <text class="edge-label" x="420" y="1006" text-anchor="middle">keywords · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="1761" x2="438" y2="1761" />
+<line class="edge-card" x1="448" y1="1761" x2="438" y2="1755" />
+<line class="edge-card" x1="448" y1="1761" x2="438" y2="1767" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__locations" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__locations" d="M 390 264 C 420 264, 420 2054, 450 2054" />
 <text class="edge-label" x="420" y="1153" text-anchor="middle">locations · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="2054" x2="438" y2="2054" />
+<line class="edge-card" x1="448" y1="2054" x2="438" y2="2048" />
+<line class="edge-card" x1="448" y1="2054" x2="438" y2="2060" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__mesh" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__mesh" d="M 390 264 C 420 264, 420 2367, 450 2367" />
 <text class="edge-label" x="420" y="1309" text-anchor="middle">mesh · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="2367" x2="438" y2="2367" />
+<line class="edge-card" x1="448" y1="2367" x2="438" y2="2361" />
+<line class="edge-card" x1="448" y1="2367" x2="438" y2="2373" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__primary_location__source__host_organization_lineage" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_primary_location_source_host_organization_lineage" d="M 390 264 C 840 264, 840 687, 1290 687" />
 <text class="edge-label" x="840" y="469" text-anchor="middle">primary_locat…_lineage · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="1288" y1="687" x2="1278" y2="687" />
+<line class="edge-card" x1="1288" y1="687" x2="1278" y2="681" />
+<line class="edge-card" x1="1288" y1="687" x2="1278" y2="693" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__primary_location__source__host_organization_lineage_names" data-parent-sql="openalex_works_20260225" data-child-sql="works_primary_location_source_host_organization_lineage_names" d="M 390 264 C 840 264, 840 881, 1290 881" />
 <text class="edge-label" x="840" y="566" text-anchor="middle">primary_locat…ge_names · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="1288" y1="881" x2="1278" y2="881" />
+<line class="edge-card" x1="1288" y1="881" x2="1278" y2="875" />
+<line class="edge-card" x1="1288" y1="881" x2="1278" y2="887" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__primary_location__source__issn" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__primary_location__source__issn" d="M 390 264 C 840 264, 840 1075, 1290 1075" />
 <text class="edge-label" x="840" y="663" text-anchor="middle">primary_locat…ce__issn · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="1288" y1="1075" x2="1278" y2="1075" />
+<line class="edge-card" x1="1288" y1="1075" x2="1278" y2="1069" />
+<line class="edge-card" x1="1288" y1="1075" x2="1278" y2="1081" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__referenced_works" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__referenced_works" d="M 390 264 C 420 264, 420 2601, 450 2601" />
 <text class="edge-label" x="420" y="1426" text-anchor="middle">referenced_works · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="2601" x2="438" y2="2601" />
+<line class="edge-card" x1="448" y1="2601" x2="438" y2="2595" />
+<line class="edge-card" x1="448" y1="2601" x2="438" y2="2607" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__related_works" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__related_works" d="M 390 264 C 420 264, 420 2795, 450 2795" />
 <text class="edge-label" x="420" y="1523" text-anchor="middle">related_works · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="2795" x2="438" y2="2795" />
+<line class="edge-card" x1="448" y1="2795" x2="438" y2="2789" />
+<line class="edge-card" x1="448" y1="2795" x2="438" y2="2801" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__sustainable_development_goals" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__sustainable_development_goals" d="M 390 264 C 420 264, 420 3009, 450 3009" />
 <text class="edge-label" x="420" y="1630" text-anchor="middle">sustainable_d…nt_goals · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="3009" x2="438" y2="3009" />
+<line class="edge-card" x1="448" y1="3009" x2="438" y2="3003" />
+<line class="edge-card" x1="448" y1="3009" x2="438" y2="3015" />
+</g>
+<g class="edge-group">
 <path class="edge" data-parent="openalex_works_20260225" data-child="openalex_works_20260225__topics" data-parent-sql="openalex_works_20260225" data-child-sql="openalex_works_20260225__topics" d="M 390 264 C 420 264, 420 3292, 450 3292" />
 <text class="edge-label" x="420" y="1772" text-anchor="middle">topics · 1:N</text>
+<line class="edge-card" x1="395" y1="257" x2="395" y2="271" />
+<line class="edge-card" x1="448" y1="3292" x2="438" y2="3292" />
+<line class="edge-card" x1="448" y1="3292" x2="438" y2="3286" />
+<line class="edge-card" x1="448" y1="3292" x2="438" y2="3298" />
+</g>
 <g id="node_openalex_works_20260225" class="node" data-name="openalex_works_20260225" data-name-sql="openalex_works_20260225" data-rows="0" data-rows-exact="0" data-size="0" data-cols="98" data-name-original="openalex_works_20260225">
 <title>openalex_works_20260225 · rows: n/a · cols: 98</title>
 <rect class="box" x="30" y="30" width="360" height="468" fill="#E6F0FF" />
