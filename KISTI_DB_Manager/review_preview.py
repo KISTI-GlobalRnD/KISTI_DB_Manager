@@ -765,6 +765,95 @@ def _compute_union_view(
         "truncated": bool(truncated or any_truncated),
     }
 
+def _reconstruct_abstract_from_inverted_index(inv: Any, *, max_words: int = 120) -> dict[str, Any] | None:
+    if not isinstance(inv, Mapping):
+        return None
+
+    pos_to_tokens: dict[int, list[str]] = {}
+    token_count = 0
+    position_count = 0
+    for token, positions in inv.items():
+        if not isinstance(positions, list):
+            continue
+        token_count += 1
+        tok = str(token)
+        for pos in positions:
+            if not isinstance(pos, int):
+                continue
+            position_count += 1
+            pos_to_tokens.setdefault(int(pos), []).append(tok)
+
+    if not pos_to_tokens:
+        return None
+
+    max_position = max(pos_to_tokens)
+    ordered_positions = sorted(pos_to_tokens)
+    words: list[str] = []
+    collisions = 0
+    for pos in ordered_positions[:max_words]:
+        toks = pos_to_tokens.get(pos) or []
+        if not toks:
+            continue
+        words.append(str(toks[0]))
+        if len(toks) > 1:
+            collisions += len(toks) - 1
+
+    preview_text = " ".join(words).strip()
+    if len(ordered_positions) > max_words:
+        preview_text = (preview_text + " …").strip()
+
+    density = 0.0
+    if max_position >= 0:
+        density = float(len(pos_to_tokens)) / float(max_position + 1)
+
+    return {
+        "token_count": int(token_count),
+        "position_count": int(position_count),
+        "unique_positions": int(len(pos_to_tokens)),
+        "max_position": int(max_position),
+        "position_density": float(round(density, 4)),
+        "collisions": int(collisions),
+        "text_preview": preview_text,
+    }
+
+
+def _build_openalex_abstract_spotlight(
+    *,
+    record: Mapping[str, Any],
+    flat: Mapping[str, Any],
+    key_sep: str,
+    except_keys_effective: list[str],
+) -> dict[str, Any] | None:
+    inv = record.get("abstract_inverted_index")
+    if not isinstance(inv, Mapping):
+        return None
+
+    subtables = list(flat.get("subtables") or []) if isinstance(flat, Mapping) else []
+    excepted = flat.get("excepted") or {} if isinstance(flat, Mapping) else {}
+    except_path = "abstract_inverted_index"
+    subtable_rows = [st for st in subtables if str((st or {}).get("sub_key") or "").startswith(except_path + key_sep)]
+    reconstructed = _reconstruct_abstract_from_inverted_index(inv)
+
+    effective_set = {str(x) for x in (except_keys_effective or []) if str(x)}
+    excepted_now = bool(
+        except_path in effective_set
+        or str(except_path).split(key_sep)[-1] in effective_set
+        or (isinstance(excepted, Mapping) and except_path in excepted)
+    )
+    flatten_mode = "excepted" if excepted_now else ("split-subtables" if subtable_rows else "base-or-other")
+
+    return {
+        "kind": "openalex_abstract",
+        "path": except_path,
+        "flatten_mode": flatten_mode,
+        "excepted": bool(excepted_now),
+        "dict_keys": int(len(inv)),
+        "sample_tokens": [str(x) for x in list(inv.keys())[:8]],
+        "subtable_count": int(len(subtable_rows)),
+        "sample_subtables": [str((st or {}).get("sub_key") or "") for st in subtable_rows[:8]],
+        "reconstructed": reconstructed,
+    }
+
 
 def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[str, Any]], union: Mapping[str, Any] | None = None) -> str:
     def h(x: Any) -> str:
@@ -781,10 +870,25 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Raw vs Flatten Preview</title>
   <style>
-    body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 24px; color: #1f2328; }}
+    :root {{
+      --bg: #f5f7fb;
+      --card: #ffffff;
+      --ink: #1f2328;
+      --muted: #57606a;
+      --line: #d0d7de;
+      --accent: #0969da;
+      --accent-soft: #ddf4ff;
+      --warn: #bf8700;
+      --warn-soft: #fff8c5;
+      --danger: #cf222e;
+      --danger-soft: #ffebe9;
+      --success: #1a7f37;
+      --success-soft: #dafbe1;
+    }}
+    body {{ font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; margin: 0; padding: 24px; color: var(--ink); background: linear-gradient(180deg, #fbfcfe 0%, var(--bg) 100%); }}
     code {{ background: #f6f8fa; padding: 2px 5px; border-radius: 6px; }}
-    .muted {{ color: #57606a; }}
-    .card {{ border: 1px solid #d0d7de; border-radius: 12px; padding: 16px; margin: 16px 0; background: #ffffff; }}
+    .muted {{ color: var(--muted); }}
+    .card {{ border: 1px solid var(--line); border-radius: 16px; padding: 16px; margin: 16px 0; background: var(--card); box-shadow: 0 10px 30px rgba(31,35,40,0.04); }}
     .row {{ display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }}
     @media (max-width: 1200px) {{ .row {{ grid-template-columns: 1fr; }} }}
     .toolbar {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
@@ -793,6 +897,28 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     .toolbar label {{ display: inline-flex; gap: 6px; align-items: center; }}
     .pill {{ display: inline-flex; gap: 6px; align-items: center; padding: 3px 8px; border: 1px solid #d0d7de; border-radius: 999px; background: #f6f8fa; font-size: 12px; }}
     .pill.pill-table {{ border-color: #0969da; background: #ddf4ff; }}
+    .summary-grid {{ display:grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 16px 0; }}
+    @media (max-width: 1100px) {{ .summary-grid {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    @media (max-width: 700px) {{ .summary-grid {{ grid-template-columns: 1fr; }} }}
+    .summary-card {{ border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: linear-gradient(180deg, #fff 0%, #f9fbff 100%); }}
+    .summary-k {{ font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }}
+    .summary-v {{ margin-top: 8px; font-size: 28px; font-weight: 700; line-height: 1; }}
+    .summary-note {{ margin-top: 6px; font-size: 12px; color: var(--muted); }}
+    .spotlight-card {{ border-color: #b6d4fe; background: linear-gradient(180deg, #ffffff 0%, #eef6ff 100%); }}
+    .spotlight-grid {{ display:grid; grid-template-columns: 1.3fr 0.9fr; gap: 16px; }}
+    @media (max-width: 1100px) {{ .spotlight-grid {{ grid-template-columns: 1fr; }} }}
+    .spotlight-title {{ display:flex; gap:10px; align-items:center; flex-wrap:wrap; }}
+    .spot-badge {{ display:inline-flex; align-items:center; padding:4px 10px; border-radius:999px; font-size:12px; font-weight:600; }}
+    .spot-badge.warn {{ background: var(--warn-soft); color: #7a5200; }}
+    .spot-badge.good {{ background: var(--success-soft); color: #116329; }}
+    .spot-badge.neutral {{ background: var(--accent-soft); color: #0550ae; }}
+    .spot-metrics {{ display:grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 12px; }}
+    @media (max-width: 900px) {{ .spot-metrics {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }} }}
+    .spot-metric {{ border:1px solid var(--line); border-radius:12px; padding:10px 12px; background:#fff; }}
+    .spot-metric .k {{ font-size:12px; color:var(--muted); }}
+    .spot-metric .v {{ margin-top:6px; font-size:20px; font-weight:700; }}
+    .spot-list {{ display:flex; gap:8px; flex-wrap:wrap; margin-top:10px; }}
+    .spot-snippet {{ margin-top:12px; background:#0b1020; color:#e6edf3; padding:12px 14px; border-radius:12px; white-space:pre-wrap; word-break:break-word; }}
 
     .schema-wrap {{ position: relative; }}
     .schema-lines {{ position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; }}
@@ -880,6 +1006,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       <span class="pill">type: <code>{h(meta.get('file_type') or '')}</code></span>
       <span class="pill">sep: <code>{h(meta.get('key_sep') or '')}</code></span>
       <span class="pill">index: <code>{h(meta.get('index_key') or '')}</code></span>
+      <span class="pill">auto-except: <code>{h((meta.get('auto_except') or {}).get('enabled') if isinstance(meta.get('auto_except'), Mapping) else False)}</code></span>
     </div>
     <div style="margin-top: 10px;" class="toolbar">
       <select id="record-select"></select>
@@ -890,6 +1017,10 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       <span id="status" class="muted"></span>
     </div>
   </div>
+
+  <div id="summary-grid" class="summary-grid"></div>
+
+  <div class="card spotlight-card" id="spotlight-card" style="display:none"></div>
 
   <div class="card" id="union">
     <h2>Union structure (across sampled records)</h2>
@@ -985,6 +1116,8 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     const unionStatus = document.getElementById('union-status');
     const unionTree = document.getElementById('union-tree');
     const unionDetail = document.getElementById('union-detail');
+    const summaryGrid = document.getElementById('summary-grid');
+    const spotlightCard = document.getElementById('spotlight-card');
 
     let currentIndex = 0;
     let flatIndex = new Map(); // key -> array of elements
@@ -1016,6 +1149,113 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
     function setStatus(text) {{
       if (!status) return;
       status.textContent = String(text || '');
+    }}
+
+    function renderSummary(pv) {{
+      if (!summaryGrid) return;
+      const flat = (pv && pv.flatten) ? pv.flatten : {{}};
+      const diff = (pv && pv.diff) ? pv.diff : {{}};
+      const counts = (diff && diff.counts) ? diff.counts : {{}};
+      const subtables = Array.isArray(flat.subtables) ? flat.subtables : [];
+      const excepted = (flat && flat.excepted && typeof flat.excepted === 'object') ? flat.excepted : {{}};
+      const exceptedKeys = Object.keys(excepted || {{}});
+      const autoExcept = (META && META.auto_except && typeof META.auto_except === 'object') ? META.auto_except : {{}};
+      const effectiveExcept = Array.isArray(autoExcept.except_keys_effective) ? autoExcept.except_keys_effective : (Array.isArray(META.except_keys) ? META.except_keys : []);
+      const sampleSub = subtables.slice(0, 3).map(st => String((st && (st.sub_key || st.table_original || st.table_sql)) || '')).filter(Boolean);
+      const cards = [
+        {{
+          label: 'Raw Nodes',
+          value: Number(counts.raw_nodes || 0),
+          note: 'Visible raw-structure nodes in this sample',
+        }},
+        {{
+          label: 'Flatten Tables',
+          value: 1 + subtables.length,
+          note: sampleSub.length ? ('sample splits: ' + sampleSub.join(', ')) : 'base table only',
+        }},
+        {{
+          label: 'Excepted Branches',
+          value: exceptedKeys.length,
+          note: effectiveExcept.length ? ('effective keys: ' + effectiveExcept.slice(0, 4).join(', ') + (effectiveExcept.length > 4 ? ' …' : '')) : 'no excepted branches',
+        }},
+        {{
+          label: 'Unexpected Missing',
+          value: Number(counts.missing || 0),
+          note: 'Raw leaf paths not present in flattened outputs',
+        }},
+      ];
+      summaryGrid.innerHTML = cards.map(card => (
+        '<div class=\"summary-card\">' +
+          '<div class=\"summary-k\">' + String(card.label || '') + '</div>' +
+          '<div class=\"summary-v\">' + String(card.value || 0) + '</div>' +
+          '<div class=\"summary-note\">' + String(card.note || '') + '</div>' +
+        '</div>'
+      )).join('');
+    }}
+
+    function renderSpotlight(pv) {{
+      if (!spotlightCard) return;
+      const spot = (pv && pv.spotlight && typeof pv.spotlight === 'object') ? pv.spotlight : null;
+      if (!spot || String(spot.kind || '') !== 'openalex_abstract') {{
+        spotlightCard.style.display = 'none';
+        spotlightCard.innerHTML = '';
+        return;
+      }}
+
+      const reconstructed = (spot.reconstructed && typeof spot.reconstructed === 'object') ? spot.reconstructed : {{}};
+      const flattenMode = String(spot.flatten_mode || 'base-or-other');
+      const modeLabel = flattenMode === 'excepted'
+        ? 'Handled as excepted value'
+        : (flattenMode === 'split-subtables' ? 'Expanded into token subtables' : 'Not specially handled');
+      const modeClass = flattenMode === 'excepted'
+        ? 'good'
+        : (flattenMode === 'split-subtables' ? 'warn' : 'neutral');
+      const metrics = [
+        {{ label: 'Dict Keys', value: Number(spot.dict_keys || 0) }},
+        {{ label: 'Subtables', value: Number(spot.subtable_count || 0) }},
+        {{ label: 'Unique Positions', value: Number(reconstructed.unique_positions || 0) }},
+        {{ label: 'Token Count', value: Number(reconstructed.token_count || 0) }},
+        {{ label: 'Max Position', value: Number(reconstructed.max_position || 0) }},
+        {{ label: 'Collisions', value: Number(reconstructed.collisions || 0) }},
+      ];
+      const sampleTokens = Array.isArray(spot.sample_tokens) ? spot.sample_tokens : [];
+      const sampleSubtables = Array.isArray(spot.sample_subtables) ? spot.sample_subtables : [];
+      const textPreview = String(reconstructed.text_preview || '').trim();
+      const density = reconstructed.position_density != null ? Number(reconstructed.position_density) : null;
+
+      spotlightCard.style.display = '';
+      spotlightCard.innerHTML =
+        '<div class=\"spotlight-title\">' +
+          '<h2 style=\"margin:0;\">OpenAlex Abstract Spotlight</h2>' +
+          '<span class=\"spot-badge ' + modeClass + '\">' + modeLabel + '</span>' +
+          '<span class=\"spot-badge neutral\"><code>' + String(spot.path || 'abstract_inverted_index') + '</code></span>' +
+        '</div>' +
+        '<p class=\"muted\" style=\"margin:8px 0 0 0;\">OpenAlex stores abstract text as an inverted index (`token -> positions`). The preview should show whether that branch stays compact as an excepted value or explodes into token-level subtables.</p>' +
+        '<div class=\"spotlight-grid\" style=\"margin-top:14px;\">' +
+          '<div>' +
+            '<div class=\"spot-metrics\">' +
+              metrics.map(m => (
+                '<div class=\"spot-metric\">' +
+                  '<div class=\"k\">' + String(m.label || '') + '</div>' +
+                  '<div class=\"v\">' + String(m.value || 0) + '</div>' +
+                '</div>'
+              )).join('') +
+            '</div>' +
+            (density != null ? ('<div class=\"muted\" style=\"margin-top:10px;\">position density: <code>' + String(density) + '</code></div>') : '') +
+            (sampleTokens.length ? ('<div class=\"spot-list\">' + sampleTokens.map(tok => '<span class=\"pill\"><code>' + String(tok || '') + '</code></span>').join('') + '</div>') : '') +
+            (textPreview ? ('<div class=\"spot-snippet\">' + textPreview.replace(/</g, '&lt;') + '</div>') : '<div class=\"muted\" style=\"margin-top:12px;\">No reconstructed text preview.</div>') +
+          '</div>' +
+          '<div>' +
+            '<h3 style=\"margin-top:0;\">Why this matters</h3>' +
+            '<ul>' +
+              '<li>If this branch is token-split, the preview becomes noisy and schema prediction becomes misleading.</li>' +
+              '<li>If it is excepted, the structure stays readable and the value can be preserved as JSON/string payload.</li>' +
+            '</ul>' +
+            (sampleSubtables.length
+              ? ('<div class=\"muted\">Sample token subtables:</div><div class=\"spot-list\">' + sampleSubtables.map(name => '<span class=\"pill\"><code>' + String(name || '') + '</code></span>').join('') + '</div>')
+              : '<div class=\"muted\">No token-level subtables were produced for this branch.</div>') +
+          '</div>' +
+        '</div>';
     }}
 
     function clearSelection() {{
@@ -2121,6 +2361,8 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
         renderDiagram(pv);
         return;
       }}
+      renderSummary(pv);
+      renderSpotlight(pv);
       renderRaw(pv.raw_nodes || [], pv.flatten || {{}});
       renderFlat(pv.flatten || {{}}, pv.diff || null);
       renderDiff(pv.diff || null);
@@ -2197,6 +2439,11 @@ def write_review_preview_report(
     key_sep = str(data_config.get("KEY_SEP") or "__")
     index_key = str(data_config.get("index_key") or "id")
     except_keys = list(data_config.get("except_keys") or [])
+    auto_except_meta: dict[str, Any] | None = None
+    if bool(data_config.get("auto_except", False)):
+        from .pipeline import _auto_detect_except_keys
+
+        except_keys, auto_except_meta = _auto_detect_except_keys(data_config, existing_except_keys=except_keys)
     except_set = {str(x) for x in except_keys if str(x)}
 
     out_path = Path(out_dir)
@@ -2251,6 +2498,12 @@ def write_review_preview_report(
                 "raw_truncated": bool(truncated),
                 "flatten": flat,
                 "diff": diff,
+                "spotlight": _build_openalex_abstract_spotlight(
+                    record=rec,
+                    flat=flat,
+                    key_sep=key_sep,
+                    except_keys_effective=except_keys,
+                ),
             }
         )
 
@@ -2264,6 +2517,7 @@ def write_review_preview_report(
         "key_sep": key_sep,
         "index_key": index_key,
         "except_keys": except_keys,
+        "auto_except": auto_except_meta or {"enabled": False, "except_keys_effective": except_keys},
         "max_records": int(max_records),
         "max_nodes": int(max_nodes),
         "max_union_nodes": int(max_union_nodes),

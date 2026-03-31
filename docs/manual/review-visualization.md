@@ -28,6 +28,9 @@ kisti-db-manager review preview --config path/to/config.json --out preview_out
 
 Use this when you need a small raw-vs-flatten sanity check before committing to a long run.
 
+For OpenAlex-style payloads, the preview now respects `auto_except` and adds an abstract spotlight panel.
+That makes `abstract_inverted_index` easy to inspect without exploding the preview into token-level subtables.
+
 ### Schema viewer
 
 ```bash
