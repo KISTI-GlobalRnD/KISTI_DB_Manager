@@ -434,16 +434,16 @@ def render_simple_svg(
     base_table: str,
     table_infos: list[TableInfo],
     key_sep: str,
-    width: int = 1400,
-    x_step: int = 260,
-    y_step: int = 70,
-    box_w: int = 240,
+    width: int = 1800,
+    x_step: int = 420,
+    y_step: int = 44,
+    box_w: int = 360,
     box_h: int = 58,
     node_class_by_sql: Mapping[str, str] | None = None,
     node_fill_by_sql: Mapping[str, str] | None = None,
 ) -> str:
     """
-    Render a lightweight SVG table graph without external dependencies.
+    Render a self-contained ERD-style SVG without external dependencies.
     """
     name_to_info = {ti.name_original or ti.name_sql: ti for ti in table_infos}
     tables = sorted(name_to_info.keys())
@@ -483,6 +483,49 @@ def render_simple_svg(
         tail = max(8, max_chars - 1 - head)
         return f"{text[:head]}…{text[-tail:]}"
 
+    def _column_tag(name: str, col: Mapping[str, Any], *, is_base: bool) -> str:
+        key = str(col.get("column_key") or "").upper()
+        col_name = str(name)
+        if key == "PRI":
+            return "PK"
+        if not is_base and col_name == "id":
+            return "FK"
+        if col_name.endswith("_id") and col_name != "id":
+            return "FK"
+        return ""
+
+    def _select_columns(cols: list[dict[str, Any]], *, is_base: bool, limit: int = 8) -> list[dict[str, Any]]:
+        if not cols:
+            return []
+        selected: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        def add(col: dict[str, Any]) -> None:
+            name = str(col.get("name") or "")
+            if not name or name in seen:
+                return
+            selected.append(col)
+            seen.add(name)
+
+        for col in cols[:limit]:
+            add(col)
+        for col in cols:
+            name = str(col.get("name") or "")
+            if _column_tag(name, col, is_base=is_base):
+                add(col)
+        return selected[: max(limit, len(selected))]
+
+    def _estimate_table_height(ti: TableInfo, *, is_base: bool) -> int:
+        cols = list(ti.columns or [])
+        visible = _select_columns(cols, is_base=is_base, limit=8)
+        header_h = 42
+        sub_h = 18
+        metric_h = 18
+        row_h = 20
+        footer_h = 12
+        more_h = 18 if len(cols) > len(visible) else 0
+        return max(box_h, header_h + sub_h + metric_h + len(visible) * row_h + more_h + footer_h)
+
     def depth(name: str) -> int:
         if name == base_table:
             return 0
@@ -503,57 +546,69 @@ def render_simple_svg(
     for d in by_depth:
         by_depth[d] = sorted(by_depth[d])
 
-    # Layout: stack each depth column.
     pos: dict[str, tuple[int, int]] = {}
+    box_height_by_table: dict[str, int] = {}
+    for t in tables:
+        ti = name_to_info.get(t)
+        box_height_by_table[t] = _estimate_table_height(ti, is_base=(t == base_table)) if ti is not None else box_h
+
     for d in range(max_depth + 1):
         xs = 30 + d * x_step
-        for i, t in enumerate(by_depth.get(d, [])):
-            ys = 30 + i * y_step
+        ys = 30
+        for t in by_depth.get(d, []):
             pos[t] = (xs, ys)
+            ys += box_height_by_table.get(t, box_h) + y_step
 
     edges = build_table_edges(base_table=base_table, tables=tables, key_sep=key_sep)
 
-    # Compute viewbox height.
     max_y = 30
-    for _t, (_x, y) in pos.items():
-        max_y = max(max_y, y + box_h + 30)
+    for t, (_x, y) in pos.items():
+        max_y = max(max_y, y + box_height_by_table.get(t, box_h) + 30)
     height = max(200, max_y)
     needed_width = 30 + (max_depth + 1) * x_step + box_w + 30
     width = max(int(width), int(needed_width))
 
-    def node_color(name: str) -> str:
+    def node_color(name: str) -> tuple[str, str]:
         ti = name_to_info.get(name)
         if ti is not None and "__excepted__" in str(ti.name_sql):
-            return "#FFF8C5"
-        return "#E6F0FF" if name == base_table else "#F6F8FA"
+            return "#FFF8C5", "#FDE68A"
+        if name == base_table:
+            return "#E6F0FF", "#BFDBFE"
+        return "#F8FAFC", "#E5E7EB"
 
-    # SVG
     lines: list[str] = []
     lines.append('<?xml version="1.0" encoding="UTF-8"?>')
     lines.append(
         f'<svg xmlns="http://www.w3.org/2000/svg" width="{int(width)}" height="{int(height)}" viewBox="0 0 {int(width)} {int(height)}">'
     )
     lines.append("<style>")
-    lines.append(".box { stroke: #1f2328; stroke-width: 1; rx: 8; ry: 8; }")
-    lines.append(".label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 12px; fill: #1f2328; }")
+    lines.append(".box { stroke: #1f2328; stroke-width: 1; rx: 10; ry: 10; }")
+    lines.append(".head { stroke: none; }")
+    lines.append(".label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 12px; font-weight: 700; fill: #111827; }")
     lines.append(".meta { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #57606a; }")
-    lines.append(".edge { stroke: #57606a; stroke-width: 1; fill: none; }")
+    lines.append(".col-name { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 11px; fill: #111827; }")
+    lines.append(".col-type { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 10px; fill: #475467; }")
+    lines.append(".col-key { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; font-weight: 700; fill: #0550ae; }")
+    lines.append(".col-more { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #6b7280; }")
+    lines.append(".edge { stroke: #64748B; stroke-width: 1.5; fill: none; }")
+    lines.append(".edge-label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #475467; }")
     lines.append(".node { cursor: pointer; }")
     lines.append(".diff-added .box { stroke: #1a7f37; stroke-width: 2; }")
     lines.append(".diff-removed .box { stroke: #cf222e; stroke-width: 2; }")
     lines.append(".diff-changed .box { stroke: #bf8700; stroke-width: 2; }")
     lines.append("</style>")
 
-    # Edges first (under nodes)
-    for parent, child, _label in edges:
+    for parent, child, label in edges:
         if parent not in pos or child not in pos:
             continue
         px, py = pos[parent]
         cx, cy = pos[child]
+        ph = box_height_by_table.get(parent, box_h)
+        ch = box_height_by_table.get(child, box_h)
         x1 = px + box_w
-        y1 = py + box_h // 2
+        y1 = py + ph // 2
         x2 = cx
-        y2 = cy + box_h // 2
+        y2 = cy + ch // 2
         mid = (x1 + x2) // 2
         p_info = name_to_info.get(parent)
         c_info = name_to_info.get(child)
@@ -564,17 +619,22 @@ def render_simple_svg(
             f'data-parent-sql="{_svg_escape(p_sql)}" data-child-sql="{_svg_escape(c_sql)}" '
             f'd="M {x1} {y1} C {mid} {y1}, {mid} {y2}, {x2} {y2}" />'
         )
+        edge_text = _truncate_middle(f"{label} · 1:N", max_chars=28)
+        lines.append(f'<text class="edge-label" x="{mid}" y="{int((y1 + y2) / 2) - 6}" text-anchor="middle">{_svg_escape(edge_text)}</text>')
 
-    # Nodes
     for name in tables:
         x, y = pos.get(name, (30, 30))
         ti = name_to_info.get(name)
         graph_label = _display_label(ti.label() if ti else name)
-        primary_label = _truncate_middle(ti.name_sql if ti is not None else name, max_chars=32)
+        primary_label = _truncate_middle(ti.name_sql if ti is not None else name, max_chars=36)
         secondary_label = _truncate_middle(graph_label, max_chars=34)
         rows = ti.rows_label() if ti else "n/a"
         cols = len(ti.columns or []) if ti and ti.columns is not None else None
         cols_label = str(cols) if cols is not None else "n/a"
+        is_base = name == base_table
+        visible_cols = _select_columns(list(ti.columns or []) if ti is not None else [], is_base=is_base, limit=8)
+        node_h = box_height_by_table.get(name, box_h)
+        head_h = 28
 
         rows_n = 0
         if ti is not None:
@@ -630,17 +690,39 @@ def render_simple_svg(
                 fill = node_fill_by_sql.get(name_sql)
             except Exception:
                 fill = None
-        fill_color = str(fill) if fill else node_color(name)
+        body_fill, head_fill = node_color(name)
+        fill_color = str(fill) if fill else body_fill
+        head_color = head_fill if not fill else str(fill)
 
         lines.append(f"<g {' '.join(attrs)}>")
         lines.append(f"<title>{_svg_escape(title)}</title>")
         lines.append(
-            f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="{_svg_escape(fill_color)}" />'
+            f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{node_h}" fill="{_svg_escape(fill_color)}" />'
         )
-        lines.append(f'<text class="label" x="{x + 10}" y="{y + 17}">{_svg_escape(primary_label)}</text>')
+        lines.append(
+            f'<rect class="head" x="{x}" y="{y}" width="{box_w}" height="{head_h}" rx="10" ry="10" fill="{_svg_escape(head_color)}" />'
+        )
+        lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(primary_label)}</text>')
         if secondary_label and secondary_label != primary_label:
-            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 33}">{_svg_escape(secondary_label)}</text>')
-        lines.append(f'<text class="meta" x="{x + 10}" y="{y + 49}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
+            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 43}">{_svg_escape(secondary_label)}</text>')
+        lines.append(f'<text class="meta" x="{x + 10}" y="{y + 59}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
+
+        col_y = y + 78
+        type_x = x + box_w - 58
+        key_x = x + box_w - 12
+        for col in visible_cols:
+            col_name = str(col.get("name") or "")
+            col_type = str(col.get("column_type") or col.get("data_type") or "")
+            key_tag = _column_tag(col_name, col, is_base=is_base)
+            lines.append(f'<text class="col-name" x="{x + 12}" y="{col_y}">{_svg_escape(_truncate_middle(col_name, max_chars=24))}</text>')
+            lines.append(f'<text class="col-type" x="{type_x}" y="{col_y}" text-anchor="end">{_svg_escape(_truncate_middle(col_type, max_chars=14))}</text>')
+            if key_tag:
+                lines.append(f'<text class="col-key" x="{key_x}" y="{col_y}" text-anchor="end">{_svg_escape(key_tag)}</text>')
+            col_y += 18
+
+        hidden_cols = max(0, (len(ti.columns or []) if ti and ti.columns is not None else 0) - len(visible_cols))
+        if hidden_cols > 0:
+            lines.append(f'<text class="col-more" x="{x + 12}" y="{col_y}">… +{hidden_cols} more columns</text>')
         lines.append("</g>")
 
     lines.append("</svg>")

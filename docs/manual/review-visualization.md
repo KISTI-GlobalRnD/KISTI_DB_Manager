@@ -65,6 +65,7 @@ It shows the raw JSON structure, the flattened base/subtable view, union excepti
 ### Predicted schema SVG
 
 This example is generated from the latest OpenAlex review-plan output, so it reflects the current predicted schema path rather than an older DB-backed artifact.
+The SVG is table-centric: each box is a split table, with visible columns and lightweight PK/FK cues.
 
 Example schema SVG:
 
