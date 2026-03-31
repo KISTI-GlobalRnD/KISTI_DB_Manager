@@ -438,7 +438,7 @@ def render_simple_svg(
     x_step: int = 260,
     y_step: int = 70,
     box_w: int = 240,
-    box_h: int = 44,
+    box_h: int = 58,
     node_class_by_sql: Mapping[str, str] | None = None,
     node_fill_by_sql: Mapping[str, str] | None = None,
 ) -> str:
@@ -473,51 +473,15 @@ def render_simple_svg(
             suffix = f"SUB{key_sep}{suffix}"
         return suffix.replace(key_sep, "/")
 
-    def _wrap_path(text: str, *, max_chars: int = 30, max_lines: int = 2) -> list[str]:
-        """
-        Wrap a path-like string (delimited by "/") into up to max_lines.
-        Adds an ellipsis when truncated.
-        """
+    def _truncate_middle(text: str, *, max_chars: int = 30) -> str:
         text = str(text)
         if len(text) <= max_chars:
-            return [text]
-
-        parts = text.split("/")
-        lines: list[str] = []
-        i = 0
-        while i < len(parts) and len(lines) < max_lines:
-            line = parts[i]
-            i += 1
-            while i < len(parts):
-                cand = f"{line}/{parts[i]}"
-                if len(cand) <= max_chars:
-                    line = cand
-                    i += 1
-                else:
-                    break
-            lines.append(line)
-
-        truncated = i < len(parts)
-        # Also treat overlong final line as truncated.
-        if lines and len(lines[-1]) > max_chars:
-            truncated = True
-            lines[-1] = lines[-1][: max(0, max_chars - 1)]
-
-        if truncated and lines:
-            if len(lines[-1]) >= max_chars:
-                lines[-1] = lines[-1][: max(0, max_chars - 1)] + "…"
-            else:
-                lines[-1] = lines[-1] + "…"
-
-        # Final safety truncation
-        out: list[str] = []
-        for l in lines:
-            l = str(l)
-            if len(l) <= max_chars:
-                out.append(l)
-            else:
-                out.append(l[: max(0, max_chars - 1)] + "…")
-        return out or [text[: max(0, max_chars - 1)] + "…"]
+            return text
+        if max_chars <= 3:
+            return text[:max_chars]
+        head = max(8, (max_chars - 1) // 2)
+        tail = max(8, max_chars - 1 - head)
+        return f"{text[:head]}…{text[-tail:]}"
 
     def depth(name: str) -> int:
         if name == base_table:
@@ -558,6 +522,9 @@ def render_simple_svg(
     width = max(int(width), int(needed_width))
 
     def node_color(name: str) -> str:
+        ti = name_to_info.get(name)
+        if ti is not None and "__excepted__" in str(ti.name_sql):
+            return "#FFF8C5"
         return "#E6F0FF" if name == base_table else "#F6F8FA"
 
     # SVG
@@ -602,8 +569,9 @@ def render_simple_svg(
     for name in tables:
         x, y = pos.get(name, (30, 30))
         ti = name_to_info.get(name)
-        label = _display_label(ti.label() if ti else name)
-        label_lines = _wrap_path(label, max_chars=30, max_lines=2)
+        graph_label = _display_label(ti.label() if ti else name)
+        primary_label = _truncate_middle(ti.name_sql if ti is not None else name, max_chars=32)
+        secondary_label = _truncate_middle(graph_label, max_chars=34)
         rows = ti.rows_label() if ti else "n/a"
         cols = len(ti.columns or []) if ti and ti.columns is not None else None
         cols_label = str(cols) if cols is not None else "n/a"
@@ -669,14 +637,10 @@ def render_simple_svg(
         lines.append(
             f'<rect class="box" x="{x}" y="{y}" width="{box_w}" height="{box_h}" fill="{_svg_escape(fill_color)}" />'
         )
-        if len(label_lines) == 1:
-            lines.append(f'<text class="label" x="{x + 10}" y="{y + 18}">{_svg_escape(label_lines[0])}</text>')
-            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 34}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
-        else:
-            # Two-line label: keep meta on a third line (still fits in box_h).
-            lines.append(f'<text class="label" x="{x + 10}" y="{y + 16}">{_svg_escape(label_lines[0])}</text>')
-            lines.append(f'<text class="label" x="{x + 10}" y="{y + 30}">{_svg_escape(label_lines[1])}</text>')
-            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 42}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
+        lines.append(f'<text class="label" x="{x + 10}" y="{y + 17}">{_svg_escape(primary_label)}</text>')
+        if secondary_label and secondary_label != primary_label:
+            lines.append(f'<text class="meta" x="{x + 10}" y="{y + 33}">{_svg_escape(secondary_label)}</text>')
+        lines.append(f'<text class="meta" x="{x + 10}" y="{y + 49}">rows: {_svg_escape(rows)} · cols: {_svg_escape(cols_label)}</text>')
         lines.append("</g>")
 
     lines.append("</svg>")
