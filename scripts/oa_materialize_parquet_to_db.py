@@ -73,6 +73,7 @@ def _stage_parquet_with_duckdb(
     columns_original: list[str],
     stage_path: str,
     limit_rows: int,
+    offset_rows: int,
     report: RunReport,
 ) -> None:
     import duckdb
@@ -82,8 +83,9 @@ def _stage_parquet_with_duckdb(
 
     select_sql = ", ".join(dq(c) for c in columns_original)
     limit_sql = f" LIMIT {int(limit_rows)}" if int(limit_rows or 0) > 0 else ""
+    offset_sql = f" OFFSET {int(offset_rows)}" if int(offset_rows or 0) > 0 else ""
     copy_sql = (
-        f"COPY (SELECT {select_sql} FROM read_parquet({json.dumps(str(parquet_file))}){limit_sql}) "
+        f"COPY (SELECT {select_sql} FROM read_parquet({json.dumps(str(parquet_file))}){limit_sql}{offset_sql}) "
         f"TO {json.dumps(str(stage_path))} "
         "(FORMAT CSV, HEADER FALSE, DELIMITER '\t', NULLSTR '\\N', QUOTE '\"', ESCAPE '\"');"
     )
@@ -106,6 +108,7 @@ def _load_parquet_file_via_duckdb_stage(
     columns_original: list[str],
     columns_sql: list[str],
     limit_rows: int,
+    offset_rows: int,
     staging_dir: str,
     report: RunReport,
 ) -> None:
@@ -125,6 +128,7 @@ def _load_parquet_file_via_duckdb_stage(
             columns_original=columns_original,
             stage_path=stage_path,
             limit_rows=limit_rows,
+            offset_rows=offset_rows,
             report=report,
         )
         manage._load_data_local_infile_tabular_file(
@@ -221,6 +225,7 @@ def _load_progress(path: Path) -> dict[str, Any]:
             "active": {},
             "current": None,
             "completed_files": {},
+            "partial_files": {},
         }
     return _read_json(path)
 
@@ -272,6 +277,8 @@ def _progress_activate(
     table_sql: str | None,
     parquet_file: Path,
     rows: int | None,
+    offset_rows: int | None = None,
+    total_rows: int | None = None,
 ) -> None:
     with lock:
         active = state.setdefault("active", {})
@@ -280,13 +287,15 @@ def _progress_activate(
             "table_sql": table_sql,
             "file_path": str(parquet_file),
             "rows": rows,
+            "offset_rows": offset_rows,
+            "total_rows": total_rows,
         }
         state["updated_at_utc"] = _iso_now()
         _progress_sync_current(state)
         _write_json(progress_path, state)
 
 
-def _progress_mark_done(
+def _progress_mark_chunk_done(
     progress_path: Path,
     state: dict[str, Any],
     lock: threading.Lock,
@@ -295,13 +304,29 @@ def _progress_mark_done(
     table_original: str,
     parquet_file: Path,
     rows: int,
+    next_offset: int,
+    total_rows: int,
+    chunk_rows: int,
+    file_complete: bool,
 ) -> None:
     with lock:
-        done = state.setdefault("completed_files", {}).setdefault(table_original, [])
-        if parquet_file.name not in done:
-            done.append(parquet_file.name)
-        state["files_loaded"] = int(state.get("files_loaded", 0) or 0) + 1
         state["rows_loaded"] = int(state.get("rows_loaded", 0) or 0) + int(rows)
+        partial_files = state.setdefault("partial_files", {})
+        partial = partial_files.setdefault(table_original, {})
+        if file_complete:
+            partial.pop(parquet_file.name, None)
+            if not partial:
+                partial_files.pop(table_original, None)
+            done = state.setdefault("completed_files", {}).setdefault(table_original, [])
+            if parquet_file.name not in done:
+                done.append(parquet_file.name)
+                state["files_loaded"] = int(state.get("files_loaded", 0) or 0) + 1
+        else:
+            partial[parquet_file.name] = {
+                "next_offset": int(next_offset),
+                "total_rows": int(total_rows),
+                "chunk_rows": int(chunk_rows),
+            }
 
         file_counts = state.get("table_file_counts") or {}
         completed_files = state.get("completed_files") or {}
@@ -366,6 +391,7 @@ def _materialize_one_file(
     state_lock: threading.Lock,
     load_data_staging_writer: str,
     load_data_staging_dir: str | None,
+    file_chunk_rows: int,
     nm: NameMap,
     existing_cols: set[str] | None,
 ) -> dict[str, Any]:
@@ -396,6 +422,7 @@ def _materialize_one_file(
     extra_column_name = str(data_config.get("extra_column_name") or "__extra__")
     extra_canon = extra_column_name.replace(".", str(data_config.get("KEY_SEP") or "__")) if extra_column_name else ""
     active_key = f"{table_original}:{parquet_file.name}"
+    partial_info = (((state.get("partial_files") or {}).get(table_original) or {}).get(parquet_file.name) or {})
 
     try:
         if fast_load_state.enabled:
@@ -430,89 +457,105 @@ def _materialize_one_file(
         if limit_rows_per_file and int(limit_rows_per_file) > 0:
             load_rows = min(load_rows, int(limit_rows_per_file))
         bump("parquet_files_read", 1)
-        bump("parquet_rows_read", int(load_rows))
+        resume_offset = int(partial_info.get("next_offset") or 0)
+        chunk_rows = int(file_chunk_rows or 0)
+        if chunk_rows <= 0:
+            chunk_rows = int(load_rows)
 
-        _progress_activate(
-            progress_path,
-            state,
-            state_lock,
-            active_key=active_key,
-            table_original=table_original,
-            table_sql=target_table_sql,
-            parquet_file=parquet_file,
-            rows=int(load_rows),
-        )
-
-        direct_duckdb_ok = False
         current_nm = nm.with_additional_columns(table_columns, max_len=64)
         columns_original = [c for c in table_columns if c != extra_canon]
         columns_sql = [current_nm.map_column(c) for c in columns_original]
-        if (
-            str(load_data_staging_writer) == "duckdb"
-            and local_infile_conn is not None
-            and existing_cols is not None
-            and all(col in existing_cols for col in columns_sql)
-        ):
-            t0 = time.perf_counter()
-            with local_report.timer("db.load_data.total"):
-                _load_parquet_file_via_duckdb_stage(
-                    conn=local_infile_conn,
-                    table_name=target_table_sql,
-                    parquet_file=parquet_file,
-                    columns_original=columns_original,
-                    columns_sql=columns_sql,
-                    limit_rows=int(limit_rows_per_file),
-                    staging_dir=str(load_data_staging_dir or _default_staging_dir()),
-                    report=local_report,
-                )
-            add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
-            bump("load_data_ok", 1)
-            direct_duckdb_ok = True
+        for offset_rows in range(int(resume_offset), int(load_rows), int(chunk_rows)):
+            current_chunk_rows = min(int(chunk_rows), int(load_rows) - int(offset_rows))
+            bump("parquet_rows_read", int(current_chunk_rows))
 
-        if not direct_duckdb_ok:
-            t0 = time.perf_counter()
-            df = pd.read_parquet(parquet_file)
-            add_ms("parquet_materialize.read_parquet", time.perf_counter() - t0)
-            if limit_rows_per_file and int(limit_rows_per_file) > 0:
-                df = df.head(int(limit_rows_per_file)).copy()
-            t0 = time.perf_counter()
-            manage.fill_table_from_dataframe(
-                df,
-                db_config,
-                table_name=target_table_sql,
-                name_map=nm,
-                extra_column_name=extra_column_name,
-                auto_alter_table=False,
-                column_type="LONGTEXT",
-                fallback_on_insert_error=False,
-                report=local_report,
-                load_method=str(load_method),
-                fast_load_state=fast_load_state,
-                local_infile_conn=local_infile_conn,
-                existing_cols=existing_cols,
-                engine=engine,
-                load_data_staging_writer=load_data_staging_writer,
-                load_data_staging_dir=load_data_staging_dir,
+            _progress_activate(
+                progress_path,
+                state,
+                state_lock,
+                active_key=active_key,
+                table_original=table_original,
+                table_sql=target_table_sql,
+                parquet_file=parquet_file,
+                rows=int(current_chunk_rows),
+                offset_rows=int(offset_rows),
+                total_rows=int(load_rows),
             )
-            add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
+
+            direct_duckdb_ok = False
+            if (
+                str(load_data_staging_writer) == "duckdb"
+                and local_infile_conn is not None
+                and existing_cols is not None
+                and all(col in existing_cols for col in columns_sql)
+            ):
+                t0 = time.perf_counter()
+                with local_report.timer("db.load_data.total"):
+                    _load_parquet_file_via_duckdb_stage(
+                        conn=local_infile_conn,
+                        table_name=target_table_sql,
+                        parquet_file=parquet_file,
+                        columns_original=columns_original,
+                        columns_sql=columns_sql,
+                        limit_rows=int(current_chunk_rows),
+                        offset_rows=int(offset_rows),
+                        staging_dir=str(load_data_staging_dir or _default_staging_dir()),
+                        report=local_report,
+                    )
+                add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
+                bump("load_data_ok", 1)
+                direct_duckdb_ok = True
+
+            if not direct_duckdb_ok:
+                t0 = time.perf_counter()
+                df = pd.read_parquet(parquet_file)
+                add_ms("parquet_materialize.read_parquet", time.perf_counter() - t0)
+                if limit_rows_per_file and int(limit_rows_per_file) > 0:
+                    df = df.head(int(limit_rows_per_file)).copy()
+                df = df.iloc[int(offset_rows): int(offset_rows) + int(current_chunk_rows)].copy()
+                t0 = time.perf_counter()
+                manage.fill_table_from_dataframe(
+                    df,
+                    db_config,
+                    table_name=target_table_sql,
+                    name_map=nm,
+                    extra_column_name=extra_column_name,
+                    auto_alter_table=False,
+                    column_type="LONGTEXT",
+                    fallback_on_insert_error=False,
+                    report=local_report,
+                    load_method=str(load_method),
+                    fast_load_state=fast_load_state,
+                    local_infile_conn=local_infile_conn,
+                    existing_cols=existing_cols,
+                    engine=engine,
+                    load_data_staging_writer=load_data_staging_writer,
+                    load_data_staging_dir=load_data_staging_dir,
+                )
+                add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
+
+            bump("rows_loaded", int(current_chunk_rows))
+            _progress_mark_chunk_done(
+                progress_path,
+                state,
+                state_lock,
+                active_key=active_key,
+                table_original=table_original,
+                parquet_file=parquet_file,
+                rows=int(current_chunk_rows),
+                next_offset=int(offset_rows) + int(current_chunk_rows),
+                total_rows=int(load_rows),
+                chunk_rows=int(chunk_rows),
+                file_complete=(int(offset_rows) + int(current_chunk_rows) >= int(load_rows)),
+            )
 
         bump("files_loaded", 1)
-        bump("rows_loaded", int(load_rows))
         result["files"].append(
             {
                 "path": str(parquet_file),
                 "rows": int(load_rows),
                 "table_sql": target_table_sql,
             }
-        )
-        _progress_mark_done(
-            progress_path,
-            state,
-            state_lock,
-            active_key=active_key,
-            table_original=table_original,
-            parquet_file=parquet_file,
-            rows=int(load_rows),
         )
     except Exception as e:
         result["errors"].append(
@@ -571,6 +614,7 @@ def _materialize_one_table(
     keep_going: bool,
     load_data_staging_writer: str,
     load_data_staging_dir: str | None,
+    file_chunk_rows: int,
     parallel_files_per_table: int,
 ) -> dict[str, Any]:
     from sqlalchemy import create_engine
@@ -663,6 +707,7 @@ def _materialize_one_table(
                         state_lock=state_lock,
                         load_data_staging_writer=load_data_staging_writer,
                         load_data_staging_dir=load_data_staging_dir,
+                        file_chunk_rows=file_chunk_rows,
                         nm=nm,
                         existing_cols=existing_cols,
                     )
@@ -691,6 +736,7 @@ def _materialize_one_table(
                         state_lock=state_lock,
                         load_data_staging_writer=load_data_staging_writer,
                         load_data_staging_dir=load_data_staging_dir,
+                        file_chunk_rows=file_chunk_rows,
                         nm=nm,
                         existing_cols=existing_cols,
                     ): parquet_file
@@ -739,6 +785,7 @@ def main() -> int:
     ap.add_argument("--load-method", choices=["auto", "load_data", "to_sql"], default="load_data")
     ap.add_argument("--parallel-tables", type=int, default=1, help="Number of tables to materialize in parallel")
     ap.add_argument("--parallel-files-per-table", type=int, default=1, help="Number of parquet files to load in parallel within a table")
+    ap.add_argument("--file-chunk-rows", type=int, default=0, help="Chunk rows within a parquet file for finer-grained resume (0 disables)")
     ap.add_argument("--staging-writer", choices=["python", "duckdb"], default="duckdb")
     ap.add_argument("--staging-dir", default=None, help="Temp staging directory for LOAD DATA files")
     ap.add_argument("--keep-going", action="store_true", help="Continue with next file on error")
@@ -791,6 +838,7 @@ def main() -> int:
     report.set_artifact("limit_rows_per_file", int(args.limit_rows_per_file))
     report.set_artifact("parallel_tables", int(args.parallel_tables))
     report.set_artifact("parallel_files_per_table", int(args.parallel_files_per_table))
+    report.set_artifact("file_chunk_rows", int(args.file_chunk_rows))
 
     state_lock = threading.Lock()
     state.setdefault("completed_files", {})
@@ -824,6 +872,7 @@ def main() -> int:
                     keep_going=bool(args.keep_going),
                     load_data_staging_writer=str(args.staging_writer),
                     load_data_staging_dir=staging_dir,
+                    file_chunk_rows=int(args.file_chunk_rows),
                     parallel_files_per_table=int(args.parallel_files_per_table),
                 )
                 worker_results.append(result)
@@ -848,6 +897,7 @@ def main() -> int:
                         keep_going=bool(args.keep_going),
                         load_data_staging_writer=str(args.staging_writer),
                         load_data_staging_dir=staging_dir,
+                        file_chunk_rows=int(args.file_chunk_rows),
                         parallel_files_per_table=int(args.parallel_files_per_table),
                     ): table_dir.name
                     for table_dir in table_dirs

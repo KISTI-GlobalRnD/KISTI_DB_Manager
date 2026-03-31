@@ -229,6 +229,7 @@ python scripts/oa_materialize_parquet_to_db.py \
 
 - 이 스크립트는 `parse-parquet*` run이 만든 parquet를 입력으로 받아 DB 적재만 별도로 수행한다.
 - 진행 상태는 `runs/<parse_parquet_run_dir>/parquet_materialize/progress.json`에 남는다.
+- `--file-chunk-rows N`을 주면 큰 parquet 파일도 더 작은 row chunk 단위로 checkpoint를 남겨, 중간 중단 시 파일 처음부터 다시 넣지 않고 이어서 재개할 수 있다.
 - `--db-name openalex_20260225_raw_yjk`로 원래 parse config를 바꾸지 않고 대상 DB만 덮어쓸 수 있다.
 - `--parallel-tables N`으로 서로 다른 parquet table 디렉터리를 병렬 적재할 수 있다.
 - `--parallel-files-per-table N`으로 하나의 큰 parquet table 안에서 여러 parquet batch를 동시에 적재할 수 있다.
