@@ -34,9 +34,25 @@ from dataclasses import dataclass
 
 from .naming import make_index_name, truncate_column_names, truncate_table_name
 from .config import coerce_data_config, coerce_db_config, join_path
+# Re-export selected LOAD DATA helpers for compatibility. New code should
+# import KISTI_DB_Manager.load_data directly.
+from .load_data import (
+    DUCKDB_LOAD_DATA_DIALECT,
+    MYSQL_GENERATED_TSV_DIALECT,
+    LoadDataDialect,
+    detect_line_terminator as _detect_line_terminator,
+    duckdb_sql_string as _duckdb_sql_string,
+    load_data_local_infile_tabular_file as _load_data_local_infile_tabular_file,
+    mysql_escape_char_literal as _sql_escape_char_literal,
+    mysql_escape_load_data_value as _mysql_escape_load_data_value,
+    mysql_quote_string as _sql_quote_string,
+)
 from .namemap import NameMap, is_compatible, load_namemap
 
 __all__ = [
+    "LoadDataDialect",
+    "DUCKDB_LOAD_DATA_DIALECT",
+    "MYSQL_GENERATED_TSV_DIALECT",
     "is_Null",
     "read_Description",
     "truncate_table_name",
@@ -62,16 +78,6 @@ __all__ = [
     "init_MySQL",
     "FastLoadState",
 ]
-
-_LOAD_DATA_ESCAPE_TRANSLATE = {
-    ord("\\"): "\\\\",
-    ord("\t"): "\\t",
-    ord("\n"): "\\n",
-    ord("\r"): "\\r",
-    0: "\\0",
-    26: "\\Z",  # Ctrl+Z (0x1a)
-}
-
 
 @dataclass
 class FastLoadState:
@@ -101,86 +107,6 @@ def _normalize_db_load_method(value) -> str:
     return "to_sql"
 
 
-def _sql_quote_string(value: str) -> str:
-    # MySQL string literal escaping (single quotes + backslash escapes).
-    return "'" + str(value).replace("\\", "\\\\").replace("'", "\\'") + "'"
-
-
-def _sql_escape_char_literal(ch: str) -> str:
-    """
-    Return MySQL string literal content (without surrounding quotes) for a delimiter/terminator.
-    """
-    if ch == "\t":
-        return "\\t"
-    if ch == "\n":
-        return "\\n"
-    if ch == "\r":
-        return "\\r"
-    if ch == "\0":
-        return "\\0"
-    if ch == "\\":
-        return "\\\\"
-    if ch == "'":
-        return "\\'"
-    return ch
-
-
-def _detect_line_terminator(path: str) -> str:
-    try:
-        with open(path, "rb") as f:
-            chunk = f.read(8192)
-        return "\r\n" if b"\r\n" in chunk else "\n"
-    except Exception:
-        return "\n"
-
-
-def _mysql_escape_load_data_value(value) -> str:
-    """
-    Escape a single field for LOAD DATA (no enclosing, ESCAPED BY '\\\\').
-
-    - None/NaN -> \\N (NULL)
-    - special chars -> backslash escapes so each record stays on one line
-    """
-    import json
-    import math
-
-    if value is None:
-        return r"\N"
-
-    try:
-        if type(value).__name__ == "NAType":
-            return r"\N"
-    except Exception:
-        pass
-
-    if isinstance(value, float) and math.isnan(value):
-        return r"\N"
-
-    if isinstance(value, (dict, list)):
-        # Prefer orjson for speed if available.
-        try:
-            import orjson
-
-            value = orjson.dumps(value).decode("utf-8")
-        except Exception:
-            try:
-                value = json.dumps(value, ensure_ascii=False)
-            except Exception:
-                value = str(value)
-    elif isinstance(value, (bytes, bytearray, memoryview)):
-        try:
-            value = bytes(value).decode("utf-8", errors="replace")
-        except Exception:
-            value = str(value)
-    elif isinstance(value, str):
-        pass
-    else:
-        value = str(value)
-
-    # Single-pass escaping via translate (faster than repeated replace).
-    return value.translate(_LOAD_DATA_ESCAPE_TRANSLATE)
-
-
 def _is_nullish_value(value) -> bool:
     if value is None:
         return True
@@ -208,6 +134,37 @@ def _json_dumps_best_effort(obj) -> str:
         return json.dumps(obj, ensure_ascii=False)
 
 
+def _mysql_comment_sql(text_value: str | None) -> str:
+    text_s = str(text_value or "").strip()
+    if not text_s:
+        return ""
+    text_s = text_s[:1024]
+    text_s = text_s.replace("\\", "\\\\").replace("'", "''")
+    return f" COMMENT '{text_s}'"
+
+
+def _column_descriptions_by_sql(nm: NameMap, column_descriptions: dict[str, str] | None) -> dict[str, str]:
+    desc = column_descriptions or {}
+    if not desc:
+        return {}
+    out: dict[str, str] = {}
+    for orig_col, sql_col in zip(nm.columns_original, nm.columns_sql):
+        value = desc.get(orig_col) or desc.get(sql_col)
+        if value:
+            out[str(sql_col)] = str(value)
+    return out
+
+
+def _column_type_with_comment(
+    column_type: str,
+    column: str,
+    desc_by_sql: dict[str, str] | None,
+    existing_col_comments: dict[str, str] | None = None,
+) -> str:
+    comment = (desc_by_sql or {}).get(str(column)) or (existing_col_comments or {}).get(str(column))
+    return f"{column_type}{_mysql_comment_sql(comment)}"
+
+
 def _write_load_data_stage_with_duckdb(
     *,
     df,
@@ -220,12 +177,17 @@ def _write_load_data_stage_with_duckdb(
 
     The resulting file uses CSV quoting rules with:
     - DELIMITER '\\t'
-    - NULLSTR '\\N'
+    - NULLSTR 'NULL'
     - QUOTE '"'
     - ESCAPE '"'
 
-    MySQL/MariaDB can consume this with
-    `FIELDS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\\\\'`.
+    CRITICAL: the MariaDB LOAD DATA reader must use the same escape
+    character. Reading this file with ESCAPED BY '\\' can silently corrupt
+    records that contain backslash-quote sequences and quoted newlines.
+    Also keep the NULL marker as SQL NULL-compatible `NULL`; `\\N` is a
+    literal string when MariaDB is using ESCAPED BY '"'.
+    MySQL/MariaDB must consume this with
+    `FIELDS TERMINATED BY '\\t' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\"'`.
     """
     import duckdb
     import json
@@ -246,7 +208,7 @@ def _write_load_data_stage_with_duckdb(
         copy_sql = (
             f"COPY (SELECT {select_sql} FROM kisti_input_df) "
             f"TO {json.dumps(str(file_path))} "
-            "(FORMAT CSV, HEADER FALSE, DELIMITER '\t', NULLSTR '\\N', QUOTE '\"', ESCAPE '\"');"
+            f"{DUCKDB_LOAD_DATA_DIALECT.duckdb_copy_options_sql()};"
         )
         con.execute(copy_sql)
     finally:
@@ -318,6 +280,9 @@ def _load_data_local_infile_dataframe(
                 sep="\t",
                 columns_expr=[f"`{qi(c)}`" for c in columns],
                 ignore_lines=0,
+                dialect=DUCKDB_LOAD_DATA_DIALECT,
+                expected_rows=len(df),
+                line_terminator="\n",
                 report=report,
             )
         else:
@@ -344,42 +309,18 @@ def _load_data_local_infile_dataframe(
                 except Exception:
                     pass
 
-            sql = (
-                "LOAD DATA LOCAL INFILE "
-                + _sql_quote_string(tmp_path)
-                + f" INTO TABLE `{qi(table_name)}` "
-                + "CHARACTER SET utf8mb4 "
-                + "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
-                + "LINES TERMINATED BY '\\n' "
-                + "("
-                + ", ".join(f"`{qi(c)}`" for c in columns)
-                + ");"
+            _load_data_local_infile_tabular_file(
+                conn=conn,
+                table_name=table_name,
+                file_path=tmp_path,
+                sep="\t",
+                columns_expr=[f"`{qi(c)}`" for c in columns],
+                ignore_lines=0,
+                dialect=MYSQL_GENERATED_TSV_DIALECT,
+                expected_rows=len(df),
+                line_terminator="\n",
+                report=report,
             )
-
-            try:
-                t0 = None
-                try:
-                    import time
-
-                    t0 = time.perf_counter()
-                except Exception:
-                    t0 = None
-                with conn.cursor() as cur:
-                    cur.execute(sql)
-                conn.commit()
-                if report is not None and t0 is not None:
-                    try:
-                        import time
-
-                        report.add_time_s("db.load_data.exec", time.perf_counter() - t0)
-                    except Exception:
-                        pass
-            except Exception:
-                try:
-                    conn.rollback()
-                except Exception:
-                    pass
-                raise
     finally:
         if tmp_path:
             try:
@@ -447,110 +388,24 @@ def _load_data_local_infile_rows(
                 except Exception:
                     pass
 
-        sql = (
-            "LOAD DATA LOCAL INFILE "
-            + _sql_quote_string(tmp_path)
-            + f" INTO TABLE `{qi(table_name)}` "
-            + "CHARACTER SET utf8mb4 "
-            + "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
-            + "LINES TERMINATED BY '\\n' "
-            + "("
-            + ", ".join(f"`{qi(c)}`" for c in columns_sql)
-            + ");"
+        _load_data_local_infile_tabular_file(
+            conn=conn,
+            table_name=table_name,
+            file_path=tmp_path,
+            sep="\t",
+            columns_expr=[f"`{qi(c)}`" for c in columns_sql],
+            ignore_lines=0,
+            dialect=MYSQL_GENERATED_TSV_DIALECT,
+            expected_rows=len(rows),
+            line_terminator="\n",
+            report=report,
         )
-
-        try:
-            t1 = None
-            try:
-                import time
-
-                t1 = time.perf_counter()
-            except Exception:
-                t1 = None
-            with conn.cursor() as cur:
-                cur.execute(sql)
-            conn.commit()
-            if report is not None and t1 is not None:
-                try:
-                    import time
-
-                    report.add_time_s("db.load_data.exec", time.perf_counter() - t1)
-                except Exception:
-                    pass
-        except Exception:
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-            raise
     finally:
         if tmp_path:
             try:
                 os.remove(tmp_path)
             except Exception:
                 pass
-
-
-def _load_data_local_infile_tabular_file(
-    *,
-    conn,
-    table_name: str,
-    file_path: str,
-    sep: str,
-    columns_expr: list[str],
-    ignore_lines: int = 1,
-    report=None,
-) -> None:
-    """
-    Bulk load an on-disk delimited file via LOAD DATA LOCAL INFILE.
-    """
-
-    def qi(ident: str) -> str:
-        return str(ident).replace("`", "``")
-
-    lt = _detect_line_terminator(file_path)
-    sep_lit = _sql_escape_char_literal(sep)
-    lt_lit = "\\r\\n" if lt == "\r\n" else "\\n"
-
-    ignore = f"IGNORE {int(ignore_lines)} LINES " if int(ignore_lines) > 0 else ""
-    sql = (
-        "LOAD DATA LOCAL INFILE "
-        + _sql_quote_string(file_path)
-        + f" INTO TABLE `{qi(table_name)}` "
-        + "CHARACTER SET utf8mb4 "
-        + f"FIELDS TERMINATED BY '{sep_lit}' OPTIONALLY ENCLOSED BY '\"' ESCAPED BY '\\\\' "
-        + f"LINES TERMINATED BY '{lt_lit}' "
-        + ignore
-        + "("
-        + ", ".join(columns_expr)
-        + ");"
-    )
-
-    t0 = None
-    try:
-        import time
-
-        t0 = time.perf_counter()
-    except Exception:
-        t0 = None
-
-    try:
-        with conn.cursor() as cur:
-            cur.execute(sql)
-        conn.commit()
-        if report is not None and t0 is not None:
-            try:
-                import time
-
-                report.add_time_s("db.load_data.exec", time.perf_counter() - t0)
-            except Exception:
-                pass
-    except Exception:
-        try:
-            conn.rollback()
-        except Exception:
-            pass
-        raise
 
 
 def _load_data_local_infile_tsv_file(
@@ -579,69 +434,19 @@ def _load_data_local_infile_tsv_file(
     if not columns_sql:
         return
 
-    sql = (
-        "LOAD DATA LOCAL INFILE "
-        + _sql_quote_string(str(file_path))
-        + f" INTO TABLE `{qi(table_name)}` "
-        + "CHARACTER SET utf8mb4 "
-        + "FIELDS TERMINATED BY '\\t' ESCAPED BY '\\\\' "
-        + "LINES TERMINATED BY '\\n' "
-        + "("
-        + ", ".join(f"`{qi(c)}`" for c in columns_sql)
-        + ");"
+    _load_data_local_infile_tabular_file(
+        conn=conn,
+        table_name=table_name,
+        file_path=str(file_path),
+        sep="\t",
+        columns_expr=[f"`{qi(c)}`" for c in columns_sql],
+        ignore_lines=0,
+        dialect=MYSQL_GENERATED_TSV_DIALECT,
+        report=report,
+        commit=bool(commit),
+        rollback_mode=rollback_mode,
+        line_terminator="\n",
     )
-
-    t0 = None
-    try:
-        import time
-
-        t0 = time.perf_counter()
-    except Exception:
-        t0 = None
-
-    rollback_mode_norm = str(rollback_mode or "").strip().lower()
-    use_savepoint = bool(not commit) and rollback_mode_norm in {"savepoint", "sp"}
-    sp_name = "kisti_load_data"
-
-    try:
-        with conn.cursor() as cur:
-            if use_savepoint:
-                try:
-                    cur.execute(f"SAVEPOINT {sp_name}")
-                except Exception:
-                    use_savepoint = False
-            cur.execute(sql)
-            if use_savepoint:
-                try:
-                    cur.execute(f"RELEASE SAVEPOINT {sp_name}")
-                except Exception:
-                    pass
-        if bool(commit):
-            conn.commit()
-        if report is not None and t0 is not None:
-            try:
-                import time
-
-                report.add_time_s("db.load_data.exec", time.perf_counter() - t0)
-            except Exception:
-                pass
-    except Exception:
-        try:
-            if use_savepoint:
-                try:
-                    with conn.cursor() as cur:
-                        cur.execute(f"ROLLBACK TO SAVEPOINT {sp_name}")
-                        try:
-                            cur.execute(f"RELEASE SAVEPOINT {sp_name}")
-                        except Exception:
-                            pass
-                except Exception:
-                    conn.rollback()
-            else:
-                conn.rollback()
-        except Exception:
-            pass
-        raise
 
 
 def _get_or_build_name_map(
@@ -949,6 +754,7 @@ def fill_table_from_file(
     load_method: str | None = None,
     fast_load_state: FastLoadState | None = None,
     local_infile_conn=None,
+    column_descriptions: dict[str, str] | None = None,
 ):
     from sqlalchemy import create_engine
     from sqlalchemy.engine import URL
@@ -1381,6 +1187,7 @@ def generate_create_table_sql_from_columns(
     name_map: NameMap | dict | None = None,
     key_sep: str = "__",
     column_type: str = "LONGTEXT",
+    column_descriptions: dict[str, str] | None = None,
 ) -> tuple[str, NameMap]:
     """
     Generate a simple CREATE TABLE statement from a list of columns.
@@ -1398,7 +1205,11 @@ def generate_create_table_sql_from_columns(
     else:
         nm = NameMap.build(table_name=table_name, columns=columns, key_sep=key_sep, max_len=64)
 
-    sql_cols = [f"`{qi(col)}` {column_type}" for col in nm.columns_sql]
+    desc = column_descriptions or {}
+    sql_cols = [
+        f"`{qi(sql_col)}` {column_type}{_mysql_comment_sql(desc.get(orig_col))}"
+        for orig_col, sql_col in zip(nm.columns_original, nm.columns_sql)
+    ]
     sql = f"CREATE TABLE IF NOT EXISTS `{qi(nm.table_sql)}` ({', '.join(sql_cols)});"
     return sql, nm
 
@@ -1411,6 +1222,7 @@ def create_table_from_columns(
     name_map: NameMap | dict | None = None,
     key_sep: str = "__",
     column_type: str = "LONGTEXT",
+    column_descriptions: dict[str, str] | None = None,
 ) -> NameMap:
     import pymysql
 
@@ -1421,6 +1233,7 @@ def create_table_from_columns(
         name_map=name_map,
         key_sep=key_sep,
         column_type=column_type,
+        column_descriptions=column_descriptions,
     )
 
     conn = None
@@ -1463,6 +1276,7 @@ def fill_table_from_dataframe(
     local_infile_conn=None,
     load_data_staging_writer: str | None = None,
     load_data_staging_dir: str | None = None,
+    column_descriptions: dict[str, str] | None = None,
 ) -> NameMap:
     """
     Insert a pandas DataFrame into an existing table, with best-effort schema drift handling.
@@ -1512,15 +1326,23 @@ def fill_table_from_dataframe(
 
     df = df.rename(columns=nm.changed_columns())
     cols_sql = list(getattr(df, "columns", []))
+    desc_by_sql = _column_descriptions_by_sql(nm, column_descriptions)
 
     # Best-effort: align with existing table schema.
     existing_cols_set: set[str] | None
+    existing_col_comments: dict[str, str] = {}
     if existing_cols is not None:
         existing_cols_set = existing_cols
     else:
         try:
             inspector = inspect(engine)
-            existing_cols_set = {c.get("name") for c in inspector.get_columns(table_name)}
+            inspected_columns = list(inspector.get_columns(table_name))
+            existing_cols_set = {c.get("name") for c in inspected_columns}
+            existing_col_comments = {
+                str(c.get("name")): str(c.get("comment"))
+                for c in inspected_columns
+                if c.get("name") and c.get("comment")
+            }
         except Exception as e:
             print(f"Warning: could not inspect existing columns for `{table_name}`: {e}")
             existing_cols_set = None
@@ -1532,7 +1354,12 @@ def fill_table_from_dataframe(
         try:
             with (report.timer("db.alter") if report else nullcontext()):
                 with engine.begin() as conn:
-                    conn.execute(text(f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` {column_type}"))
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` "
+                            f"{_column_type_with_comment(column_type, extra_sql, desc_by_sql)}"
+                        )
+                    )
             existing_cols_set.add(extra_sql)
         except Exception as e:
             if report:
@@ -1549,7 +1376,10 @@ def fill_table_from_dataframe(
 
     if missing_cols and auto_alter_table:
         # Prefer one ALTER TABLE with multiple ADD COLUMN for performance.
-        add_clauses = [f"ADD COLUMN `{qi(col)}` {column_type}" for col in missing_cols]
+        add_clauses = [
+            f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(column_type, col, desc_by_sql)}"
+            for col in missing_cols
+        ]
         alter_sql = f"ALTER TABLE `{qi(table_name)}` " + ", ".join(add_clauses)
 
         with (report.timer("db.alter") if report else nullcontext()):
@@ -1566,7 +1396,7 @@ def fill_table_from_dataframe(
                             conn.execute(
                                 text(
                                     f"ALTER TABLE `{qi(table_name)}` "
-                                    f"ADD COLUMN `{qi(col)}` {column_type}"
+                                    f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(column_type, col, desc_by_sql)}"
                                 )
                             )
                             if existing_cols_set is not None:
@@ -1715,7 +1545,7 @@ def fill_table_from_dataframe(
                     conn.execute(
                         text(
                             f"ALTER TABLE `{qi(table_name)}` "
-                            f"ADD COLUMN `{qi(col)}` {fallback_column_type}"
+                            f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(fallback_column_type, col, desc_by_sql)}"
                         )
                     )
                     if existing_cols_set is not None:
@@ -1724,7 +1554,8 @@ def fill_table_from_dataframe(
                     conn.execute(
                         text(
                             f"ALTER TABLE `{qi(table_name)}` "
-                            f"MODIFY COLUMN `{qi(col)}` {fallback_column_type}"
+                            f"MODIFY COLUMN `{qi(col)}` "
+                            f"{_column_type_with_comment(fallback_column_type, col, desc_by_sql, existing_col_comments)}"
                         )
                     )
 
@@ -1750,6 +1581,7 @@ def fill_table_from_rows(
     load_method: str | None = None,
     fast_load_state: FastLoadState | None = None,
     local_infile_conn=None,
+    column_descriptions: dict[str, str] | None = None,
 ):
     """
     Insert row dicts into an existing table with best-effort drift handling.
@@ -1805,6 +1637,7 @@ def fill_table_from_rows(
         extra_sql = nm.map_column(extra_canon)
 
     cols_sql = [nm.map_column(c) for c in columns_original]
+    desc_by_sql = _column_descriptions_by_sql(nm, column_descriptions)
 
     # Best-effort: align with existing table schema.
     existing_cols_set: set[str] | None
@@ -1825,7 +1658,12 @@ def fill_table_from_rows(
         try:
             with (report.timer("db.alter") if report else nullcontext()):
                 with engine.begin() as conn:
-                    conn.execute(text(f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` {column_type}"))
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` "
+                            f"{_column_type_with_comment(column_type, extra_sql, desc_by_sql)}"
+                        )
+                    )
             existing_cols_set.add(extra_sql)
         except Exception as e:
             if report:
@@ -1841,7 +1679,10 @@ def fill_table_from_rows(
                     pass
 
     if missing_cols and auto_alter_table:
-        add_clauses = [f"ADD COLUMN `{qi(col)}` {column_type}" for col in missing_cols]
+        add_clauses = [
+            f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(column_type, col, desc_by_sql)}"
+            for col in missing_cols
+        ]
         alter_sql = f"ALTER TABLE `{qi(table_name)}` " + ", ".join(add_clauses)
         with (report.timer("db.alter") if report else nullcontext()):
             with engine.begin() as conn:
@@ -1857,7 +1698,7 @@ def fill_table_from_rows(
                             conn.execute(
                                 text(
                                     f"ALTER TABLE `{qi(table_name)}` "
-                                    f"ADD COLUMN `{qi(col)}` {column_type}"
+                                    f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(column_type, col, desc_by_sql)}"
                                 )
                             )
                             if existing_cols_set is not None:
@@ -1963,6 +1804,7 @@ def fill_table_from_tsv_file(
     fast_load_state: FastLoadState | None = None,
     load_data_commit: bool = True,
     local_infile_conn=None,
+    column_descriptions: dict[str, str] | None = None,
 ):
     """
     Load a TSV file into an existing table with best-effort drift handling.
@@ -2024,6 +1866,7 @@ def fill_table_from_tsv_file(
         extra_sql = nm.map_column(extra_canon)
 
     cols_sql = [nm.map_column(c) for c in columns_original]
+    desc_by_sql = _column_descriptions_by_sql(nm, column_descriptions)
 
     # Best-effort: align with existing table schema.
     existing_cols_set: set[str] | None
@@ -2044,7 +1887,12 @@ def fill_table_from_tsv_file(
         try:
             with (report.timer("db.alter") if report else nullcontext()):
                 with engine.begin() as conn:
-                    conn.execute(text(f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` {column_type}"))
+                    conn.execute(
+                        text(
+                            f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(extra_sql)}` "
+                            f"{_column_type_with_comment(column_type, extra_sql, desc_by_sql)}"
+                        )
+                    )
             existing_cols_set.add(extra_sql)
         except Exception as e:
             if report:
@@ -2060,7 +1908,10 @@ def fill_table_from_tsv_file(
                     pass
 
     if missing_cols and auto_alter_table:
-        add_clauses = [f"ADD COLUMN `{qi(col)}` {column_type}" for col in missing_cols]
+        add_clauses = [
+            f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(column_type, col, desc_by_sql)}"
+            for col in missing_cols
+        ]
         alter_sql = f"ALTER TABLE `{qi(table_name)}` " + ", ".join(add_clauses)
         with (report.timer("db.alter") if report else nullcontext()):
             with engine.begin() as conn:
@@ -2073,7 +1924,12 @@ def fill_table_from_tsv_file(
                 except Exception:
                     for col in missing_cols:
                         try:
-                            conn.execute(text(f"ALTER TABLE `{qi(table_name)}` ADD COLUMN `{qi(col)}` {column_type}"))
+                            conn.execute(
+                                text(
+                                    f"ALTER TABLE `{qi(table_name)}` "
+                                    f"ADD COLUMN `{qi(col)}` {_column_type_with_comment(column_type, col, desc_by_sql)}"
+                                )
+                            )
                             if existing_cols_set is not None:
                                 existing_cols_set.add(col)
                             print(f"Added missing column `{col}` to `{table_name}` ({column_type}).")

@@ -35,6 +35,10 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["persist_parquet_dir"], "")
         self.assertEqual(cfg["persist_tsv_files"], False)
         self.assertEqual(cfg["persist_tsv_dir"], "")
+        self.assertEqual(cfg["id_compaction"]["enabled"], False)
+        self.assertEqual(cfg["id_compaction"]["preset"], "openalex")
+        self.assertEqual(cfg["id_compaction"]["collision_policy"], "error")
+        self.assertEqual(cfg["id_compaction"]["namespace_conflict_policy"], "error")
 
     def test_normalize_data_config_file_sep_alias(self):
         cfg = normalize_data_config(

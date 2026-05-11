@@ -453,6 +453,7 @@ def _flatten_preview(
     index_key: str,
     except_keys: list[str],
     record_index: int,
+    id_compactor=None,
     max_rows_per_sub: int = 5,
 ) -> dict[str, Any]:
     try:
@@ -469,6 +470,14 @@ def _flatten_preview(
         except_keys=list(except_keys) if except_keys is not None else None,
         sep=key_sep,
     )
+    if id_compactor is not None and getattr(id_compactor, "enabled", False):
+        try:
+            row = id_compactor.compact_row(row, table_name=base_table)
+            for sub_key, rows in list((sub_rows or {}).items()):
+                tname = f"{base_table}{key_sep}{str(sub_key).replace('.', key_sep)}"
+                sub_rows[sub_key] = id_compactor.compact_rows(list(rows or []), table_name=tname)
+        except Exception:
+            pass
 
     base_table_sql = truncate_table_name(base_table, max_len=MYSQL_IDENTIFIER_MAX_LEN)
     base_row = _jsonable(row, max_list=50, max_str=500)
@@ -1007,6 +1016,7 @@ def render_review_preview_html(*, meta: Mapping[str, Any], previews: list[dict[s
       <span class="pill">sep: <code>{h(meta.get('key_sep') or '')}</code></span>
       <span class="pill">index: <code>{h(meta.get('index_key') or '')}</code></span>
       <span class="pill">auto-except: <code>{h((meta.get('auto_except') or {}).get('enabled') if isinstance(meta.get('auto_except'), Mapping) else False)}</code></span>
+      <span class="pill">id-compaction: <code>{h((meta.get('id_compaction') or {}).get('enabled') if isinstance(meta.get('id_compaction'), Mapping) else False)}</code></span>
     </div>
     <div style="margin-top: 10px;" class="toolbar">
       <select id="record-select"></select>
@@ -2439,6 +2449,9 @@ def write_review_preview_report(
     key_sep = str(data_config.get("KEY_SEP") or "__")
     index_key = str(data_config.get("index_key") or "id")
     except_keys = list(data_config.get("except_keys") or [])
+    from .id_compaction import IdCompactor
+
+    id_compactor = IdCompactor.from_config(data_config, sep=key_sep, index_key=index_key)
     auto_except_meta: dict[str, Any] | None = None
     if bool(data_config.get("auto_except", False)):
         from .pipeline import _auto_detect_except_keys
@@ -2465,6 +2478,7 @@ def write_review_preview_report(
             index_key=index_key,
             except_keys=except_keys,
             record_index=i,
+            id_compactor=id_compactor,
         )
         diff = _compute_diff(raw_nodes, key_sep=key_sep, index_key=index_key, flat=flat)
 
@@ -2518,6 +2532,7 @@ def write_review_preview_report(
         "index_key": index_key,
         "except_keys": except_keys,
         "auto_except": auto_except_meta or {"enabled": False, "except_keys_effective": except_keys},
+        "id_compaction": id_compactor.summary(),
         "max_records": int(max_records),
         "max_nodes": int(max_nodes),
         "max_union_nodes": int(max_union_nodes),

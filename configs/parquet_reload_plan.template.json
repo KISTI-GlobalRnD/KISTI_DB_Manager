@@ -1,0 +1,75 @@
+{
+  "version": 1,
+  "tag": "example",
+  "run_dir": "/path/to/run_dir",
+  "config": "/path/to/run_dir/config.json",
+  "dotenv": ".env",
+  "db_name": "target_database",
+  "db": {
+    "driver": "mariadb"
+  },
+  "parquet_root": "/path/to/run_dir/serving_parquet_root",
+  "reports_dir": "/path/to/run_dir/reports",
+  "logs_dir": "/path/to/run_dir/logs",
+  "staging_dir": "/path/to/run_dir/staging",
+  "duckdb_temp_dir": "/path/to/run_dir/staging/duckdb_tmp",
+  "materialize": {
+    "parallel_tables": 1,
+    "parallel_files_per_table": 1,
+    "table_prefix": "",
+    "staging_writer": "duckdb",
+    "file_chunk_rows": 250000
+  },
+  "preflight": {
+    "enabled": true,
+    "failure_policy": "hard",
+    "allow_unsupported": false,
+    "load_data_roundtrip": true
+  },
+  "validation": {
+    "profile": "large",
+    "literal_null_marker": "\\N",
+    "literal_null_marker_compare_mode": "utf8mb4_bin",
+    "literal_marker": {
+      "mode": "off"
+    },
+    "threads": 4,
+    "memory_limit": "64GB",
+    "skip_parquet_key_health": true,
+    "skip_db_key_health": true,
+    "skip_key_bucket_check": true,
+    "skip_orphans": true,
+    "skip_sample_checksum": true,
+    "skip_row_bucket_checksum": true
+  },
+  "finalize": {
+    "enabled": true,
+    "strict_indexes": true,
+    "no_unique_fallback": true,
+    "skip_analyze": true,
+    "skip_validation": true,
+    "indexes": [
+      {
+        "table": "example_table",
+        "index_name": "idx_example_table_id",
+        "columns": [
+          {
+            "name": "id",
+            "prefix_len": 64
+          }
+        ],
+        "unique": false
+      }
+    ]
+  },
+  "tables": [
+    {
+      "name": "example_table",
+      "writer": "duckdb",
+      "chunk_rows": 250000,
+      "reset": true,
+      "expected_rows": null,
+      "validation_profile": "large"
+    }
+  ]
+}

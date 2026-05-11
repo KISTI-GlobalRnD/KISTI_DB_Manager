@@ -7,6 +7,7 @@ While the manual is workflow-oriented, this section is optimized for finding com
 
 - [CLI Quick Reference](cli.md)
 - [Examples](examples.md)
+- [Overton Validation Queries](overton-validation.md)
 
 ## Use this section when
 

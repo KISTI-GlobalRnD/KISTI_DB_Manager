@@ -64,6 +64,13 @@ def _validate_json_run_config(data_config: Mapping[str, Any], *, mode_name: str)
             "persist_parquet_files=true cannot be combined with persist_tsv_files=true; "
             "choose one artifact strategy."
         )
+    try:
+        from .id_compaction import normalize_id_compaction_config, validate_id_compaction_config
+
+        id_compaction = normalize_id_compaction_config(data_config)
+        validate_id_compaction_config(id_compaction)
+    except Exception as e:
+        errors.append(f"invalid id_compaction config: {e}")
 
     if errors:
         mode_hint = f" mode={mode_name!r}" if str(mode_name or "").strip() else ""
@@ -599,6 +606,24 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     if getattr(args, "auto_except_novelty_threshold", None) is not None:
         data_config["auto_except_novelty_threshold"] = float(args.auto_except_novelty_threshold)
 
+    def ensure_id_compaction_config() -> dict[str, Any]:
+        if not isinstance(data_config.get("id_compaction"), dict):
+            data_config["id_compaction"] = {}
+        return data_config["id_compaction"]
+
+    if getattr(args, "id_compaction", None) is not None:
+        ensure_id_compaction_config()["enabled"] = bool(args.id_compaction)
+    if getattr(args, "id_compaction_preset", None):
+        ensure_id_compaction_config()["preset"] = str(args.id_compaction_preset)
+    if getattr(args, "id_compaction_mode", None):
+        ensure_id_compaction_config()["mode"] = str(args.id_compaction_mode)
+    if getattr(args, "id_compaction_collision_policy", None):
+        ensure_id_compaction_config()["collision_policy"] = str(args.id_compaction_collision_policy)
+    if getattr(args, "id_compaction_namespace_conflict_policy", None):
+        ensure_id_compaction_config()["namespace_conflict_policy"] = str(
+            args.id_compaction_namespace_conflict_policy
+        )
+
     create = _resolve_bool(getattr(args, "create", None), mode_spec.stage_defaults.get("create", True)) and not bool(args.dry_run)
     load = _resolve_bool(getattr(args, "load", None), mode_spec.stage_defaults.get("load", True)) and not bool(args.dry_run)
     index = _resolve_bool(getattr(args, "index", None), mode_spec.stage_defaults.get("index", True)) and not bool(args.dry_run)
@@ -674,6 +699,96 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         else:
             print("(no DDL available)")
 
+    return 0
+
+
+def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
+    from .json_parallel_profile import parse_worker_list, profile_parallel
+
+    try:
+        workers = parse_worker_list(args.workers)
+    except ValueError as e:
+        raise ConfigValidationError(str(e)) from e
+
+    _ensure_optional_deps(
+        "json profile-parallel",
+        ["numpy", "pandas", "tqdm", "orjson", "xmltodict", "pyarrow"],
+        extras=["json"],
+    )
+
+    result = profile_parallel(
+        config_path=args.config,
+        workers=workers,
+        out_dir=args.out or None,
+        max_records=args.max_records,
+        chunk_size=args.chunk_size,
+        mode=args.mode,
+        keep_artifacts=bool(args.keep_artifacts),
+        cleanup_parquet=bool(args.cleanup_parquet),
+        index_key=args.index_key,
+        except_keys=args.except_key or None,
+        id_compaction=args.id_compaction,
+        id_compaction_preset=args.id_compaction_preset,
+        id_compaction_mode=args.id_compaction_mode,
+        id_compaction_collision_policy=args.id_compaction_collision_policy,
+        id_compaction_namespace_conflict_policy=args.id_compaction_namespace_conflict_policy,
+    )
+    print(f"parallel_profile: {result.get('summary_json_path')}")
+    print(f"parallel_profile_md: {result.get('summary_md_path')}")
+    print(f"recommended_parallel_workers: {result.get('recommended_parallel_workers')}")
+    return 1 if result.get("status") == "failed" else 0
+
+
+def _cmd_json_id_compaction_preflight(args: argparse.Namespace) -> int:
+    cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    data_config = cfg.get("data_config") or cfg.get("data") or {}
+
+    from .config import coerce_data_config
+
+    data_config = coerce_data_config(data_config, inplace=isinstance(data_config, dict))
+
+    def ensure_id_compaction_config() -> dict[str, Any]:
+        if not isinstance(data_config.get("id_compaction"), dict):
+            data_config["id_compaction"] = {}
+        return data_config["id_compaction"]
+
+    # This command is specifically for compaction, so default to enabled unless the
+    # user explicitly disables it.
+    ensure_id_compaction_config().setdefault("enabled", True)
+    if getattr(args, "id_compaction", None) is not None:
+        ensure_id_compaction_config()["enabled"] = bool(args.id_compaction)
+    if getattr(args, "id_compaction_preset", None):
+        ensure_id_compaction_config()["preset"] = str(args.id_compaction_preset)
+    if getattr(args, "id_compaction_mode", None):
+        ensure_id_compaction_config()["mode"] = str(args.id_compaction_mode)
+    if getattr(args, "id_compaction_collision_policy", None):
+        ensure_id_compaction_config()["collision_policy"] = str(args.id_compaction_collision_policy)
+    if getattr(args, "id_compaction_namespace_conflict_policy", None):
+        ensure_id_compaction_config()["namespace_conflict_policy"] = str(
+            args.id_compaction_namespace_conflict_policy
+        )
+
+    _ensure_optional_deps("json id-compaction-preflight", ["numpy", "pandas"], extras=["json"])
+
+    from .id_compaction_preflight import run_id_compaction_preflight
+
+    result = run_id_compaction_preflight(
+        data_config,
+        index_key=args.index_key,
+        except_keys=args.except_key or None,
+        max_records=args.max_records,
+        max_examples_per_key=args.max_examples_per_key,
+        force_enable=(False if getattr(args, "id_compaction", None) is False else True),
+    )
+
+    if args.report:
+        Path(args.report).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        print(f"preflight: {args.report}")
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+
+    if result.get("status") == "failed" and not bool(args.allow_issues):
+        return 1
     return 0
 
 
@@ -859,6 +974,96 @@ def _cmd_quarantine_summary(args: argparse.Namespace) -> int:
     print(f"quarantine_md: {res['quarantine_md']}")
     print(f"quarantine_html: {res['quarantine_html']}")
     print(f"quarantine_json: {res['quarantine_json']}")
+    return 0
+
+
+def _cmd_parquet_reload(args: argparse.Namespace) -> int:
+    from .parquet_reload import run_reload_plan
+
+    result = run_reload_plan(
+        Path(args.plan),
+        start_at=str(args.start_at or ""),
+        only_table=str(args.only_table or ""),
+        force_reload_completed=bool(args.force_reload_completed),
+        skip_finalizer=bool(args.skip_finalizer),
+        skip_preflight=bool(args.skip_preflight),
+        dry_run=bool(args.dry_run),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_parquet_preflight(args: argparse.Namespace) -> int:
+    from .target_db_preflight import run_target_db_preflight
+
+    result = run_target_db_preflight(
+        Path(args.plan),
+        out_path=Path(args.out).expanduser().resolve() if args.out else None,
+        table_names=[str(item).strip() for item in args.table if str(item).strip()] or None,
+        require_reload_supported=bool(args.require_reload_supported),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if result.get("status") == "failed" else 0
+
+
+def _cmd_parquet_inspect(args: argparse.Namespace) -> int:
+    from .parquet_artifacts import artifact_contract_from_plan, inspect_parquet_artifact_contract
+
+    table_names = [str(item).strip() for item in (args.table or []) if str(item).strip()] or None
+    if args.plan:
+        plan = json.loads(Path(args.plan).read_text(encoding="utf-8"))
+        result = artifact_contract_from_plan(
+            plan,
+            table_names=table_names,
+            require_schema_manifest=bool(args.require_schema_manifest),
+            require_id_compaction=bool(args.require_id_compaction),
+            strict_schema_manifest=bool(args.strict_schema_manifest),
+        )
+        result["plan"] = str(Path(args.plan).expanduser().resolve())
+    else:
+        if not args.parquet_root:
+            raise SystemExit("parquet inspect requires --parquet-root or --plan")
+        result = inspect_parquet_artifact_contract(
+            Path(args.parquet_root),
+            table_names=table_names,
+            require_schema_manifest=bool(args.require_schema_manifest),
+            require_id_compaction=bool(args.require_id_compaction),
+            strict_schema_manifest=bool(args.strict_schema_manifest),
+        )
+    if args.out:
+        out = Path(args.out).expanduser().resolve()
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        print(f"artifact_contract: {out}")
+    else:
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 1 if result.get("status") == "failed" else 0
+
+
+def _cmd_parquet_mark_table_done(args: argparse.Namespace) -> int:
+    from .parquet_reload import mark_table_done_from_validation_report
+
+    result = mark_table_done_from_validation_report(
+        status_path=Path(args.status),
+        table=str(args.table),
+        validation_report=Path(args.validation_report),
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
+    return 0
+
+
+def _cmd_parquet_finalize(args: argparse.Namespace) -> int:
+    from .parquet_finalize import run_finalize_plan
+
+    result = run_finalize_plan(
+        Path(args.plan),
+        out_path=Path(args.out).expanduser().resolve() if args.out else None,
+        strict_indexes=True if args.strict_indexes else None,
+        no_unique_fallback=True if args.no_unique_fallback else None,
+        skip_analyze=True if args.skip_analyze else None,
+        skip_validation=True if args.skip_validation else None,
+    )
+    print(json.dumps(result, ensure_ascii=False, indent=2))
     return 0
 
 
@@ -1052,6 +1257,32 @@ def build_parser() -> argparse.ArgumentParser:
         help="Directory to save persisted TSV artifacts (default: runs/<table>_<run_id>/tsv).",
     )
     p_json_run.add_argument(
+        "--id-compaction",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable semantic ID compaction during JSON parsing (default: config or false).",
+    )
+    p_json_run.add_argument(
+        "--id-compaction-preset",
+        choices=["openalex"],
+        help="ID compaction preset (default: openalex).",
+    )
+    p_json_run.add_argument(
+        "--id-compaction-mode",
+        choices=["semantic_column_strip"],
+        help="ID compaction mode (default: semantic_column_strip).",
+    )
+    p_json_run.add_argument(
+        "--id-compaction-collision-policy",
+        choices=["error", "preserve"],
+        help="How to handle nonblank source values that map to the same compacted column (default: error).",
+    )
+    p_json_run.add_argument(
+        "--id-compaction-namespace-conflict-policy",
+        choices=["error", "preserve"],
+        help="How to handle URL namespace conflicts for semantic ID columns (default: error).",
+    )
+    p_json_run.add_argument(
         "--tsv-union-merge-min-coverage",
         type=float,
         help="Heuristic: attempt union merge when min(file_cols/union_cols) >= this (default: config or 0.8).",
@@ -1127,6 +1358,177 @@ def build_parser() -> argparse.ArgumentParser:
         help="Enable/disable OPTIMIZE TABLE (default: mode preset)",
     )
     p_json_run.set_defaults(func=_cmd_json_run)
+
+    p_json_profile_parallel = json_sub.add_parser(
+        "profile-parallel",
+        help="Compare JSON parse/parquet sample runs across parallel_workers values",
+    )
+    p_json_profile_parallel.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")
+    p_json_profile_parallel.add_argument("--index-key", help="Override record id key (default: config or 'id')")
+    p_json_profile_parallel.add_argument("--except-key", action="append", help="Exclude a branch from flattening (repeatable)")
+    p_json_profile_parallel.add_argument(
+        "--workers",
+        default="0,2,4,8",
+        help="Comma-separated parallel_workers values to test (default: 0,2,4,8)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--max-records",
+        type=int,
+        default=20000,
+        help="Stop each sample run after N records (default: 20000; use 0 for full input)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--chunk-size",
+        type=int,
+        help="Records per batch override (default: selected mode/config)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--mode",
+        choices=sorted(_MODES),
+        default="parse-parquet-safe",
+        help="Run mode preset to apply before profiling overrides (default: parse-parquet-safe)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--out",
+        default="",
+        help="Output directory (default: runs/profile_parallel_<timestamp>)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--keep-artifacts",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Keep per-worker parquet artifacts after inspection (default: true)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--cleanup-parquet",
+        action="store_true",
+        help="Delete per-worker parquet directories after artifact contract inspection",
+    )
+    p_json_profile_parallel.add_argument(
+        "--id-compaction",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable semantic ID compaction during profile runs (default: config).",
+    )
+    p_json_profile_parallel.add_argument(
+        "--id-compaction-preset",
+        choices=["openalex"],
+        help="ID compaction preset (default: openalex).",
+    )
+    p_json_profile_parallel.add_argument(
+        "--id-compaction-mode",
+        choices=["semantic_column_strip"],
+        help="ID compaction mode (default: semantic_column_strip).",
+    )
+    p_json_profile_parallel.add_argument(
+        "--id-compaction-collision-policy",
+        choices=["error", "preserve"],
+        help="How to handle nonblank source values that map to the same compacted column (default: error).",
+    )
+    p_json_profile_parallel.add_argument(
+        "--id-compaction-namespace-conflict-policy",
+        choices=["error", "preserve"],
+        help="How to handle URL namespace conflicts for semantic ID columns (default: error).",
+    )
+    p_json_profile_parallel.set_defaults(func=_cmd_json_profile_parallel)
+
+    p_json_id_preflight = json_sub.add_parser(
+        "id-compaction-preflight",
+        help="Scan JSON records for ID compaction collisions, namespace conflicts, and ambiguous URL-like columns",
+    )
+    p_json_id_preflight.add_argument("--config", required=True, help="JSON config file containing data_config")
+    p_json_id_preflight.add_argument("--index-key", help="Override record id key (default: config or 'id')")
+    p_json_id_preflight.add_argument("--except-key", action="append", help="Exclude a branch from flattening (repeatable)")
+    p_json_id_preflight.add_argument(
+        "--max-records",
+        type=int,
+        default=10000,
+        help="Scan at most N records (default: 10000; use 0 for full scan)",
+    )
+    p_json_id_preflight.add_argument(
+        "--max-examples-per-key",
+        type=int,
+        default=3,
+        help="Store up to N source examples per issue key (default: 3)",
+    )
+    p_json_id_preflight.add_argument("--report", help="Write preflight JSON report to this path")
+    p_json_id_preflight.add_argument(
+        "--allow-issues",
+        action="store_true",
+        help="Return exit code 0 even when blocking ID compaction issues are found",
+    )
+    p_json_id_preflight.add_argument(
+        "--id-compaction",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable/disable semantic ID compaction for preflight (default: enabled).",
+    )
+    p_json_id_preflight.add_argument(
+        "--id-compaction-preset",
+        choices=["openalex"],
+        help="ID compaction preset (default: openalex).",
+    )
+    p_json_id_preflight.add_argument(
+        "--id-compaction-mode",
+        choices=["semantic_column_strip"],
+        help="ID compaction mode (default: semantic_column_strip).",
+    )
+    p_json_id_preflight.add_argument(
+        "--id-compaction-collision-policy",
+        choices=["error", "preserve"],
+        help="Run policy to record in the report (preflight scans with preserve internally).",
+    )
+    p_json_id_preflight.add_argument(
+        "--id-compaction-namespace-conflict-policy",
+        choices=["error", "preserve"],
+        help="Run policy to record in the report (preflight scans with preserve internally).",
+    )
+    p_json_id_preflight.set_defaults(func=_cmd_json_id_compaction_preflight)
+
+    p_parquet = sub.add_parser("parquet", help="Parquet materialize/reload/finalize helpers")
+    parquet_sub = p_parquet.add_subparsers(dest="parquet_cmd", required=True)
+
+    p_parquet_reload = parquet_sub.add_parser("reload", help="Run a config-driven parquet reload plan")
+    p_parquet_reload.add_argument("--plan", required=True, help="Parquet reload plan JSON")
+    p_parquet_reload.add_argument("--start-at", default="", help="Start from this table in the plan")
+    p_parquet_reload.add_argument("--only-table", default="", help="Run only one table from the plan")
+    p_parquet_reload.add_argument("--force-reload-completed", action="store_true")
+    p_parquet_reload.add_argument("--skip-finalizer", action="store_true")
+    p_parquet_reload.add_argument("--skip-preflight", action="store_true")
+    p_parquet_reload.add_argument("--dry-run", action="store_true")
+    p_parquet_reload.set_defaults(func=_cmd_parquet_reload)
+
+    p_parquet_preflight = parquet_sub.add_parser("preflight", help="Inspect target DB compatibility before parquet reload")
+    p_parquet_preflight.add_argument("--plan", required=True, help="Parquet reload plan JSON")
+    p_parquet_preflight.add_argument("--out", default="", help="Preflight report path")
+    p_parquet_preflight.add_argument("--table", action="append", default=[], help="Restrict preflight to selected plan table; repeatable")
+    p_parquet_preflight.add_argument("--require-reload-supported", action="store_true")
+    p_parquet_preflight.set_defaults(func=_cmd_parquet_preflight)
+
+    p_parquet_inspect = parquet_sub.add_parser("inspect", help="Inspect parquet artifact contract and schema manifest")
+    p_parquet_inspect.add_argument("--parquet-root", default="", help="Parquet root containing table directories")
+    p_parquet_inspect.add_argument("--plan", default="", help="Plan JSON to derive parquet root and selected tables")
+    p_parquet_inspect.add_argument("--out", default="", help="Write artifact contract report JSON to this path")
+    p_parquet_inspect.add_argument("--table", action="append", default=[], help="Restrict inspection to selected table; repeatable")
+    p_parquet_inspect.add_argument("--require-schema-manifest", action="store_true")
+    p_parquet_inspect.add_argument("--require-id-compaction", action="store_true")
+    p_parquet_inspect.add_argument("--strict-schema-manifest", action="store_true")
+    p_parquet_inspect.set_defaults(func=_cmd_parquet_inspect)
+
+    p_parquet_mark = parquet_sub.add_parser("mark-table-done", help="Recover status from a clean validation report")
+    p_parquet_mark.add_argument("--status", required=True, help="parquet_reload_status JSON path")
+    p_parquet_mark.add_argument("--table", required=True)
+    p_parquet_mark.add_argument("--validation-report", required=True)
+    p_parquet_mark.set_defaults(func=_cmd_parquet_mark_table_done)
+
+    p_parquet_finalize = parquet_sub.add_parser("finalize", help="Run plan-driven DB indexes/analyze/validation")
+    p_parquet_finalize.add_argument("--plan", required=True, help="Parquet reload plan JSON")
+    p_parquet_finalize.add_argument("--out", default="", help="Finalizer report path")
+    p_parquet_finalize.add_argument("--strict-indexes", action="store_true")
+    p_parquet_finalize.add_argument("--no-unique-fallback", action="store_true")
+    p_parquet_finalize.add_argument("--skip-analyze", action="store_true")
+    p_parquet_finalize.add_argument("--skip-validation", action="store_true")
+    p_parquet_finalize.set_defaults(func=_cmd_parquet_finalize)
 
     p_review = sub.add_parser("review", help="Review/visualization helpers")
     review_sub = p_review.add_subparsers(dest="review_cmd", required=True)

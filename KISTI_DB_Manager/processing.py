@@ -811,6 +811,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         extra_column_name = args[8] if len(args) > 8 else None
         allowed_cols_by_table = args[9] if len(args) > 9 else None
         excepted_expand_dict = args[10] if len(args) > 10 else False
+        id_compaction_config = args[11] if len(args) > 11 else None
 
         try:
             index_offset = int(index_offset or 0)
@@ -826,6 +827,15 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         if extra_column_name:
             extra_canon = str(extra_column_name).replace(".", sep)
         excepted_expand_dict = bool(excepted_expand_dict)
+        id_compactor = None
+        if id_compaction_config:
+            from .id_compaction import IdCompactor
+
+            id_compactor = IdCompactor.from_config(
+                {"id_compaction": id_compaction_config},
+                sep=sep,
+                index_key=index_key,
+            )
 
         allowed_map: dict[str, set[str]] | None = None
         if extra_canon and isinstance(allowed_cols_by_table, dict) and allowed_cols_by_table:
@@ -976,6 +986,24 @@ def _safe_flatten_jsons_to_tsv_worker(args):
 
         flatten_ms = int(round((time.perf_counter() - t_flat0) * 1000.0))
 
+        if id_compactor is not None and getattr(id_compactor, "enabled", False):
+            if rows_main:
+                rows_main = id_compactor.compact_rows(rows_main, table_name=base_table or "")
+            if sub_rows_tot:
+                for sub_key, rows in list(sub_rows_tot.items()):
+                    if not rows:
+                        continue
+                    sub_key_norm = str(sub_key).replace(".", sep)
+                    tname = f"{base_table}{sep}{sub_key_norm}" if base_table else sub_key_norm
+                    sub_rows_tot[sub_key] = id_compactor.compact_rows(rows, table_name=tname)
+            if excepted_tot:
+                for ex_key, rows in list(excepted_tot.items()):
+                    if not rows:
+                        continue
+                    ex_key_norm = str(ex_key).replace(".", sep)
+                    tname = f"{base_table}{sep}excepted{sep}{ex_key_norm}" if base_table else ex_key_norm
+                    excepted_tot[ex_key] = id_compactor.compact_rows(rows, table_name=tname)
+
         # Freeze/hybrid(frozen): filter unknown columns and pack them into extra JSON string per row.
         #
         # - allowed_map is keyed by the *final* table name (base + sub path) as used by the parent pipeline.
@@ -1034,9 +1062,9 @@ def _safe_flatten_jsons_to_tsv_worker(args):
 
         # Write TSV files per table.
         t_tsv0 = time.perf_counter()
-        from . import manage as _manage
+        from .load_data import mysql_escape_load_data_value
 
-        escape = _manage._mysql_escape_load_data_value
+        escape = mysql_escape_load_data_value
 
         def _columns_from_rows(rows: list[dict]) -> list[str]:
             cols_non_null: set[str] = set()
@@ -1103,6 +1131,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
             "main": main_info,
             "subs": subs,
             "excepted": excepted,
+            "id_compaction": id_compactor.summary() if id_compactor is not None else None,
         }
     except Exception as e:
         return {
@@ -1175,9 +1204,11 @@ def extract_rows_from_jsons(
     jsons,
     *,
     index_key: str = "id",
+    base_table: str | None = None,
     except_keys=None,
     excepted_expand_dict: bool = False,
     sep: str = "__",
+    id_compactor=None,
     report=None,
     quarantine=None,
     index_offset: int = 0,
@@ -1213,6 +1244,21 @@ def extract_rows_from_jsons(
     excepted_tot = {key: [] for key in except_keys}
     # Cache column name prefixing across records (major win for homogeneous JSON arrays).
     colname_cache: dict = {}
+    base_table_s = str(base_table or "")
+
+    def _table_for_sub_local(sub_key: str) -> str:
+        sub_key_norm = str(sub_key).replace(".", sep)
+        return f"{base_table_s}{sep}{sub_key_norm}" if base_table_s else sub_key_norm
+
+    def _table_for_excepted_local(ex_key: str) -> str:
+        ex_key_norm = str(ex_key).replace(".", sep)
+        return f"{base_table_s}{sep}excepted{sep}{ex_key_norm}" if base_table_s else ex_key_norm
+
+    def _compact_row_for_table(row: dict, table_name: str) -> dict:
+        if id_compactor is None or not getattr(id_compactor, "enabled", False):
+            return row
+        compacted = id_compactor.compact_row(row, table_name=table_name)
+        return dict(compacted or {})
 
     def _json_dumps_best_effort(value):
         try:
@@ -1259,20 +1305,26 @@ def extract_rows_from_jsons(
     def _handle_record_ok(row, sub_rows, excepted, *, record_context=None):
         if report:
             report.bump("records_ok", 1)
-        rows_main.append(row)
+        rows_main.append(_compact_row_for_table(row, base_table_s))
 
         for key, rows in (sub_rows or {}).items():
             if not rows:
                 continue
-            sub_rows_tot.setdefault(key, []).extend(rows)
+            table_name = _table_for_sub_local(str(key))
+            sub_rows_tot.setdefault(key, []).extend(
+                _compact_row_for_table(r, table_name) for r in rows if isinstance(r, dict)
+            )
 
         for key in except_keys:
             try:
                 if key in excepted:
+                    ex_row = _build_excepted_row(str(key), excepted[key], row, record_context)
                     excepted_tot.setdefault(key, []).append(
-                        _build_excepted_row(str(key), excepted[key], row, record_context)
+                        _compact_row_for_table(ex_row, _table_for_excepted_local(str(key)))
                     )
             except Exception as e:
+                if type(e).__name__ == "IdCompactionError":
+                    raise
                 if report:
                     report.exception(
                         stage="extract_rows_from_jsons",
@@ -1309,7 +1361,11 @@ def extract_rows_from_jsons(
             except Exception:
                 pass
 
-    use_parallel = parallel_workers is not None and int(parallel_workers or 0) >= 2 and len(jsons) >= 2
+    use_parallel = (
+        parallel_workers is not None
+        and int(parallel_workers or 0) >= 2
+        and len(jsons) >= 2
+    )
     if use_parallel:
         processed = 0
         try:
@@ -1324,9 +1380,8 @@ def extract_rows_from_jsons(
                 initargs=(index_key, except_keys_tuple, sep),
             ) as ex:
                 for out in ex.map(_safe_flatten_nested_json_with_list_rows_worker_v2, args_iter, chunksize=chunksize):
-                    processed += 1
+                    local_i = processed
                     idx, ok, row, sub_rows, excepted, err = out
-                    local_i = processed - 1
                     context = None
                     if isinstance(record_contexts, (list, tuple)) and local_i < len(record_contexts):
                         maybe_ctx = record_contexts[local_i]
@@ -1340,7 +1395,10 @@ def extract_rows_from_jsons(
                         except Exception:
                             rec = {}
                         _handle_record_fail(index_offset + local_i, rec, err)
+                    processed += 1
         except Exception as e:
+            if type(e).__name__ == "IdCompactionError":
+                raise
             if report:
                 try:
                     msg = "Parallel flatten failed; falling back to sequential for remaining records"
@@ -1408,9 +1466,11 @@ def extract_rows_from_jsons(
 def extract_data_from_jsons(
     jsons,
     index_key="id",
+    base_table: str | None = None,
     except_keys=None,
     excepted_expand_dict: bool = False,
     sep="__",
+    id_compactor=None,
     report=None,
     quarantine=None,
     *,
@@ -1486,9 +1546,11 @@ def extract_data_from_jsons(
     rows_main, sub_rows_tot, excepted_tot = extract_rows_from_jsons(
         jsons,
         index_key=index_key,
+        base_table=base_table,
         except_keys=except_keys,
         excepted_expand_dict=excepted_expand_dict,
         sep=sep,
+        id_compactor=id_compactor,
         report=report,
         quarantine=quarantine,
         index_offset=index_offset,

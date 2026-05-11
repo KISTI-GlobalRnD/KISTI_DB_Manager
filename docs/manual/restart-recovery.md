@@ -53,3 +53,37 @@ On restart, the loader continues from `next_offset` instead of replaying the who
 - For small parquet files, chunk resume adds little value
 - For large OpenAlex subtables, chunk resume is worth using
 - Keep `file_chunk_rows` moderate so checkpoint frequency is useful without adding too much overhead
+
+## Plan-driven reload stage
+
+For multi-table operational reloads, prefer a plan file:
+
+- template: `configs/parquet_reload_plan.template.json`
+- run snapshot: `runs/<run_dir>/plans/parquet_reload_plan.json`
+- status: `runs/<run_dir>/reports/parquet_reload_status_<tag>.json`
+
+Run:
+
+```bash
+kisti-db-manager parquet preflight --plan runs/<run_dir>/plans/parquet_reload_plan.json
+kisti-db-manager parquet reload --plan runs/<run_dir>/plans/parquet_reload_plan.json
+```
+
+The reload command also runs preflight by default. A failed preflight should be treated as a hard stop because it checks the target DB driver, permissions, object shape, planned reset risks, existing index definitions, and DuckDB-to-DB `LOAD DATA` round-trip behavior before any selected table is dropped.
+
+Resume from a later table:
+
+```bash
+kisti-db-manager parquet reload --plan runs/<run_dir>/plans/parquet_reload_plan.json --start-at table_name
+```
+
+Finalization is blocked until every planned table is marked done in the reload status. If a partial resume is intentional, complete or mark the skipped tables before allowing the finalizer to run.
+
+If materialization completed but validation had to be rerun manually, mark the table complete from a clean validation report:
+
+```bash
+kisti-db-manager parquet mark-table-done \
+  --status runs/<run_dir>/reports/parquet_reload_status_<tag>.json \
+  --table table_name \
+  --validation-report runs/<run_dir>/reports/validate_table_name_<tag>.json
+```

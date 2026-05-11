@@ -22,6 +22,7 @@ The priority is operational guidance for large, messy datasets rather than auto-
 - [Reference Overview](reference/index.md)
 - [CLI Quick Reference](reference/cli.md)
 - [Examples](reference/examples.md)
+- [Overton Validation Queries](reference/overton-validation.md)
 
 ### Design Notes
 

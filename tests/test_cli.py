@@ -6,7 +6,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from unittest.mock import patch
 
 
-from KISTI_DB_Manager.cli import MissingDependencyError, _ensure_optional_deps, main
+from KISTI_DB_Manager.cli import MissingDependencyError, _ensure_optional_deps, build_parser, main
 
 
 class TestCLI(unittest.TestCase):
@@ -56,6 +56,49 @@ class TestCLI(unittest.TestCase):
         msg = str(ctx.exception)
         self.assertIn("json run requires missing dependencies: orjson, pandas", msg)
         self.assertIn("pip install -e '.[json,db]'", msg)
+
+    def test_parquet_subcommands_parse(self):
+        parser = build_parser()
+
+        reload_args = parser.parse_args(["parquet", "reload", "--plan", "plan.json", "--start-at", "tbl"])
+        preflight_args = parser.parse_args(["parquet", "preflight", "--plan", "plan.json", "--table", "tbl"])
+        inspect_args = parser.parse_args(
+            [
+                "parquet",
+                "inspect",
+                "--parquet-root",
+                "parquet",
+                "--table",
+                "tbl",
+                "--require-id-compaction",
+                "--strict-schema-manifest",
+            ]
+        )
+        finalize_args = parser.parse_args(["parquet", "finalize", "--plan", "plan.json", "--skip-analyze"])
+        mark_args = parser.parse_args(
+            [
+                "parquet",
+                "mark-table-done",
+                "--status",
+                "status.json",
+                "--table",
+                "tbl",
+                "--validation-report",
+                "validate.json",
+            ]
+        )
+
+        self.assertEqual(reload_args.parquet_cmd, "reload")
+        self.assertEqual(reload_args.start_at, "tbl")
+        self.assertEqual(preflight_args.parquet_cmd, "preflight")
+        self.assertEqual(preflight_args.table, ["tbl"])
+        self.assertEqual(inspect_args.parquet_cmd, "inspect")
+        self.assertEqual(inspect_args.parquet_root, "parquet")
+        self.assertTrue(inspect_args.require_id_compaction)
+        self.assertTrue(inspect_args.strict_schema_manifest)
+        self.assertEqual(finalize_args.parquet_cmd, "finalize")
+        self.assertTrue(finalize_args.skip_analyze)
+        self.assertEqual(mark_args.parquet_cmd, "mark-table-done")
 
 
 if __name__ == "__main__":

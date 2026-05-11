@@ -2660,6 +2660,29 @@ def _render_plan_markdown(
             lines.append(f"  - ... +{len(detected) - 20} more")
         lines.append("")
 
+    id_compaction = (artifacts or {}).get("id_compaction") if isinstance(artifacts, Mapping) else None
+    if isinstance(id_compaction, Mapping) and bool(id_compaction.get("enabled")):
+        columns = list(id_compaction.get("columns") or [])
+        ambiguous = id_compaction.get("ambiguous_columns") if isinstance(id_compaction.get("ambiguous_columns"), Mapping) else {}
+        lines.append("## ID Compaction")
+        lines.append("")
+        lines.append(f"- preset: `{id_compaction.get('preset')}`")
+        lines.append(f"- mode: `{id_compaction.get('mode')}`")
+        lines.append(f"- rules_hash: `{id_compaction.get('rules_hash')}`")
+        lines.append(f"- compacted_columns: `{len(columns)}`")
+        for entry in columns[:20]:
+            if not isinstance(entry, Mapping):
+                continue
+            lines.append(
+                f"  - `{entry.get('table')}.{entry.get('original_column')}` -> "
+                f"`{entry.get('new_column')}` ({entry.get('removed_prefix')})"
+            )
+        if len(columns) > 20:
+            lines.append(f"  - ... +{len(columns) - 20} more")
+        if ambiguous:
+            lines.append(f"- ambiguous_url_like_columns_skipped: `{len(ambiguous)}`")
+        lines.append("")
+
     lines.append("## Notes")
     lines.append("")
     lines.append("- This plan is generated **before DB load**.")
@@ -2918,6 +2941,7 @@ def generate_review_plan(
         "timings_ms": dict(report.timings_ms),
         "issues": [it.to_dict() for it in report.issues],
         "auto_except": ((rd.get("artifacts") or {}).get("auto_except") if isinstance(rd, Mapping) else None),
+        "id_compaction": ((rd.get("artifacts") or {}).get("id_compaction") if isinstance(rd, Mapping) else None),
         "ddl_json": "ddl.json",
         "ddl_sql": "ddl.sql",
         "tables": [

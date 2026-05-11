@@ -1084,6 +1084,16 @@ def run_json_pipeline(
     if persist_tsv_files:
         report.set_artifact("persist_tsv_dir", persist_tsv_dir)
 
+    from .id_compaction import IdCompactor
+
+    id_compactor = IdCompactor.from_config(dc, sep=key_sep, index_key=index_key)
+    if id_compactor.enabled:
+        if str(id_compactor.config.get("preset")) != "openalex":
+            raise ValueError("id_compaction preset currently supported: openalex")
+        if str(id_compactor.config.get("mode")) != "semantic_column_strip":
+            raise ValueError("id_compaction mode currently supported: semantic_column_strip")
+    report.set_artifact("id_compaction", id_compactor.summary())
+
     # Best-effort progress checkpointing (for crash recovery / quick shard detection).
     # This intentionally writes a tiny JSON snapshot periodically without waiting for the final report.
     progress_path = str(dc.get("progress_path") or "").strip()
@@ -1304,8 +1314,34 @@ def run_json_pipeline(
 
     def maybe_update_artifacts():
         report.set_artifact("name_maps_json", {k: v.to_dict() for k, v in name_maps.items()})
+        report.set_artifact("id_compaction", id_compactor.summary())
         if emit_ddl:
             report.set_artifact("create_table_sql_json", dict(ddl_by_table))
+
+    def _column_descriptions_for(table_original: str) -> dict[str, str]:
+        return id_compactor.column_descriptions(table_original) if id_compactor.enabled else {}
+
+    def _write_id_compaction_schema_manifest() -> None:
+        if not id_compactor.enabled or not persist_parquet_files:
+            return
+        try:
+            from pathlib import Path
+            import json as _json
+
+            root = Path(str(persist_parquet_dir))
+            root.mkdir(parents=True, exist_ok=True)
+            path = root / "schema_manifest.json"
+            tmp = path.with_name(path.name + ".tmp")
+            payload = id_compactor.schema_manifest(name_maps=name_maps)
+            tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+            tmp.replace(path)
+            report.set_artifact("schema_manifest", str(path))
+        except Exception as e:
+            report.warn(
+                stage="id_compaction.schema_manifest",
+                message="Failed to write ID compaction schema manifest",
+                error={"type": type(e).__name__, "message": str(e)},
+            )
 
     engine = None
     inspector = None
@@ -1409,8 +1445,12 @@ def run_json_pipeline(
             try:
                 extract_sig = inspect.signature(extract_fn)
                 extract_params = set(extract_sig.parameters.keys())
+                extract_accepts_kwargs = any(
+                    p.kind == inspect.Parameter.VAR_KEYWORD for p in extract_sig.parameters.values()
+                )
             except Exception:
                 extract_params = set()
+                extract_accepts_kwargs = False
 
             parallel_workers = dc.get("parallel_workers")
             try:
@@ -1973,6 +2013,7 @@ def run_json_pipeline(
                                                             tsv_extra_column_name,
                                                             tsv_allowed_cols_by_table,
                                                             bool(excepted_expand_dict),
+                                                            dict(id_compactor.config) if id_compactor.enabled else None,
                                                         ),
                                                     )
                                                 )
@@ -2015,6 +2056,7 @@ def run_json_pipeline(
                                                     tsv_extra_column_name,
                                                     tsv_allowed_cols_by_table,
                                                     bool(excepted_expand_dict),
+                                                    dict(id_compactor.config) if id_compactor.enabled else None,
                                                 )
                                             )
                                         if not isinstance(res, dict) or not res.get("ok"):
@@ -2050,16 +2092,18 @@ def run_json_pipeline(
                                             err = res.get("error")
                                         report.warn(
                                             stage="json_pipeline.flatten.parallel_tsv",
-                                            message="Worker failed to produce TSV artifacts; skipping chunk",
+                                            message="Worker failed to produce TSV artifacts",
                                             error=err,
                                         )
-                                        if not continue_on_error:
+                                        err_type = err.get("type") if isinstance(err, dict) else ""
+                                        if err_type == "IdCompactionError" or not continue_on_error:
                                             raise RuntimeError(f"parallel_tsv_worker_failed: {err}")
                                         continue
 
                                     try:
                                         report.bump("records_ok", int(res.get("records_ok", 0) or 0))
                                         report.bump("records_failed", int(res.get("records_failed", 0) or 0))
+                                        id_compactor.merge_summary(res.get("id_compaction"))
                                     except Exception:
                                         pass
 
@@ -2127,6 +2171,7 @@ def run_json_pipeline(
                                                 name_map=nm,
                                                 key_sep=key_sep,
                                                 column_type=column_type,
+                                                column_descriptions=_column_descriptions_for(table_original),
                                             )
                                             ddl_by_table[table_original] = ddl
                                         except Exception as e:
@@ -2142,6 +2187,7 @@ def run_json_pipeline(
                                             name_map=nm,
                                             key_sep=key_sep,
                                             column_type=column_type,
+                                            column_descriptions=_column_descriptions_for(table_original),
                                         )
                                         if isinstance(nm_created, NameMap):
                                             name_maps[table_original] = nm_created
@@ -2341,6 +2387,7 @@ def run_json_pipeline(
                                         load_groups.append(
                                             {
                                                 "nm": nm,
+                                                "table_original": nm.table_original,
                                                 "table_sql": nm.table_sql,
                                                 "entries": merged_entries,
                                                 "existing_cols": set(_get_existing_cols(nm.table_sql) or []) if inspector is not None else None,
@@ -2406,6 +2453,7 @@ def run_json_pipeline(
 
                                         def _load_group(g: dict) -> dict:
                                             nm = g.get("nm")
+                                            table_original = str(g.get("table_original") or "")
                                             table_sql = str(g.get("table_sql") or "")
                                             entries = g.get("entries") or []
                                             existing_cols = g.get("existing_cols")
@@ -2451,6 +2499,7 @@ def run_json_pipeline(
                                                         fast_load_state=None,
                                                         load_data_commit=bool(commit_per_file),
                                                         local_infile_conn=conn,
+                                                        column_descriptions=_column_descriptions_for(table_original),
                                                     )
                                                     res["loaded_any"] = True
                                                     res["load_ok"] += 1
@@ -2519,6 +2568,7 @@ def run_json_pipeline(
 
                                         for g in load_groups:
                                             nm = g.get("nm")
+                                            table_original = str(g.get("table_original") or "")
                                             table_sql = g.get("table_sql")
                                             entries = g.get("entries") or []
                                             if not nm or not table_sql or not entries:
@@ -2548,6 +2598,7 @@ def run_json_pipeline(
                                                     fast_load_state=fast_load_state,
                                                     load_data_commit=bool(commit_per_file),
                                                     local_infile_conn=local_infile_conn,
+                                                    column_descriptions=_column_descriptions_for(table_original),
                                                 )
                                                 if load_res is not None:
                                                     loaded_any = True
@@ -2628,6 +2679,7 @@ def run_json_pipeline(
 
                                     def _load_group(g: dict) -> dict:
                                         nm = g.get("nm")
+                                        table_original = str(g.get("table_original") or "")
                                         table_sql = str(g.get("table_sql") or "")
                                         entries = g.get("entries") or []
                                         existing_cols = g.get("existing_cols")
@@ -2673,6 +2725,7 @@ def run_json_pipeline(
                                                     fast_load_state=None,
                                                     load_data_commit=bool(commit_per_file),
                                                     local_infile_conn=conn,
+                                                    column_descriptions=_column_descriptions_for(table_original),
                                                 )
                                                 res["loaded_any"] = True
                                                 res["load_ok"] += 1
@@ -2771,6 +2824,7 @@ def run_json_pipeline(
                                             # Ensure remaining tables are loaded serially (no duplication: they were never submitted).
                                             for g in remaining_groups:
                                                 nm = g.get("nm")
+                                                table_original = str(g.get("table_original") or "")
                                                 table_sql = str(g.get("table_sql") or "")
                                                 entries = g.get("entries") or []
                                                 existing_cols = g.get("existing_cols")
@@ -2802,6 +2856,7 @@ def run_json_pipeline(
                                                             fast_load_state=None,
                                                             load_data_commit=bool(commit_per_file),
                                                             local_infile_conn=local_infile_conn,
+                                                            column_descriptions=_column_descriptions_for(table_original),
                                                         )
                                                         loaded_any = True
                                                         report.bump("load_ok", 1)
@@ -2853,9 +2908,11 @@ def run_json_pipeline(
                                 rows_main, sub_rows_tot, excepted = extract_rows_from_jsons(
                                     batch_records,
                                     index_key=index_key,
+                                    base_table=base_table,
                                     except_keys=except_keys,
                                     excepted_expand_dict=bool(excepted_expand_dict),
                                     sep=key_sep,
+                                    id_compactor=id_compactor,
                                     report=report,
                                     quarantine=q,
                                     index_offset=int(index_offset),
@@ -2910,6 +2967,7 @@ def run_json_pipeline(
                                         name_map=nm,
                                         key_sep=key_sep,
                                         column_type=column_type,
+                                        column_descriptions=_column_descriptions_for(table_original),
                                     )
                                     ddl_by_table[table_original] = ddl
                                 except Exception as e:
@@ -2925,6 +2983,7 @@ def run_json_pipeline(
                                     name_map=nm,
                                     key_sep=key_sep,
                                     column_type=column_type,
+                                    column_descriptions=_column_descriptions_for(table_original),
                                 )
                                 if isinstance(nm_created, NameMap):
                                     name_maps[table_original] = nm_created
@@ -2954,6 +3013,7 @@ def run_json_pipeline(
                                     load_method=db_load_method,
                                     fast_load_state=fast_load_state,
                                     local_infile_conn=local_infile_conn,
+                                    column_descriptions=_column_descriptions_for(table_original),
                                 )
                                 if load_res is not None:
                                     report.bump("tables_loaded", 1)
@@ -2979,6 +3039,10 @@ def run_json_pipeline(
                         extract_kwargs["parallel_workers"] = int(parallel_workers)
                     if "excepted_expand_dict" in extract_params:
                         extract_kwargs["excepted_expand_dict"] = bool(excepted_expand_dict)
+                    if "base_table" in extract_params or extract_accepts_kwargs:
+                        extract_kwargs["base_table"] = base_table
+                    if "id_compactor" in extract_params or extract_accepts_kwargs:
+                        extract_kwargs["id_compactor"] = id_compactor
 
                     with report.timer("json.flatten"):
                         df_main, df_subs, excepted = extract_fn(batch_records, **extract_kwargs)
@@ -3077,6 +3141,7 @@ def run_json_pipeline(
                                 name_map=nm,
                                 key_sep=key_sep,
                                 column_type=column_type,
+                                column_descriptions=_column_descriptions_for(table_original),
                             )
                             ddl_by_table[table_original] = ddl
                         except Exception as e:
@@ -3092,6 +3157,7 @@ def run_json_pipeline(
                             name_map=nm,
                             key_sep=key_sep,
                             column_type=column_type,
+                            column_descriptions=_column_descriptions_for(table_original),
                         )
                         if isinstance(nm_created, NameMap):
                             name_maps[table_original] = nm_created
@@ -3127,6 +3193,7 @@ def run_json_pipeline(
                             load_method=db_load_method,
                             fast_load_state=fast_load_state,
                             local_infile_conn=local_infile_conn,
+                            column_descriptions=_column_descriptions_for(table_original),
                         )
                         if load_res is not None:
                             report.bump("tables_loaded", 1)
@@ -3261,6 +3328,21 @@ def run_json_pipeline(
             report.set_artifact("persist_parquet_batches_count", int(report.stats.get("parquet_batches_total", 0) or 0))
             report.set_artifact("persist_parquet_files_count", int(report.stats.get("parquet_files_persisted", 0) or 0))
             report.set_artifact("parquet_rows_emitted", int(report.stats.get("parquet_rows_emitted", 0) or 0))
+        if id_compactor.enabled:
+            summary = id_compactor.summary()
+            if summary.get("ambiguous_columns"):
+                report.warn(
+                    stage="id_compaction",
+                    message="Skipped ambiguous URL-like columns during ID compaction",
+                    columns=list((summary.get("ambiguous_columns") or {}).keys())[:20],
+                )
+            if summary.get("collisions"):
+                report.warn(
+                    stage="id_compaction",
+                    message="Column collisions occurred during ID compaction; original columns were preserved",
+                    columns=list((summary.get("collisions") or {}).keys())[:20],
+                )
+            _write_id_compaction_schema_manifest()
         maybe_update_artifacts()
         return JsonRunResult(name_maps=name_maps, report=report)
     finally:

@@ -18,15 +18,17 @@ import argparse
 import concurrent.futures
 import json
 import os
+import shutil
 import sys
 import tempfile
 import threading
 import time
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from KISTI_DB_Manager import manage
+from KISTI_DB_Manager import load_data, manage
 from KISTI_DB_Manager.config import coerce_data_config, coerce_db_config
 from KISTI_DB_Manager.namemap import NameMap
 from KISTI_DB_Manager.report import RunReport
@@ -42,7 +44,9 @@ def _read_json(path: Path) -> dict[str, Any]:
 
 def _write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    os.replace(tmp, path)
 
 
 def _default_staging_dir() -> str:
@@ -67,6 +71,113 @@ def _read_parquet_schema_rows(parquet_file: Path) -> tuple[list[str], int]:
     return cols, rows
 
 
+def _inspect_parquet_tables(
+    table_files: dict[str, list[Path]],
+    *,
+    key_sep: str = "__",
+    extra_column_name: str | None = None,
+    sample_limit: int = 20,
+) -> dict[str, Any]:
+    """
+    Cheap preflight over selected Parquet files using only footers/schema metadata.
+
+    This runs before destructive table reset/load work. It intentionally avoids data
+    scans, but catches corrupt files, empty selections, schema variants, row totals,
+    and the union schema needed to create a table that can accept every selected file.
+    """
+
+    out: dict[str, Any] = {
+        "status": "ok",
+        "tables": {},
+        "errors": [],
+    }
+    extra_canon = str(extra_column_name or "").replace(".", key_sep) if extra_column_name else ""
+    limit = max(0, int(sample_limit))
+
+    for table_name, files in sorted(table_files.items()):
+        union_columns: list[str] = []
+        seen_columns: set[str] = set()
+        schema_variants: dict[tuple[str, ...], dict[str, Any]] = {}
+        duplicate_column_files: list[dict[str, Any]] = []
+        zero_row_files: list[str] = []
+        rows_total = 0
+        file_count = 0
+
+        for parquet_file in files:
+            try:
+                columns, rows = _read_parquet_schema_rows(parquet_file)
+            except Exception as exc:
+                out["errors"].append(
+                    {
+                        "table": str(table_name),
+                        "file": str(parquet_file),
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                    }
+                )
+                continue
+
+            file_count += 1
+            rows_total += int(rows)
+            canonical_columns = [str(column).replace(".", key_sep) for column in columns]
+            counts: dict[str, int] = {}
+            for column in canonical_columns:
+                counts[column] = int(counts.get(column, 0) or 0) + 1
+                if column not in seen_columns:
+                    seen_columns.add(column)
+                    union_columns.append(column)
+            duplicate_columns = sorted(column for column, count in counts.items() if count > 1)
+            if duplicate_columns and len(duplicate_column_files) < limit:
+                duplicate_column_files.append(
+                    {
+                        "file": str(parquet_file),
+                        "columns": duplicate_columns[:limit],
+                    }
+                )
+            if int(rows) == 0 and len(zero_row_files) < limit:
+                zero_row_files.append(str(parquet_file))
+
+            signature = tuple(canonical_columns)
+            item = schema_variants.setdefault(
+                signature,
+                {
+                    "file_count": 0,
+                    "rows": 0,
+                    "columns": list(canonical_columns),
+                    "example_file": str(parquet_file),
+                },
+            )
+            item["file_count"] = int(item["file_count"]) + 1
+            item["rows"] = int(item["rows"]) + int(rows)
+
+        if extra_canon and extra_canon not in seen_columns:
+            union_columns.append(extra_canon)
+
+        variants = sorted(
+            schema_variants.values(),
+            key=lambda item: (-int(item.get("file_count") or 0), str(item.get("example_file") or "")),
+        )
+        table_status = "ok"
+        if file_count != len(files) or duplicate_column_files:
+            table_status = "error"
+            out["status"] = "error"
+        out["tables"][str(table_name)] = {
+            "status": table_status,
+            "file_count": int(file_count),
+            "files_expected": int(len(files)),
+            "rows_total": int(rows_total),
+            "zero_row_file_count_sampled": len(zero_row_files),
+            "zero_row_files_sample": zero_row_files,
+            "schema_variant_count": int(len(schema_variants)),
+            "schema_variants": variants[:limit],
+            "union_column_count": int(len(union_columns)),
+            "union_columns": union_columns,
+            "duplicate_column_files_sample": duplicate_column_files,
+        }
+
+    return out
+
+
 def _stage_parquet_with_duckdb(
     *,
     parquet_file: Path,
@@ -87,7 +198,7 @@ def _stage_parquet_with_duckdb(
     copy_sql = (
         f"COPY (SELECT {select_sql} FROM read_parquet({json.dumps(str(parquet_file))}){limit_sql}{offset_sql}) "
         f"TO {json.dumps(str(stage_path))} "
-        "(FORMAT CSV, HEADER FALSE, DELIMITER '\t', NULLSTR '\\N', QUOTE '\"', ESCAPE '\"');"
+        f"{load_data.DUCKDB_LOAD_DATA_DIALECT.duckdb_copy_options_sql()};"
     )
     t0 = time.perf_counter()
     con = duckdb.connect(database=":memory:")
@@ -111,7 +222,7 @@ def _load_parquet_file_via_duckdb_stage(
     offset_rows: int,
     staging_dir: str,
     report: RunReport,
-) -> None:
+) -> int:
     with tempfile.NamedTemporaryFile(
         mode="w",
         encoding="utf-8",
@@ -131,13 +242,16 @@ def _load_parquet_file_via_duckdb_stage(
             offset_rows=offset_rows,
             report=report,
         )
-        manage._load_data_local_infile_tabular_file(
+        return load_data.load_data_local_infile_tabular_file(
             conn=conn,
             table_name=table_name,
             file_path=stage_path,
             sep="\t",
             columns_expr=[f"`{str(c).replace('`', '``')}`" for c in columns_sql],
             ignore_lines=0,
+            dialect=load_data.DUCKDB_LOAD_DATA_DIALECT,
+            expected_rows=limit_rows,
+            line_terminator="\n",
             report=report,
         )
     finally:
@@ -212,6 +326,174 @@ def _connect_local_infile(db_config: dict[str, Any], *, fast_load_session: bool,
     return conn
 
 
+def _should_run_load_data_preflight(*, load_method: str, staging_writer: str, skip_preflight: bool) -> bool:
+    return (
+        not bool(skip_preflight)
+        and str(load_method) in {"auto", "load_data"}
+        and str(staging_writer) == "duckdb"
+    )
+
+
+def _run_duckdb_load_data_preflight_on_conn(*, conn, staging_dir: str, report: RunReport | None = None) -> None:
+    """
+    Validate the runtime DuckDB COPY <-> MariaDB LOAD DATA dialect pairing.
+
+    This deliberately runs against the target MariaDB connection before large
+    materialization begins. A rowcount-only check is not enough: the old broken
+    dialect could sometimes preserve rowcount while changing field contents.
+    """
+    import duckdb
+
+    def qi(ident: str) -> str:
+        return str(ident).replace("`", "``")
+
+    rows = [
+        ("W1", "plain"),
+        ("W2", 'line1 "\nline2'),
+        ("W3", None),
+        ("W4", "NULL"),
+        ("W5", "line1\r\nline2"),
+        ("W6", 'backslash quote \\"\ninside'),
+    ]
+    table_name = f"kisti_load_data_preflight_{uuid.uuid4().hex[:12]}"
+    stage_path = None
+
+    with tempfile.NamedTemporaryFile(
+        mode="w",
+        encoding="utf-8",
+        newline="\n",
+        prefix="kisti_load_data_preflight_",
+        suffix=".tsv",
+        delete=False,
+        dir=staging_dir,
+    ) as f:
+        stage_path = f.name
+
+    try:
+        con = duckdb.connect(database=":memory:")
+        try:
+            con.execute("CREATE TABLE stage(id VARCHAR, txt VARCHAR)")
+            con.executemany("INSERT INTO stage VALUES (?, ?)", rows)
+            con.execute(
+                f"COPY stage TO {json.dumps(str(stage_path))} "
+                f"{load_data.DUCKDB_LOAD_DATA_DIALECT.duckdb_copy_options_sql()};"
+            )
+        finally:
+            con.close()
+
+        with conn.cursor() as cur:
+            cur.execute(
+                f"CREATE TEMPORARY TABLE `{qi(table_name)}` ("
+                "`id` VARCHAR(32) NOT NULL PRIMARY KEY, "
+                "`txt` LONGTEXT NULL"
+                ") CHARACTER SET utf8mb4"
+            )
+
+        loaded = load_data.load_data_local_infile_tabular_file(
+            conn=conn,
+            table_name=table_name,
+            file_path=str(stage_path),
+            sep="\t",
+            columns_expr=["`id`", "`txt`"],
+            ignore_lines=0,
+            dialect=load_data.DUCKDB_LOAD_DATA_DIALECT,
+            expected_rows=len(rows),
+            line_terminator="\n",
+            report=None,
+        )
+        if int(loaded) != len(rows):
+            raise RuntimeError(f"LOAD DATA preflight inserted {loaded} rows, expected {len(rows)}")
+
+        with conn.cursor() as cur:
+            cur.execute(f"SELECT `id`, `txt` FROM `{qi(table_name)}` ORDER BY `id`")
+            fetched = list(cur.fetchall())
+
+        if fetched != rows:
+            raise RuntimeError(
+                "LOAD DATA preflight content mismatch; DuckDB COPY and MariaDB LOAD DATA dialects are not aligned"
+            )
+
+        if report is not None:
+            try:
+                report.set_artifact(
+                    "load_data_preflight",
+                    {
+                        "status": "ok",
+                        "dialect": load_data.DUCKDB_LOAD_DATA_DIALECT.name,
+                        "rows": len(rows),
+                    },
+                )
+            except Exception:
+                pass
+    finally:
+        try:
+            with conn.cursor() as cur:
+                cur.execute(f"DROP TEMPORARY TABLE IF EXISTS `{qi(table_name)}`")
+            conn.commit()
+        except Exception:
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+        if stage_path:
+            try:
+                os.remove(stage_path)
+            except Exception:
+                pass
+
+
+def _run_duckdb_load_data_preflight(
+    db_config: dict[str, Any], *, staging_dir: str, report: RunReport | None = None
+) -> None:
+    conn = _connect_local_infile(db_config, fast_load_session=False, report=report)
+    try:
+        _run_duckdb_load_data_preflight_on_conn(conn=conn, staging_dir=staging_dir, report=report)
+    finally:
+        conn.close()
+
+
+def _save_report(report: RunReport, report_path: Path) -> None:
+    report.finish()
+    report_path.parent.mkdir(parents=True, exist_ok=True)
+    report_path.write_text(report.to_json(indent=2), encoding="utf-8")
+
+
+def _drop_target_tables(db_config: dict[str, Any], table_names: list[str]) -> None:
+    import pymysql
+
+    if not table_names:
+        return
+    conn = pymysql.connect(
+        host=db_config.get("host"),
+        user=db_config.get("user"),
+        password=db_config.get("password"),
+        database=db_config.get("database"),
+        port=int(db_config.get("port") or 3306),
+        charset="utf8mb4",
+        autocommit=True,
+    )
+    try:
+        with conn.cursor() as cur:
+            for table_name in table_names:
+                cur.execute(f"DROP TABLE IF EXISTS `{str(table_name).replace('`', '``')}`")
+    finally:
+        conn.close()
+
+
+def _drop_confirmation_token(table_names: list[str]) -> str:
+    return ",".join(str(table_name) for table_name in table_names)
+
+
+def _require_drop_confirmation(table_names: list[str], confirmation: str) -> str:
+    expected = _drop_confirmation_token(table_names)
+    if str(confirmation or "").strip() != expected:
+        raise SystemExit(
+            "--reset-selected-tables drops existing DB tables before loading. "
+            f"Re-run with --confirm-drop-tables {expected!r} to confirm the exact target table list."
+        )
+    return expected
+
+
 def _load_progress(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {
@@ -227,13 +509,43 @@ def _load_progress(path: Path) -> dict[str, Any]:
             "completed_files": {},
             "partial_files": {},
         }
-    return _read_json(path)
+    try:
+        return _read_json(path)
+    except Exception:
+        backup = path.with_name(path.name + f".corrupt.{int(time.time())}")
+        try:
+            shutil.move(str(path), str(backup))
+        except Exception:
+            pass
+        return {
+            "updated_at_utc": None,
+            "parquet_root": None,
+            "table_count": 0,
+            "tables_completed": 0,
+            "files_loaded": 0,
+            "rows_loaded": 0,
+            "table_file_counts": {},
+            "active": {},
+            "current": None,
+            "completed_files": {},
+            "partial_files": {},
+        }
 
 
 def _pick_table_dirs(root: Path, selected: list[str], max_tables: int | None) -> list[Path]:
     dirs = sorted([p for p in root.iterdir() if p.is_dir()])
     if selected:
         wanted = set(selected)
+        found = {p.name for p in dirs}
+        missing = sorted(wanted - found)
+        if missing:
+            available = ", ".join(p.name for p in dirs[:50])
+            suffix = "" if len(dirs) <= 50 else f", ... ({len(dirs)} total)"
+            raise SystemExit(
+                "Selected parquet table directory not found: "
+                + ", ".join(missing)
+                + f". Available tables: {available}{suffix}"
+            )
         dirs = [p for p in dirs if p.name in wanted]
     if max_tables is not None and int(max_tables) >= 0:
         dirs = dirs[: int(max_tables)]
@@ -247,6 +559,184 @@ def _pick_files(table_dir: Path, max_files_per_table: int | None, latest_first: 
     if max_files_per_table is not None and int(max_files_per_table) >= 0:
         files = files[: int(max_files_per_table)]
     return files
+
+
+def _append_bounded_history(state: dict[str, Any], key: str, item: dict[str, Any], *, limit: int = 10) -> None:
+    history = state.get(key)
+    if not isinstance(history, list):
+        history = []
+    history.append(item)
+    state[key] = history[-max(1, int(limit)) :]
+
+
+def _progress_selected_tables(state: dict[str, Any]) -> list[str]:
+    session = state.get("session")
+    if isinstance(session, dict):
+        tables = session.get("tables")
+        if isinstance(tables, list):
+            return [str(item) for item in tables]
+    file_counts = state.get("table_file_counts")
+    if isinstance(file_counts, dict):
+        return [str(item) for item in file_counts]
+    return []
+
+
+def _progress_refresh_session_counts(state: dict[str, Any]) -> None:
+    table_file_counts = state.get("table_file_counts") if isinstance(state.get("table_file_counts"), dict) else {}
+    completed_files = state.get("completed_files") if isinstance(state.get("completed_files"), dict) else {}
+    selected_tables = _progress_selected_tables(state)
+
+    files_total = sum(int(table_file_counts.get(table_name, 0) or 0) for table_name in selected_tables)
+    files_completed = sum(len(completed_files.get(table_name, []) or []) for table_name in selected_tables)
+    tables_completed = sum(
+        1
+        for table_name in selected_tables
+        if int(table_file_counts.get(table_name, 0) or 0) > 0
+        and len(completed_files.get(table_name, []) or []) >= int(table_file_counts.get(table_name, 0) or 0)
+    )
+    state["files_total"] = int(files_total)
+    state["files_completed"] = int(files_completed)
+    state["tables_completed"] = int(tables_completed)
+
+
+def _progress_prepare_session(
+    state: dict[str, Any],
+    *,
+    parquet_root: Path,
+    table_files: dict[str, list[Path]],
+    selected_tables: list[str],
+    reset_tables: set[str] | None = None,
+) -> None:
+    now = _iso_now()
+    session_id = f"{int(time.time())}-{os.getpid()}"
+    table_file_counts = {str(k): len(v) for k, v in table_files.items()}
+    session_tables = [str(k) for k in table_files]
+
+    active = state.get("active")
+    if isinstance(active, dict) and active:
+        _append_bounded_history(
+            state,
+            "stale_active_history",
+            {
+                "cleared_at_utc": now,
+                "session_id": session_id,
+                "entries": active,
+            },
+        )
+
+    completed_files = state.get("completed_files")
+    if not isinstance(completed_files, dict):
+        completed_files = {}
+    partial_files = state.get("partial_files")
+    if not isinstance(partial_files, dict):
+        partial_files = {}
+
+    pruned_completed: dict[str, dict[str, Any]] = {}
+    pruned_partial: dict[str, dict[str, Any]] = {}
+    reset_tables = set(reset_tables or set())
+    for table_name, files in table_files.items():
+        valid_names = {path.name for path in files}
+
+        done_values = completed_files.get(table_name, [])
+        if not isinstance(done_values, list):
+            done_values = []
+        filtered_done = [] if table_name in reset_tables else [str(item) for item in done_values if str(item) in valid_names]
+        removed_done = sorted({str(item) for item in done_values} - set(filtered_done))
+        if removed_done:
+            pruned_completed[table_name] = {"count": len(removed_done), "examples": removed_done[:20]}
+        completed_files[table_name] = filtered_done
+
+        partial_values = partial_files.get(table_name, {})
+        if not isinstance(partial_values, dict):
+            partial_values = {}
+        filtered_partial = (
+            {}
+            if table_name in reset_tables
+            else {str(name): value for name, value in partial_values.items() if str(name) in valid_names}
+        )
+        removed_partial = sorted({str(name) for name in partial_values} - set(filtered_partial))
+        if removed_partial:
+            pruned_partial[table_name] = {"count": len(removed_partial), "examples": removed_partial[:20]}
+        if filtered_partial:
+            partial_files[table_name] = filtered_partial
+        else:
+            partial_files.pop(table_name, None)
+
+    if pruned_completed or pruned_partial:
+        _append_bounded_history(
+            state,
+            "progress_prune_history",
+            {
+                "pruned_at_utc": now,
+                "session_id": session_id,
+                "completed_files": pruned_completed,
+                "partial_files": pruned_partial,
+            },
+        )
+
+    state["parquet_root"] = str(parquet_root)
+    state["updated_at_utc"] = now
+    state["table_count"] = len(table_files)
+    state["table_file_counts"] = table_file_counts
+    state["completed_files"] = completed_files
+    state["partial_files"] = partial_files
+    state["active"] = {}
+    state["current"] = None
+    state["session"] = {
+        "id": session_id,
+        "started_at_utc": now,
+        "parquet_root": str(parquet_root),
+        "selected_tables_arg": list(selected_tables),
+        "tables": session_tables,
+        "files_total": int(sum(table_file_counts.values())),
+    }
+    state["files_loaded_session"] = 0
+    state["rows_loaded_session"] = 0
+    _progress_refresh_session_counts(state)
+    state["files_completed_before_session"] = int(state.get("files_completed", 0) or 0)
+    partial_rows = 0
+    for table_name in session_tables:
+        table_partials = partial_files.get(table_name, {})
+        if not isinstance(table_partials, dict):
+            continue
+        for item in table_partials.values():
+            if isinstance(item, dict):
+                partial_rows += int(item.get("next_offset") or 0)
+    state["partial_rows_before_session"] = int(partial_rows)
+    state["files_loaded"] = int(state.get("files_completed", 0) or 0)
+    state["rows_loaded"] = int(partial_rows)
+
+
+def _progress_mark_reset_pending(state: dict[str, Any], *, target_tables: list[str]) -> None:
+    state["reset"] = {
+        "status": "pending",
+        "target_tables": list(target_tables),
+        "started_at_utc": _iso_now(),
+    }
+
+
+def _progress_mark_reset_completed(state: dict[str, Any]) -> None:
+    reset = state.get("reset")
+    if not isinstance(reset, dict):
+        reset = {}
+    reset["status"] = "completed"
+    reset["completed_at_utc"] = _iso_now()
+    state["reset"] = reset
+
+
+def _require_no_pending_reset(state: dict[str, Any], *, progress_path: Path) -> None:
+    reset = state.get("reset")
+    if not isinstance(reset, dict) or str(reset.get("status") or "") != "pending":
+        return
+    target_tables = reset.get("target_tables")
+    if not isinstance(target_tables, list):
+        target_tables = []
+    raise SystemExit(
+        "Previous table reset is marked pending in progress state. "
+        "Do not resume without reset confirmation; rerun with --reset-selected-tables "
+        f"and --confirm-drop-tables {','.join(str(t) for t in target_tables)!r}, "
+        f"or inspect {progress_path}."
+    )
 
 
 def _progress_sync_current(state: dict[str, Any]) -> None:
@@ -311,6 +801,7 @@ def _progress_mark_chunk_done(
 ) -> None:
     with lock:
         state["rows_loaded"] = int(state.get("rows_loaded", 0) or 0) + int(rows)
+        state["rows_loaded_session"] = int(state.get("rows_loaded_session", 0) or 0) + int(rows)
         partial_files = state.setdefault("partial_files", {})
         partial = partial_files.setdefault(table_original, {})
         if file_complete:
@@ -321,6 +812,7 @@ def _progress_mark_chunk_done(
             if parquet_file.name not in done:
                 done.append(parquet_file.name)
                 state["files_loaded"] = int(state.get("files_loaded", 0) or 0) + 1
+                state["files_loaded_session"] = int(state.get("files_loaded_session", 0) or 0) + 1
         else:
             partial[parquet_file.name] = {
                 "next_offset": int(next_offset),
@@ -328,13 +820,7 @@ def _progress_mark_chunk_done(
                 "chunk_rows": int(chunk_rows),
             }
 
-        file_counts = state.get("table_file_counts") or {}
-        completed_files = state.get("completed_files") or {}
-        state["tables_completed"] = sum(
-            1
-            for table_name, total in file_counts.items()
-            if int(total or 0) > 0 and len(completed_files.get(table_name, []) or []) >= int(total or 0)
-        )
+        _progress_refresh_session_counts(state)
 
         active = state.setdefault("active", {})
         active.pop(active_key, None)
@@ -395,10 +881,6 @@ def _materialize_one_file(
     nm: NameMap,
     existing_cols: set[str] | None,
 ) -> dict[str, Any]:
-    import pandas as pd
-    from sqlalchemy import create_engine
-    from sqlalchemy.engine import URL
-
     local_report = RunReport()
     result: dict[str, Any] = {
         "table_original": table_original,
@@ -423,21 +905,15 @@ def _materialize_one_file(
     extra_canon = extra_column_name.replace(".", str(data_config.get("KEY_SEP") or "__")) if extra_column_name else ""
     active_key = f"{table_original}:{parquet_file.name}"
     partial_info = (((state.get("partial_files") or {}).get(table_original) or {}).get(parquet_file.name) or {})
+    min_chunk_rows = 10_000
+
+    def _is_lock_table_size_error(exc: Exception) -> bool:
+        msg = str(exc).lower()
+        return "lock table size" in msg or "(1206," in msg
 
     try:
         if fast_load_state.enabled:
             local_infile_conn = _connect_local_infile(db_config, fast_load_session=True, report=local_report)
-
-        engine = create_engine(
-            URL.create(
-                "mysql+pymysql",
-                username=db_config.get("user"),
-                password=db_config.get("password"),
-                host=db_config.get("host"),
-                port=int(db_config.get("port") or 3306),
-                database=db_config.get("database"),
-            )
-        )
 
         _progress_activate(
             progress_path,
@@ -465,10 +941,23 @@ def _materialize_one_file(
         current_nm = nm.with_additional_columns(table_columns, max_len=64)
         columns_original = [c for c in table_columns if c != extra_canon]
         columns_sql = [current_nm.map_column(c) for c in columns_original]
-        for offset_rows in range(int(resume_offset), int(load_rows), int(chunk_rows)):
+        offset_rows = int(resume_offset)
+        if int(load_rows) <= 0 or int(offset_rows) >= int(load_rows):
+            _progress_mark_chunk_done(
+                progress_path,
+                state,
+                state_lock,
+                active_key=active_key,
+                table_original=table_original,
+                parquet_file=parquet_file,
+                rows=0,
+                next_offset=int(load_rows),
+                total_rows=int(load_rows),
+                chunk_rows=0,
+                file_complete=True,
+            )
+        while int(offset_rows) < int(load_rows):
             current_chunk_rows = min(int(chunk_rows), int(load_rows) - int(offset_rows))
-            bump("parquet_rows_read", int(current_chunk_rows))
-
             _progress_activate(
                 progress_path,
                 state,
@@ -482,58 +971,88 @@ def _materialize_one_file(
                 total_rows=int(load_rows),
             )
 
-            direct_duckdb_ok = False
-            if (
-                str(load_data_staging_writer) == "duckdb"
-                and local_infile_conn is not None
-                and existing_cols is not None
-                and all(col in existing_cols for col in columns_sql)
-            ):
-                t0 = time.perf_counter()
-                with local_report.timer("db.load_data.total"):
-                    _load_parquet_file_via_duckdb_stage(
-                        conn=local_infile_conn,
+            try:
+                direct_duckdb_ok = False
+                if (
+                    str(load_data_staging_writer) == "duckdb"
+                    and local_infile_conn is not None
+                    and existing_cols is not None
+                    and all(col in existing_cols for col in columns_sql)
+                ):
+                    t0 = time.perf_counter()
+                    with local_report.timer("db.load_data.total"):
+                        loaded_rows = _load_parquet_file_via_duckdb_stage(
+                            conn=local_infile_conn,
+                            table_name=target_table_sql,
+                            parquet_file=parquet_file,
+                            columns_original=columns_original,
+                            columns_sql=columns_sql,
+                            limit_rows=int(current_chunk_rows),
+                            offset_rows=int(offset_rows),
+                            staging_dir=str(load_data_staging_dir or _default_staging_dir()),
+                            report=local_report,
+                        )
+                    if int(loaded_rows) != int(current_chunk_rows):
+                        raise RuntimeError(
+                            "LOAD DATA inserted row count mismatch "
+                            f"for {parquet_file.name}: expected {int(current_chunk_rows)}, got {int(loaded_rows)}"
+                        )
+                    add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
+                    bump("load_data_ok", 1)
+                    direct_duckdb_ok = True
+
+                if not direct_duckdb_ok:
+                    import pandas as pd
+
+                    if engine is None:
+                        from sqlalchemy import create_engine
+                        from sqlalchemy.engine import URL
+
+                        engine = create_engine(
+                            URL.create(
+                                "mysql+pymysql",
+                                username=db_config.get("user"),
+                                password=db_config.get("password"),
+                                host=db_config.get("host"),
+                                port=int(db_config.get("port") or 3306),
+                                database=db_config.get("database"),
+                            )
+                        )
+                    t0 = time.perf_counter()
+                    df = pd.read_parquet(parquet_file)
+                    add_ms("parquet_materialize.read_parquet", time.perf_counter() - t0)
+                    if limit_rows_per_file and int(limit_rows_per_file) > 0:
+                        df = df.head(int(limit_rows_per_file)).copy()
+                    df = df.iloc[int(offset_rows): int(offset_rows) + int(current_chunk_rows)].copy()
+                    t0 = time.perf_counter()
+                    manage.fill_table_from_dataframe(
+                        df,
+                        db_config,
                         table_name=target_table_sql,
-                        parquet_file=parquet_file,
-                        columns_original=columns_original,
-                        columns_sql=columns_sql,
-                        limit_rows=int(current_chunk_rows),
-                        offset_rows=int(offset_rows),
-                        staging_dir=str(load_data_staging_dir or _default_staging_dir()),
+                        name_map=nm,
+                        extra_column_name=extra_column_name,
+                        auto_alter_table=False,
+                        column_type="LONGTEXT",
+                        fallback_on_insert_error=False,
                         report=local_report,
+                        load_method=str(load_method),
+                        fast_load_state=fast_load_state,
+                        local_infile_conn=local_infile_conn,
+                        existing_cols=existing_cols,
+                        engine=engine,
+                        load_data_staging_writer=load_data_staging_writer,
+                        load_data_staging_dir=load_data_staging_dir,
                     )
-                add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
-                bump("load_data_ok", 1)
-                direct_duckdb_ok = True
+                    add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
+            except Exception as exc:
+                if _is_lock_table_size_error(exc) and int(current_chunk_rows) > int(min_chunk_rows):
+                    next_chunk_rows = max(int(min_chunk_rows), int(current_chunk_rows) // 2)
+                    bump("load_data_lock_table_retries", 1)
+                    chunk_rows = int(next_chunk_rows)
+                    continue
+                raise
 
-            if not direct_duckdb_ok:
-                t0 = time.perf_counter()
-                df = pd.read_parquet(parquet_file)
-                add_ms("parquet_materialize.read_parquet", time.perf_counter() - t0)
-                if limit_rows_per_file and int(limit_rows_per_file) > 0:
-                    df = df.head(int(limit_rows_per_file)).copy()
-                df = df.iloc[int(offset_rows): int(offset_rows) + int(current_chunk_rows)].copy()
-                t0 = time.perf_counter()
-                manage.fill_table_from_dataframe(
-                    df,
-                    db_config,
-                    table_name=target_table_sql,
-                    name_map=nm,
-                    extra_column_name=extra_column_name,
-                    auto_alter_table=False,
-                    column_type="LONGTEXT",
-                    fallback_on_insert_error=False,
-                    report=local_report,
-                    load_method=str(load_method),
-                    fast_load_state=fast_load_state,
-                    local_infile_conn=local_infile_conn,
-                    existing_cols=existing_cols,
-                    engine=engine,
-                    load_data_staging_writer=load_data_staging_writer,
-                    load_data_staging_dir=load_data_staging_dir,
-                )
-                add_ms("parquet_materialize.load_file", time.perf_counter() - t0)
-
+            bump("parquet_rows_read", int(current_chunk_rows))
             bump("rows_loaded", int(current_chunk_rows))
             _progress_mark_chunk_done(
                 progress_path,
@@ -545,9 +1064,10 @@ def _materialize_one_file(
                 rows=int(current_chunk_rows),
                 next_offset=int(offset_rows) + int(current_chunk_rows),
                 total_rows=int(load_rows),
-                chunk_rows=int(chunk_rows),
+                chunk_rows=int(current_chunk_rows),
                 file_complete=(int(offset_rows) + int(current_chunk_rows) >= int(load_rows)),
             )
+            offset_rows = int(offset_rows) + int(current_chunk_rows)
 
         bump("files_loaded", 1)
         result["files"].append(
@@ -602,6 +1122,7 @@ def _materialize_one_table(
     *,
     table_original: str,
     files: list[Path],
+    table_preflight: dict[str, Any] | None,
     completed_files: set[str],
     data_config: dict[str, Any],
     db_config: dict[str, Any],
@@ -617,9 +1138,6 @@ def _materialize_one_table(
     file_chunk_rows: int,
     parallel_files_per_table: int,
 ) -> dict[str, Any]:
-    from sqlalchemy import create_engine
-    from sqlalchemy.engine import URL
-
     result: dict[str, Any] = {
         "table_original": table_original,
         "stats": {},
@@ -636,22 +1154,10 @@ def _materialize_one_table(
         if ms > 0:
             result["timings_ms"][key] = int(result["timings_ms"].get(key, 0) or 0) + ms
 
-    engine = None
     nm: NameMap | None = None
     existing_cols: set[str] | None = None
 
     try:
-        engine = create_engine(
-            URL.create(
-                "mysql+pymysql",
-                username=db_config.get("user"),
-                password=db_config.get("password"),
-                host=db_config.get("host"),
-                port=int(db_config.get("port") or 3306),
-                database=db_config.get("database"),
-            )
-        )
-
         target_table = f"{table_prefix}{table_original}"
         extra_column_name = str(data_config.get("extra_column_name") or "__extra__")
         extra_canon = extra_column_name.replace(".", str(data_config.get("KEY_SEP") or "__")) if extra_column_name else ""
@@ -660,7 +1166,13 @@ def _materialize_one_table(
             return result
 
         t0 = time.perf_counter()
-        first_columns, _ = _read_parquet_schema_rows(todo_files[0])
+        preflight_columns = []
+        if isinstance(table_preflight, dict):
+            preflight_columns = [str(column) for column in (table_preflight.get("union_columns") or [])]
+        if preflight_columns:
+            first_columns = preflight_columns
+        else:
+            first_columns, _ = _read_parquet_schema_rows(todo_files[0])
         add_ms("parquet_materialize.inspect_parquet", time.perf_counter() - t0)
         if extra_canon and extra_canon not in first_columns:
             first_columns.append(extra_canon)
@@ -761,11 +1273,7 @@ def _materialize_one_table(
                             raise
         return result
     finally:
-        if engine is not None:
-            try:
-                engine.dispose()
-            except Exception:
-                pass
+        pass
 
 
 def main() -> int:
@@ -788,6 +1296,24 @@ def main() -> int:
     ap.add_argument("--file-chunk-rows", type=int, default=0, help="Chunk rows within a parquet file for finer-grained resume (0 disables)")
     ap.add_argument("--staging-writer", choices=["python", "duckdb"], default="duckdb")
     ap.add_argument("--staging-dir", default=None, help="Temp staging directory for LOAD DATA files")
+    ap.add_argument(
+        "--skip-load-data-preflight",
+        action="store_true",
+        help="Skip the small target-DB LOAD DATA dialect round-trip check before loading",
+    )
+    ap.add_argument(
+        "--reset-selected-tables",
+        action="store_true",
+        help="Drop selected target tables and clear their progress before loading",
+    )
+    ap.add_argument(
+        "--confirm-drop-tables",
+        default="",
+        help="Required with --reset-selected-tables; exact comma-separated target table names after prefix",
+    )
+    ap.add_argument("--require-schema-manifest", action="store_true", help="Fail if schema_manifest.json is missing")
+    ap.add_argument("--require-id-compaction", action="store_true", help="Fail if schema_manifest.json does not record enabled ID compaction")
+    ap.add_argument("--strict-schema-manifest", action="store_true", help="Fail on manifest/parquet schema mismatches")
     ap.add_argument("--keep-going", action="store_true", help="Continue with next file on error")
     args = ap.parse_args()
 
@@ -810,18 +1336,18 @@ def main() -> int:
         raise SystemExit(f"parquet root not found: {parquet_root}")
 
     staging_dir = str(args.staging_dir or _default_staging_dir())
+    Path(staging_dir).expanduser().resolve().mkdir(parents=True, exist_ok=True)
 
     work_dir = run_dir / "parquet_materialize"
     progress_path = Path(args.progress).expanduser().resolve() if args.progress else work_dir / "progress.json"
     report_path = Path(args.report).expanduser().resolve() if args.report else work_dir / "run_report.json"
 
     state = _load_progress(progress_path)
-    state["parquet_root"] = str(parquet_root)
-    state["updated_at_utc"] = _iso_now()
 
     selected_tables = [str(t).strip() for t in args.table if str(t).strip()]
     table_dirs = _pick_table_dirs(parquet_root, selected_tables, args.max_tables)
-    state["table_count"] = len(table_dirs)
+    if not table_dirs:
+        raise SystemExit(f"No parquet table directories selected under {parquet_root}")
 
     report = RunReport()
     report.set_artifact("run_dir", str(run_dir))
@@ -839,6 +1365,9 @@ def main() -> int:
     report.set_artifact("parallel_tables", int(args.parallel_tables))
     report.set_artifact("parallel_files_per_table", int(args.parallel_files_per_table))
     report.set_artifact("file_chunk_rows", int(args.file_chunk_rows))
+    report.set_artifact("skip_load_data_preflight", bool(args.skip_load_data_preflight))
+    report.set_artifact("reset_selected_tables", bool(args.reset_selected_tables))
+    report.set_artifact("confirm_drop_tables_provided", bool(str(args.confirm_drop_tables).strip()))
 
     state_lock = threading.Lock()
     state.setdefault("completed_files", {})
@@ -847,8 +1376,105 @@ def main() -> int:
         table_dir.name: _pick_files(table_dir, args.max_files_per_table, bool(args.latest_first))
         for table_dir in table_dirs
     }
-    state["table_file_counts"] = {k: len(v) for k, v in table_files.items()}
-    _progress_write(progress_path, state, state_lock)
+    empty_tables = sorted(table_name for table_name, files in table_files.items() if not files)
+    if empty_tables:
+        raise SystemExit("Selected parquet table directories contain no parquet files: " + ", ".join(empty_tables))
+    try:
+        from KISTI_DB_Manager.parquet_artifacts import inspect_parquet_artifact_contract
+
+        artifact_contract = inspect_parquet_artifact_contract(
+            parquet_root,
+            table_names=sorted(table_files),
+            require_schema_manifest=bool(args.require_schema_manifest),
+            require_id_compaction=bool(args.require_id_compaction),
+            strict_schema_manifest=bool(args.strict_schema_manifest),
+        )
+        report.set_artifact("parquet_artifact_contract", artifact_contract)
+        if artifact_contract.get("status") == "failed":
+            report.error(
+                stage="parquet_materialize.artifact_contract",
+                message="Selected parquet artifacts failed schema manifest contract preflight",
+            )
+            report.set_artifact("progress_path", str(progress_path))
+            _save_report(report, report_path)
+            raise SystemExit("Selected parquet artifacts failed schema manifest contract preflight; see report for details")
+    except SystemExit:
+        raise
+    except Exception as exc:
+        report.exception(
+            stage="parquet_materialize.artifact_contract",
+            message="Failed to inspect parquet artifact contract",
+            exc=exc,
+        )
+        report.set_artifact("progress_path", str(progress_path))
+        _save_report(report, report_path)
+        raise
+    parquet_preflight = _inspect_parquet_tables(
+        table_files,
+        key_sep=str(data_config.get("KEY_SEP") or "__"),
+        extra_column_name=str(data_config.get("extra_column_name") or "__extra__"),
+    )
+    report.set_artifact("parquet_preflight", parquet_preflight)
+    if parquet_preflight.get("status") != "ok":
+        report.error(
+            stage="parquet_materialize.parquet_preflight",
+            message="Selected Parquet files failed metadata preflight; aborting before DB reset/load",
+        )
+        report.set_artifact("progress_path", str(progress_path))
+        _save_report(report, report_path)
+        raise SystemExit("Selected Parquet files failed metadata preflight; see report for details")
+    reset_tables = {table_dir.name for table_dir in table_dirs} if bool(args.reset_selected_tables) else set()
+    target_tables: list[str] = []
+    if not reset_tables:
+        _require_no_pending_reset(state, progress_path=progress_path)
+    if reset_tables:
+        if not selected_tables:
+            raise SystemExit("--reset-selected-tables requires at least one --table")
+        target_tables = [f"{str(args.table_prefix)}{table_name}" for table_name in sorted(reset_tables)]
+        _require_drop_confirmation(target_tables, str(args.confirm_drop_tables))
+        report.set_artifact("reset_selected_target_tables", target_tables)
+
+    if _should_run_load_data_preflight(
+        load_method=str(args.load_method),
+        staging_writer=str(args.staging_writer),
+        skip_preflight=bool(args.skip_load_data_preflight),
+    ):
+        try:
+            _run_duckdb_load_data_preflight(db_config, staging_dir=staging_dir, report=report)
+        except Exception as exc:
+            report.exception(
+                stage="parquet_materialize.load_data_preflight",
+                message="LOAD DATA runtime dialect preflight failed",
+                exc=exc,
+                staging_writer=str(args.staging_writer),
+                staging_dir=staging_dir,
+            )
+            report.set_artifact("progress_path", str(progress_path))
+            _save_report(report, report_path)
+            raise
+
+    if reset_tables:
+        _progress_prepare_session(
+            state,
+            parquet_root=parquet_root,
+            table_files=table_files,
+            selected_tables=selected_tables,
+            reset_tables=reset_tables,
+        )
+        _progress_mark_reset_pending(state, target_tables=target_tables)
+        _progress_write(progress_path, state, state_lock)
+        _drop_target_tables(db_config, target_tables)
+        _progress_mark_reset_completed(state)
+        _progress_write(progress_path, state, state_lock)
+    else:
+        _progress_prepare_session(
+            state,
+            parquet_root=parquet_root,
+            table_files=table_files,
+            selected_tables=selected_tables,
+            reset_tables=reset_tables,
+        )
+        _progress_write(progress_path, state, state_lock)
 
     session_tables_done: set[str] = set()
     worker_results: list[dict[str, Any]] = []
@@ -860,6 +1486,7 @@ def main() -> int:
                 result = _materialize_one_table(
                     table_original=table_original,
                     files=table_files.get(table_original, []),
+                    table_preflight=(parquet_preflight.get("tables") or {}).get(table_original, {}),
                     completed_files=set(state.get("completed_files", {}).get(table_original, [])),
                     data_config=data_config,
                     db_config=db_config,
@@ -885,6 +1512,7 @@ def main() -> int:
                         _materialize_one_table,
                         table_original=table_dir.name,
                         files=table_files.get(table_dir.name, []),
+                        table_preflight=(parquet_preflight.get("tables") or {}).get(table_dir.name, {}),
                         completed_files=set(state.get("completed_files", {}).get(table_dir.name, [])),
                         data_config=data_config,
                         db_config=db_config,
@@ -921,9 +1549,7 @@ def main() -> int:
         report.set_artifact("tables_completed_session", sorted(session_tables_done))
         report.set_artifact("per_table", worker_results)
         report.set_artifact("progress_path", str(progress_path))
-        report.finish()
-        report_path.parent.mkdir(parents=True, exist_ok=True)
-        report_path.write_text(report.to_json(indent=2), encoding="utf-8")
+        _save_report(report, report_path)
         print(f"progress: {progress_path}")
         print(f"report: {report_path}")
         return 0

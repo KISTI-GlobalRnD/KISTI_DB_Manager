@@ -149,6 +149,8 @@ Notes:
 - Prefer explicit `parse-parquet*` or `ingest-fast*` modes for production runs; avoid relying on `default`.
 - `ingest-fast*` modes remain direct insert-first/streaming modes for maximum throughput.
 - `persist_parquet_files=true` and `json_streaming_load=true` are mutually exclusive and now fail fast at CLI validation time.
+- OpenAlex-scale ID compaction is opt-in: `--id-compaction` strips repeated URL prefixes from known ID fields, renames semantic ID columns such as `author_id` to `author_openalex_id` even when values are null or already bare IDs, and writes the rules/descriptions into the run report plus `schema_manifest.json`. It is compatible with `--parallel-workers`; conflicting nonblank source values fail fast by default, and policy flags can switch collisions or namespace conflicts to `preserve` for review workflows.
+- Before a long OpenAlex run, use `kisti-db-manager json id-compaction-preflight --config ... --report id_compaction_preflight.json` to scan for compacted-column collisions, namespace conflicts, and ambiguous URL-like columns.
 
 ### Local Parquet Artifacts (default)
 
@@ -185,6 +187,7 @@ python scripts/oa_materialize_parquet_to_db.py \
 
 Notes:
 - This is a separate post-parse materialization step for `parse-parquet*` runs.
+- Before loading, inspect the parquet contract with `kisti-db-manager parquet inspect --parquet-root <parquet_root> --require-schema-manifest --require-id-compaction` when ID compaction is expected.
 - It resumes from `runs/<openalex_parse_run_dir>/parquet_materialize/progress.json`.
 - `--file-chunk-rows N` checkpoints large parquet files in smaller row chunks so a restart can resume within a file instead of replaying the whole parquet batch.
 - `--db-name target_openalex_db` overrides the target database without editing the original parse config.
@@ -192,6 +195,7 @@ Notes:
 - `--parallel-files-per-table N` lets a single large parquet table load multiple parquet batches concurrently.
 - Default materializer staging is `--staging-writer duckdb`, which stages into `/dev/shm` when available and then uses `LOAD DATA LOCAL INFILE`.
 - For stable parquet schemas, the materializer can bypass pandas and stage directly from parquet via DuckDB; schema-drift cases fall back to the DataFrame path.
+- Direct materialization reports now include `parquet_artifact_contract` with schema manifest provenance, ID compaction status, rule hash, compacted column counts, and mixed source/compacted column warnings.
 
 ### Local TSV Artifacts (fast/streaming path only)
 
@@ -237,6 +241,7 @@ Notes:
 
 Notes:
 - If you want forced single-worker flattening, pass `--parallel-workers 0` (even in `ingest-fast*`).
+- `--id-compaction` can run with `--parallel-workers`; compaction is applied after each worker flattens its slice, and compaction errors are not hidden by sequential fallback.
 - If you need to override the mode chunk size, pass `--chunk-size N` explicitly.
 - `ingest-fast-hybrid` evolves only during warmup batches (`schema_hybrid_warmup_batches`, default: 1), then behaves like freeze.
 

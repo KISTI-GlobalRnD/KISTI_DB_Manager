@@ -1,0 +1,76 @@
+{
+  "version": 1,
+  "tag": "20260430",
+  "run_dir": "/home/kimyoungjin06/Desktop/HDD/runs/openalex_0330_serving_rebuild_20260416_164528",
+  "config": "/home/kimyoungjin06/Desktop/HDD/runs/openalex_0330_serving_rebuild_20260416_164528/config.json",
+  "dotenv": ".env",
+  "db_name": "openalex_20260330_raw_yjk",
+  "db": {"driver": "mariadb"},
+  "parquet_root": "/home/kimyoungjin06/Desktop/HDD/runs/openalex_0330_serving_rebuild_20260416_164528/serving_parquet_root",
+  "materialize": {
+    "parallel_tables": 1,
+    "parallel_files_per_table": 1,
+    "staging_writer": "duckdb",
+    "file_chunk_rows": 250000
+  },
+  "preflight": {
+    "enabled": true,
+    "failure_policy": "hard",
+    "allow_unsupported": false,
+    "load_data_roundtrip": true
+  },
+  "validation": {
+    "profile": "large",
+    "literal_null_marker": "\\N",
+    "literal_null_marker_compare_mode": "utf8mb4_bin",
+    "literal_marker": {"mode": "off"},
+    "threads": 4,
+    "memory_limit": "64GB",
+    "skip_parquet_key_health": true,
+    "skip_db_key_health": true,
+    "skip_key_bucket_check": true,
+    "skip_orphans": true,
+    "skip_sample_checksum": true,
+    "skip_row_bucket_checksum": true
+  },
+  "finalize": {
+    "enabled": true,
+    "strict_indexes": true,
+    "no_unique_fallback": true,
+    "skip_analyze": true,
+    "skip_validation": true,
+    "indexes": [
+      {"table": "works", "index_name": "uk_works_id", "columns": [{"name": "id", "prefix_len": 64}], "unique": true},
+      {"table": "works_abstract", "index_name": "uk_works_abstract_oaid_w", "columns": [{"name": "oaid_w", "prefix_len": 32}], "unique": true},
+      {"table": "works_abstract", "index_name": "idx_works_abstract_id", "columns": [{"name": "id", "prefix_len": 64}], "unique": false},
+      {"table": "works_authorships", "index_name": "idx_works_authorships_id", "columns": [{"name": "id", "prefix_len": 64}], "unique": false},
+      {"table": "works_affiliation_agg", "index_name": "uk_works_affiliation_agg_oaid_w", "columns": [{"name": "oaid_w", "prefix_len": 32}], "unique": true},
+      {"table": "works_affiliation_agg", "index_name": "idx_works_affiliation_agg_id", "columns": [{"name": "id", "prefix_len": 64}], "unique": false}
+    ]
+  },
+  "tables": [
+    {"name": "works_awards", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 31479167},
+    {"name": "works_best_oa_location_source_host_organization_lineage_names", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 46538137},
+    {"name": "works_funders", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 47243930},
+    {"name": "works_concepts", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 4876249560},
+    {"name": "works_referenced_works", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 3042536160},
+    {"name": "works_keywords", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 2961336807},
+    {"name": "works_related_works", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 2493161419},
+    {"name": "works_authorships", "writer": "python", "chunk_rows": 100000, "reset": true, "expected_rows": 1361551038},
+    {"name": "works_mesh", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 1212666618},
+    {"name": "works_topics", "writer": "duckdb", "chunk_rows": 250000, "reset": true, "expected_rows": 928562546},
+    {"name": "works_locations", "writer": "python", "chunk_rows": 250000, "reset": true, "expected_rows": 626963890},
+    {"name": "works_abstract", "writer": "duckdb", "chunk_rows": 50000, "reset": true, "expected_rows": 492293207},
+    {"name": "works_counts_by_year", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_indexed_in", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_primary_location_source_issn", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_corresponding_author_ids", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_primary_location_source_host_organization_lineage", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_corresponding_institution_ids", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_sustainable_development_goals", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_affiliation_agg", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_primary_location_source_host_organization_lineage_names", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_best_oa_location_source_host_organization_lineage", "writer": "duckdb", "chunk_rows": 250000, "reset": true},
+    {"name": "works_best_oa_location_source_issn", "writer": "duckdb", "chunk_rows": 250000, "reset": true}
+  ]
+}

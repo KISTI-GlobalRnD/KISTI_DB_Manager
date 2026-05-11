@@ -49,6 +49,22 @@ python scripts/oa_materialize_parquet_to_db.py \
   --file-chunk-rows 5000
 ```
 
+For repeated operational reloads, use the plan-driven wrapper instead of a one-off shell loop:
+
+```bash
+kisti-db-manager parquet inspect \
+  --parquet-root runs/<openalex_parse_run_dir>/parquet \
+  --require-schema-manifest \
+  --require-id-compaction
+kisti-db-manager parquet preflight \
+  --plan runs/<openalex_parse_run_dir>/plans/parquet_reload_plan.json
+kisti-db-manager parquet reload \
+  --plan runs/<openalex_parse_run_dir>/plans/parquet_reload_plan.json
+```
+
+Use `configs/openalex_20260330_nonworks_reload_plan.example.json` as the OpenAlex 20260330 example and store the concrete run copy under the run directory.
+The reload wrapper runs preflight by default and includes the parquet artifact contract check in that preflight. For ID-compacted runs, set `preflight.artifact_contract.require_schema_manifest=true` and `require_id_compaction=true` in the plan so old non-compacted parquet cannot be loaded by mistake. The wrapper uses the large validation profile, which keeps post-load validation to row counts unless a literal marker scan is explicitly enabled.
+
 ## Current best-known DB load path
 
 In this repository, the fastest practical materialization path is:
@@ -61,6 +77,25 @@ Use:
 - `--parallel-tables N`
 - `--parallel-files-per-table N`
 - `--file-chunk-rows N` for finer restart granularity on large parquet files
+
+## Delta snapshot merge
+
+For snapshot refresh work, keep the merge logic inside the package rather than as one-off shell code.
+
+- Package submodule: `KISTI_DB_Manager.parquet_delta_merge`
+- Thin wrappers:
+  - `scripts/oa_merge_parquet_snapshot_delta.py`
+  - `scripts/oa_watch_delta_parse_and_merge.py`
+
+Current recommendation for OpenAlex delta refresh is:
+
+1. finish `parse-parquet-safe` for the new `updated_date` range
+2. build `delta_ids`
+3. merge by `id` at the parquet layer
+4. materialize to DB only after the merged parquet snapshot is stable
+
+For large OpenAlex snapshots, prefer `tablewise` merge instead of `filewise`.
+The filewise path is only appropriate when most base parquet files are guaranteed to be untouched.
 
 ## When to go DB-first instead
 

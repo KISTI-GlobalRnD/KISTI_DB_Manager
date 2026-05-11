@@ -1,6 +1,7 @@
 import unittest
 from unittest.mock import patch
 
+import json
 import tempfile
 import types
 import sys
@@ -283,6 +284,49 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual((res.report.stats or {}).get("parquet_rows_emitted"), 2)
             self.assertTrue(parquet_seen_during_load)
             self.assertTrue(all(parquet_seen_during_load))
+
+    def test_run_json_pipeline_writes_id_compaction_schema_manifest(self):
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "parquet_out"
+            data_config = {
+                "PATH": str(Path(td)),
+                "file_name": "x.jsonl",
+                "file_type": "jsonl",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "persist_parquet_files": True,
+                "persist_parquet_dir": str(out_dir),
+                "id_compaction": {"enabled": True},
+            }
+            db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+            def fake_iter_records(_dc, report=None, max_records=None, with_context=False):
+                yield {"id": "https://openalex.org/W1", "author_id": "https://openalex.org/A1"}
+
+            def fake_extract(batch_records, **kwargs):
+                compactor = kwargs["id_compactor"]
+                row = compactor.compact_row(batch_records[0], table_name="base")
+                return DummyDF(list(row.keys()), rows=1), {}, {}
+
+            with patch("KISTI_DB_Manager.pipeline._iter_json_records", side_effect=fake_iter_records):
+                res = run_json_pipeline(
+                    data_config,
+                    db_config,
+                    chunk_size=10,
+                    extract_fn=fake_extract,
+                    create=False,
+                    load=False,
+                    index=False,
+                    optimize=False,
+                    continue_on_error=False,
+                )
+
+            manifest_path = out_dir / "schema_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["id_compaction"]["counts"]["base.author_openalex_id"], 1)
+            self.assertIn("author_openalex_id", manifest["tables"]["base"]["columns"])
+            self.assertEqual(res.report.artifacts["id_compaction"]["enabled"], True)
 
 
 if __name__ == "__main__":

@@ -32,3 +32,38 @@ These options are now validated strictly:
 - `persist_tsv_files=true` is only valid for the streaming path
 
 In production, prefer an explicit mode instead of relying on `default`.
+
+## OpenAlex ID compaction
+
+For OpenAlex-scale JSON parsing, ID compaction can be enabled explicitly:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/openalex_config.json \
+  --mode parse-parquet-safe \
+  --id-compaction
+```
+
+The current OpenAlex preset removes repeated URL prefixes from known ID values and stores namespace meaning in column names and descriptions. For example, `author_id=https://openalex.org/A123` becomes `author_openalex_id=A123`, while base `id` remains named `id` and stores `W...`. Semantic columns are renamed consistently even when a row has `null` or an already compact bare ID value, preventing mixed schemas such as both `author_id` and `author_openalex_id`.
+
+ID compaction can be used with `--parallel-workers`. Worker processes flatten JSON slices, then the parent applies compaction and merges the resulting schema summary. Compaction collisions and namespace conflicts still fail immediately by default rather than being hidden by the sequential fallback path.
+
+If two nonblank source values map to the same compacted output column, compaction raises an error by default instead of silently choosing one. The run report and `schema_manifest.json` record the removed prefix, source column, new column, and description; schema-evolved DB columns also receive the same column comments when the target supports them.
+
+Operational policy flags:
+
+- `--id-compaction-collision-policy error|preserve`
+- `--id-compaction-namespace-conflict-policy error|preserve`
+
+Keep the default `error` for production loads where data loss must stop the run. Use `preserve` only when you intentionally want the original conflicting column retained for later review.
+
+Before a long production run, scan the input first:
+
+```bash
+kisti-db-manager json id-compaction-preflight \
+  --config path/to/openalex_config.json \
+  --max-records 100000 \
+  --report id_compaction_preflight.json
+```
+
+The preflight scanner uses `preserve` internally so it can collect all findings in the scan window instead of stopping at the first bad row. The report still records the production policies configured for `json run`. It returns exit code `1` when collisions, namespace conflicts, or scan errors are found; add `--allow-issues` for review-only automation.

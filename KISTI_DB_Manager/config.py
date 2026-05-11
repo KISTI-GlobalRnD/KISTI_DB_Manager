@@ -77,6 +77,19 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     # Optional local TSV artifacts from the streaming LOAD DATA backend.
     cfg.setdefault("persist_tsv_files", False)
     cfg.setdefault("persist_tsv_dir", "")
+    # Optional semantic ID compaction for OpenAlex-scale JSON sources.
+    cfg.setdefault(
+        "id_compaction",
+        {
+            "enabled": False,
+            "preset": "openalex",
+            "mode": "semantic_column_strip",
+            "description_policy": "required",
+            "apply_to_excepted_raw_json": False,
+            "collision_policy": "error",
+            "namespace_conflict_policy": "error",
+        },
+    )
 
     return cfg
 
