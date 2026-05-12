@@ -13,7 +13,15 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from KISTI_DB_Manager.runstate import JsonRunState, atomic_write_json, read_json, utc_now_iso
+from KISTI_DB_Manager.runstate import (
+    JsonRunState,
+    atomic_write_json,
+    open_append_text,
+    prepare_output_dir_path,
+    read_json,
+    safe_unlink_file,
+    utc_now_iso,
+)
 
 
 def _log(fp, message: str) -> None:
@@ -78,8 +86,7 @@ def _link_or_copy(src: Path, dst: Path) -> str:
 def _cleanup_glob(root: Path, pattern: str) -> int:
     removed = 0
     for child in root.glob(pattern):
-        if child.is_file():
-            child.unlink(missing_ok=True)
+        if safe_unlink_file(child, purpose="parquet delta cleanup", missing_ok=True):
             removed += 1
     return removed
 
@@ -152,9 +159,9 @@ def _copy_filtered_base(
     out_file: Path,
     log_fp,
 ) -> None:
-    out_file.parent.mkdir(parents=True, exist_ok=True)
+    prepare_output_dir_path(out_file.parent, purpose="parquet delta output")
     tmp_file = out_file.with_suffix(out_file.suffix + ".tmp")
-    tmp_file.unlink(missing_ok=True)
+    safe_unlink_file(tmp_file, purpose="parquet delta temporary cleanup", missing_ok=True)
     sql = (
         "COPY ("
         "SELECT * "
@@ -181,7 +188,7 @@ def _write_query_to_dataset(
 ) -> int:
     import pyarrow.dataset as ds
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = prepare_output_dir_path(out_dir, purpose="parquet delta dataset output")
     _cleanup_glob(out_dir, basename_template.replace("{i}", "*"))
     t0 = time.perf_counter()
     reader = con.execute(sql).to_arrow_reader()
@@ -367,7 +374,7 @@ def merge_main(argv: list[str] | None = None) -> int:
         )
     payload = state.payload
 
-    with log_path.open("a", encoding="utf-8") as log_fp:
+    with open_append_text(log_path, purpose="parquet delta merge log") as log_fp:
         _log(log_fp, f"start base_root={base_root} delta_root={delta_root} out_root={out_root}")
         con = _connect_duckdb(db_path=duckdb_path, temp_dir=temp_dir, threads=int(args.threads))
         try:
@@ -586,7 +593,7 @@ def watch_main(argv: list[str] | None = None) -> int:
         timestamp_key="updated_at",
     )
 
-    with log_path.open("a", encoding="utf-8") as log_fp:
+    with open_append_text(log_path, purpose="parquet delta watch log") as log_fp:
         _log(log_fp, f"watch start parse_service={args.parse_service}")
         merge_started = False
         while True:

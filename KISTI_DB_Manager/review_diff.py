@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
 
+from .runstate import atomic_write_text
+
 
 def _load_json(path: str | Path) -> dict[str, Any]:
     return json.loads(Path(path).read_text(encoding="utf-8"))
@@ -1353,9 +1355,9 @@ def write_review_diff_report(
     svg_path = out_path / "schema_diff.svg"
     html_path = out_path / "diff.html"
 
-    diff_json_path.write_text(json.dumps(diff, ensure_ascii=False, indent=2), encoding="utf-8")
-    md_path.write_text(md, encoding="utf-8")
-    svg_path.write_text(svg_text, encoding="utf-8")
+    atomic_write_text(diff_json_path, json.dumps(diff, ensure_ascii=False, indent=2), purpose="review diff output")
+    atomic_write_text(md_path, md, purpose="review diff output")
+    atomic_write_text(svg_path, svg_text, purpose="review diff output")
 
     html_text = render_review_diff_html(
         before_path=before_path,
@@ -1366,7 +1368,7 @@ def write_review_diff_report(
         schema_svg_text=svg_text,
         max_list=int(max_list),
     )
-    html_path.write_text(html_text, encoding="utf-8")
+    atomic_write_text(html_path, html_text, purpose="review diff output")
 
     return {
         "out_dir": str(out_path),

@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .runstate import atomic_write_json
+from .runstate import atomic_write_json, open_append_text, prepare_output_file_path
 
 
 REPO_DIR = Path(__file__).resolve().parents[1]
@@ -101,6 +101,16 @@ def _path_from_plan(plan: dict[str, Any], key: str, default: str = "") -> Path:
     if not value:
         raise ReloadPlanError(f"plan.{key} is required")
     return Path(value).expanduser().resolve()
+
+
+def _path_from_plan_no_resolve(plan: dict[str, Any], key: str, default: Path | str = "") -> Path:
+    value = str(plan.get(key) or default).strip()
+    if not value:
+        raise ReloadPlanError(f"plan.{key} is required")
+    expanded = Path(value).expanduser()
+    if expanded.is_absolute():
+        return expanded
+    return Path.cwd() / expanded
 
 
 def db_name_from_plan(plan: dict[str, Any]) -> str:
@@ -197,8 +207,8 @@ def plan_paths(plan: dict[str, Any], plan_path: Path | None = None) -> dict[str,
     logs_dir = Path(str(plan.get("logs_dir") or run_dir / "logs")).expanduser().resolve()
     staging_dir = Path(str(plan.get("staging_dir") or run_dir / "staging")).expanduser().resolve()
     tag = str(plan.get("tag") or "parquet").strip()
-    status_path = Path(str(plan.get("status_path") or reports_dir / f"parquet_reload_status_{tag}.json")).expanduser().resolve()
-    lock_path = Path(str(plan.get("lock_path") or run_dir / f"parquet_reload_{tag}.lock")).expanduser().resolve()
+    status_path = _path_from_plan_no_resolve(plan, "status_path", reports_dir / f"parquet_reload_status_{tag}.json")
+    lock_path = _path_from_plan_no_resolve(plan, "lock_path", run_dir / f"parquet_reload_{tag}.lock")
     progress_path = Path(str(plan.get("progress_path") or run_dir / "parquet_materialize" / "progress.json")).expanduser().resolve()
     duckdb_temp_dir = Path(str(plan.get("duckdb_temp_dir") or staging_dir / "duckdb_tmp")).expanduser().resolve()
     return {
@@ -243,8 +253,7 @@ def save_status(path: Path, payload: dict[str, Any], **updates: Any) -> None:
 
 
 def run_logged(cmd: list[str], *, log_path: Path, dry_run: bool = False) -> int:
-    log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("a", encoding="utf-8") as log:
+    with open_append_text(log_path, purpose="parquet reload log") as log:
         log.write(f"\n[{utc_now_iso()}] $ {command_to_str(cmd)}\n")
         log.flush()
         if dry_run:
@@ -542,12 +551,20 @@ def all_planned_tables_done(status: dict[str, Any], specs: list[ReloadTableSpec]
 
 
 def acquire_lock(path: Path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fh = path.open("w", encoding="utf-8")
+    path = prepare_output_file_path(path, purpose="parquet reload lock")
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    fd = os.open(path, flags, 0o600)
+    fh = os.fdopen(fd, "w", encoding="utf-8")
     try:
         fcntl.flock(fh.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
+        fh.close()
         raise ReloadPlanError(f"another parquet reload driver holds {path}") from exc
+    except Exception:
+        fh.close()
+        raise
     fh.write(f"pid={os.getpid()}\nstarted_at={utc_now_iso()}\n")
     fh.flush()
     return fh
@@ -680,7 +697,9 @@ def run_reload_plan(
 
 
 def mark_table_done_from_validation_report(*, status_path: Path, table: str, validation_report: Path) -> dict[str, Any]:
-    status_path = Path(status_path).expanduser().resolve()
+    status_path = Path(status_path).expanduser()
+    if not status_path.is_absolute():
+        status_path = Path.cwd() / status_path
     table = str(table).strip()
     if not table:
         raise ReloadPlanError("table is required")

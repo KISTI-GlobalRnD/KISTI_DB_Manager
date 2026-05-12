@@ -162,5 +162,6 @@ class RunReport:
         return json.dumps(self.to_dict(), ensure_ascii=False, indent=indent)
 
     def save_json(self, path: str, *, indent: int = 2) -> None:
-        with open(path, "w", encoding="utf-8") as f:
-            f.write(self.to_json(indent=indent))
+        from .runstate import atomic_write_json
+
+        atomic_write_json(path, self.to_dict(), indent=indent, purpose="run report")

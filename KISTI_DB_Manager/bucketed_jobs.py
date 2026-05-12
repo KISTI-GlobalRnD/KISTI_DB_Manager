@@ -1,12 +1,20 @@
 from __future__ import annotations
 
 import json
-import shutil
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from .runstate import JsonRunState, atomic_write_json, read_json, utc_now_iso
+from .runstate import (
+    JsonRunState,
+    append_text,
+    atomic_write_json,
+    prepare_output_dir_path,
+    read_json,
+    safe_rmtree,
+    safe_unlink_file,
+    utc_now_iso,
+)
 
 
 @dataclass(frozen=True)
@@ -39,9 +47,13 @@ def run_bucketed_duckdb_job(spec: BucketedDuckDBJobSpec) -> dict[str, Any]:
     import traceback
 
     source_dir = Path(spec.source_dir).expanduser().resolve()
-    out_dir = Path(spec.out_dir).expanduser().resolve()
-    temp_dir = Path(spec.temp_dir).expanduser().resolve() if spec.temp_dir else None
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = Path(spec.out_dir).expanduser()
+    if not out_dir.is_absolute():
+        out_dir = Path.cwd() / out_dir
+    temp_dir = Path(spec.temp_dir).expanduser() if spec.temp_dir else None
+    if temp_dir is not None and not temp_dir.is_absolute():
+        temp_dir = Path.cwd() / temp_dir
+    out_dir = prepare_output_dir_path(out_dir, purpose="bucketed job output")
     log_path = out_dir / "build.log"
     progress_path = out_dir / "progress.json"
     summary_path = out_dir / "summary.json"
@@ -69,40 +81,44 @@ def run_bucketed_duckdb_job(spec: BucketedDuckDBJobSpec) -> dict[str, Any]:
         ):
             return summary
     if not spec.resume:
-        log_path.unlink(missing_ok=True)
-        summary_path.unlink(missing_ok=True)
-        shutil.rmtree(state_dir, ignore_errors=True)
+        safe_unlink_file(log_path, purpose="bucketed job cleanup", missing_ok=True)
+        safe_unlink_file(summary_path, purpose="bucketed job cleanup", missing_ok=True)
+        safe_rmtree(state_dir, purpose="bucketed job state cleanup", missing_ok=True)
         for parquet_file in out_dir.glob("*.parquet"):
-            parquet_file.unlink(missing_ok=True)
+            safe_unlink_file(parquet_file, purpose="bucketed job parquet cleanup", missing_ok=True)
 
     if temp_dir:
-        if not spec.resume:
-            shutil.rmtree(temp_dir, ignore_errors=True)
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir = prepare_output_dir_path(temp_dir, purpose="bucketed job temp")
         duckdb_temp_dir = temp_dir / "duckdb_tmp"
         pair_root = temp_dir / "pair_buckets"
+        if not spec.resume:
+            safe_rmtree(duckdb_temp_dir, purpose="bucketed job duckdb temp cleanup", missing_ok=True)
+            safe_rmtree(pair_root, purpose="bucketed job pair cleanup", missing_ok=True)
     else:
         duckdb_temp_dir = out_dir / "_duckdb_tmp"
         pair_root = out_dir / "_pair_buckets"
         if not spec.resume:
-            shutil.rmtree(duckdb_temp_dir, ignore_errors=True)
-            shutil.rmtree(pair_root, ignore_errors=True)
-    duckdb_temp_dir.mkdir(parents=True, exist_ok=True)
-    pair_root.mkdir(parents=True, exist_ok=True)
-    batch_done_dir.mkdir(parents=True, exist_ok=True)
-    bucket_done_dir.mkdir(parents=True, exist_ok=True)
+            safe_rmtree(duckdb_temp_dir, purpose="bucketed job duckdb temp cleanup", missing_ok=True)
+            safe_rmtree(pair_root, purpose="bucketed job pair cleanup", missing_ok=True)
+    duckdb_temp_dir = prepare_output_dir_path(duckdb_temp_dir, purpose="bucketed job duckdb temp")
+    pair_root = prepare_output_dir_path(pair_root, purpose="bucketed job pair root")
+    batch_done_dir = prepare_output_dir_path(batch_done_dir, purpose="bucketed job batch state")
+    bucket_done_dir = prepare_output_dir_path(bucket_done_dir, purpose="bucketed job bucket state")
 
     pair_dirs = {item.name: pair_root / item.name for item in spec.pair_specs}
     for pair_dir in pair_dirs.values():
-        pair_dir.mkdir(parents=True, exist_ok=True)
+        prepare_output_dir_path(pair_dir, purpose="bucketed job pair output")
 
     partitioning = ds.partitioning(pa.schema([("bucket", pa.int32())]), flavor="hive")
 
     def log(message: str) -> None:
         from datetime import datetime
 
-        with log_path.open("a", encoding="utf-8") as fp:
-            fp.write(f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] {message}\n")
+        append_text(
+            log_path,
+            f"[{datetime.now().astimezone().isoformat(timespec='seconds')}] {message}\n",
+            purpose="bucketed job log",
+        )
 
     def batch_marker_path(batch_index: int) -> Path:
         return batch_done_dir / f"batch-{batch_index:05d}.json"
@@ -126,11 +142,11 @@ def run_bucketed_duckdb_job(spec: BucketedDuckDBJobSpec) -> dict[str, Any]:
         for item in spec.pair_specs:
             for bucket_dir in pair_dirs[item.name].glob("bucket=*"):
                 for parquet_file in bucket_dir.glob(f"{item.name}-batch-{batch_index:05d}-*.parquet"):
-                    parquet_file.unlink(missing_ok=True)
+                    safe_unlink_file(parquet_file, purpose="bucketed job batch cleanup", missing_ok=True)
 
     def cleanup_bucket_outputs(bucket_index: int) -> None:
         for parquet_file in out_dir.glob(f"part-bucket-{bucket_index:04d}-*.parquet"):
-            parquet_file.unlink(missing_ok=True)
+            safe_unlink_file(parquet_file, purpose="bucketed job bucket cleanup", missing_ok=True)
 
     progress_state = JsonRunState.create(
         progress_path,
@@ -341,6 +357,6 @@ def run_bucketed_duckdb_job(spec: BucketedDuckDBJobSpec) -> dict[str, Any]:
     summary_state.write(touch_timestamp=False)
     log(f"done rows={row_count} files={len(parquet_files)}")
     if spec.cleanup_temp_on_success:
-        shutil.rmtree(pair_root, ignore_errors=True)
-        shutil.rmtree(duckdb_temp_dir, ignore_errors=True)
+        safe_rmtree(pair_root, purpose="bucketed job pair cleanup", missing_ok=True)
+        safe_rmtree(duckdb_temp_dir, purpose="bucketed job duckdb temp cleanup", missing_ok=True)
     return summary

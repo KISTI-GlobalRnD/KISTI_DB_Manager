@@ -10,6 +10,7 @@ from typing import Any, Iterable, Mapping
 
 from .config import coerce_data_config, join_path
 from .naming import MYSQL_IDENTIFIER_MAX_LEN, truncate_table_name
+from .runstate import atomic_write_text
 
 
 def _utc_now_iso() -> str:
@@ -21,8 +22,7 @@ def _load_json(path: str | Path) -> dict[str, Any]:
 
 
 def _write_text(path: Path, content: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
+    atomic_write_text(path, content, purpose="review preview output")
 
 
 def _is_nullish(v: Any) -> bool:

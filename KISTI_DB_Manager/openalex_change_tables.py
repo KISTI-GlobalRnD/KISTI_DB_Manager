@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import csv
+import io
 from pathlib import Path
 from typing import Any
 
 from KISTI_DB_Manager.openalex_change_report import _connect_duckdb, _log, _read_parquet_expr
-from KISTI_DB_Manager.runstate import JsonRunState, atomic_write_json, utc_now_iso
+from KISTI_DB_Manager.runstate import (
+    JsonRunState,
+    atomic_write_json,
+    atomic_write_text,
+    open_append_text,
+    prepare_output_dir_path,
+    safe_unlink_file,
+    utc_now_iso,
+)
 
 
 def _write_query_to_dataset(
@@ -18,9 +27,9 @@ def _write_query_to_dataset(
 ) -> int:
     import pyarrow.dataset as ds
 
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = prepare_output_dir_path(out_dir, purpose="openalex change table output")
     for child in out_dir.glob("*.parquet"):
-        child.unlink(missing_ok=True)
+        safe_unlink_file(child, purpose="openalex change table cleanup", missing_ok=True)
     reader = con.execute(sql).to_arrow_reader()
     ds.write_dataset(
         reader,
@@ -216,7 +225,7 @@ def build_openalex_change_tables(
 
     summary_rows: list[dict[str, Any]] = []
 
-    with log_path.open("a", encoding="utf-8") as log_fp:
+    with open_append_text(log_path, purpose="openalex change table log") as log_fp:
         _log(log_fp, f"base_root={base_root}")
         _log(log_fp, f"final_root={final_root}")
         _log(log_fp, f"delta_ids_parquet={delta_ids_parquet}")
@@ -263,10 +272,11 @@ def build_openalex_change_tables(
                 progress.update(**{name: {"row_count": row_count, "parquet_files": file_count, "out_dir": str(out_dir)}})
                 _log(log_fp, f"done {name}: rows={row_count}, files={file_count}")
 
-            with summary_csv.open("w", encoding="utf-8", newline="") as fp:
-                writer = csv.DictWriter(fp, fieldnames=["table_name", "row_count", "parquet_files", "out_dir"])
-                writer.writeheader()
-                writer.writerows(summary_rows)
+            summary_buf = io.StringIO()
+            writer = csv.DictWriter(summary_buf, fieldnames=["table_name", "row_count", "parquet_files", "out_dir"])
+            writer.writeheader()
+            writer.writerows(summary_rows)
+            atomic_write_text(summary_csv, summary_buf.getvalue(), purpose="openalex change summary csv")
             summary = {
                 "generated_at": utc_now_iso(),
                 "base_root": str(base_root),

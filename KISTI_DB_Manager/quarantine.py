@@ -6,6 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .runstate import open_append_text
+
 
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -36,9 +38,7 @@ class QuarantineWriter:
         self._fh = None
 
     def __enter__(self) -> "QuarantineWriter":
-        if self.ensure_parent:
-            Path(self.path).parent.mkdir(parents=True, exist_ok=True)
-        self._fh = open(self.path, "a", encoding="utf-8")
+        self._fh = open_append_text(self.path, purpose="quarantine output")
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -89,4 +89,3 @@ class NullQuarantineWriter:
 
     def write(self, *, stage: str, record: Any, index: int | None = None, exc: BaseException | None = None, **context: Any) -> None:
         return None
-

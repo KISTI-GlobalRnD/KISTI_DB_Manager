@@ -5,11 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from KISTI_DB_Manager.runstate import JsonRunState, atomic_write_json, utc_now_iso
+from KISTI_DB_Manager.runstate import JsonRunState, atomic_write_json, atomic_write_text, open_append_text, utc_now_iso
+
 
 def _write_text(path: Path, text: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(text, encoding="utf-8")
+    atomic_write_text(path, text, purpose="openalex change report output")
 
 
 def _log(fp, message: str) -> None:
@@ -97,7 +97,7 @@ def build_openalex_change_report(
     },
     )
 
-    with log_path.open("a", encoding="utf-8") as log_fp:
+    with open_append_text(log_path, purpose="openalex change report log") as log_fp:
         _log(log_fp, f"base_root={base_root}")
         _log(log_fp, f"final_root={final_root}")
         _log(log_fp, f"delta_ids_parquet={delta_ids_parquet}")

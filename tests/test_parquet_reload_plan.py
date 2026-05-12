@@ -220,6 +220,68 @@ class TestParquetReloadPlan(unittest.TestCase):
             self.assertEqual(result["tables"]["works"]["status"], "done")
             self.assertNotIn("error", result)
 
+    def test_mark_table_done_does_not_follow_status_symlink(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            external = root / "external_status.json"
+            status_path = root / "status.json"
+            validation_path = root / "validate.json"
+            external.write_text(
+                json.dumps(
+                    {
+                        "status": "failed",
+                        "completed": [],
+                        "tables": {"works": {"status": "validating"}},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            status_path.symlink_to(external)
+            validation_path.write_text(
+                json.dumps(
+                    {
+                        "status": "done",
+                        "issues": [],
+                        "checks": {
+                            "tables": {
+                                "works": {
+                                    "status": "ok",
+                                    "parquet_rows": 2,
+                                    "db_rows": 2,
+                                    "row_count_match": True,
+                                    "literal_null_marker_scan": {"status": "ok", "nonzero_columns": {}},
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "not a safe file|symlink"):
+                parquet_reload.mark_table_done_from_validation_report(
+                    status_path=status_path,
+                    table="works",
+                    validation_report=validation_path,
+                )
+
+            self.assertTrue(status_path.is_symlink())
+            self.assertEqual(json.loads(external.read_text(encoding="utf-8"))["status"], "failed")
+
+    def test_acquire_lock_does_not_follow_lock_symlink(self):
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            external = root / "external.lock"
+            lock_path = root / "reload.lock"
+            external.write_text("keep", encoding="utf-8")
+            lock_path.symlink_to(external)
+
+            with self.assertRaisesRegex(RuntimeError, "not a safe file|symlink"):
+                parquet_reload.acquire_lock(lock_path)
+
+            self.assertTrue(lock_path.is_symlink())
+            self.assertEqual(external.read_text(encoding="utf-8"), "keep")
+
     def test_finalize_index_normalization(self):
         plan = self._plan(Path("/tmp/run"))
         indexes = parquet_finalize.normalize_indexes(plan)

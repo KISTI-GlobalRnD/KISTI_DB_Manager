@@ -12,7 +12,15 @@ from typing import Any
 
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
-from KISTI_DB_Manager.runstate import JsonRunState, atomic_write_json, read_json, utc_now_iso
+from KISTI_DB_Manager.runstate import (
+    JsonRunState,
+    atomic_write_json,
+    open_append_text,
+    prepare_output_dir_path,
+    read_json,
+    safe_unlink_file,
+    utc_now_iso,
+)
 
 
 def _log(fp, message: str) -> None:
@@ -53,8 +61,7 @@ def _count_rows_from_footers(table_dir: Path) -> tuple[int, int]:
 def _cleanup_glob(root: Path, pattern: str) -> int:
     removed = 0
     for child in root.glob(pattern):
-        if child.is_file():
-            child.unlink(missing_ok=True)
+        if safe_unlink_file(child, purpose="parquet replay cleanup", missing_ok=True):
             removed += 1
     return removed
 
@@ -109,7 +116,7 @@ def _write_dataset_from_sql(
     basename_template: str,
     max_rows_per_file: int,
 ) -> int:
-    out_dir.mkdir(parents=True, exist_ok=True)
+    out_dir = prepare_output_dir_path(out_dir, purpose="parquet replay output")
     _cleanup_glob(out_dir, basename_template.replace("{i}", "*"))
     reader = con.execute(sql).to_arrow_reader()
     ds.write_dataset(
@@ -193,7 +200,7 @@ def repair_main(argv: list[str] | None = None) -> int:
     def save() -> None:
         progress.write(touch_timestamp=True)
 
-    with log_path.open("a", encoding="utf-8") as log_fp:
+    with open_append_text(log_path, purpose="parquet replay repair log") as log_fp:
         save()
         _log(log_fp, f"start snapshot_root={snapshot_root} out_root={out_root}")
         con = _connect_duckdb(db_path=run_dir / "repair.duckdb", temp_dir=temp_dir, threads=int(args.threads))
