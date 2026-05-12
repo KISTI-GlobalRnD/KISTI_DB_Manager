@@ -40,6 +40,7 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     # - "load_data": force try fast load (still best-effort fallback by default)
     # - "to_sql": always use pandas.to_sql
     cfg.setdefault("db_load_method", "auto")
+    cfg.setdefault("rust_db_load", False)
     # Robust ingestion knobs (v2)
     cfg.setdefault("include_extra_columns", True)
     cfg.setdefault("auto_alter_table", True)
@@ -49,6 +50,7 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("index_prefix_len", 191)
     # JSON pipeline performance knobs
     cfg.setdefault("parallel_workers", 0)  # ProcessPool workers for JSON flatten (0/1 disables)
+    cfg.setdefault("flatten_backend", "auto")  # auto|python|rust-arrow for parse/parquet path
     cfg.setdefault("json_streaming_load", False)  # parquet-first/DataFrame path by default
     # Schema drift strategy (JSON-oriented)
     # - "evolve": add new columns (ALTER TABLE) when needed
@@ -179,7 +181,9 @@ class DataConfig:
     insert_retry_max: int = 5
     index_prefix_len: int = 191
     db_load_method: str = "auto"
+    rust_db_load: bool = False
     parallel_workers: int = 0
+    flatten_backend: str = "auto"
     json_streaming_load: bool = False
     schema_mode: str = "evolve"
     extra_column_name: str = "__extra__"
@@ -222,7 +226,9 @@ class DataConfig:
             insert_retry_max=int(cfg.get("insert_retry_max", 5)),
             index_prefix_len=int(cfg.get("index_prefix_len", 191)),
             db_load_method=str(cfg.get("db_load_method", "auto")),
+            rust_db_load=bool(cfg.get("rust_db_load", False)),
             parallel_workers=int(cfg.get("parallel_workers", 0) or 0),
+            flatten_backend=str(cfg.get("flatten_backend", "auto")),
             json_streaming_load=bool(cfg.get("json_streaming_load", False)),
             schema_mode=str(cfg.get("schema_mode", "evolve")),
             extra_column_name=str(cfg.get("extra_column_name", "__extra__")),
@@ -264,7 +270,9 @@ class DataConfig:
             "insert_retry_max": self.insert_retry_max,
             "index_prefix_len": self.index_prefix_len,
             "db_load_method": self.db_load_method,
+            "rust_db_load": bool(self.rust_db_load),
             "parallel_workers": int(self.parallel_workers),
+            "flatten_backend": str(self.flatten_backend),
             "json_streaming_load": bool(self.json_streaming_load),
             "schema_mode": str(self.schema_mode),
             "extra_column_name": str(self.extra_column_name),

@@ -6,6 +6,8 @@ from pathlib import Path
 
 
 from KISTI_DB_Manager.pipeline import _iter_json_records
+from KISTI_DB_Manager.quarantine import QuarantineWriter
+from KISTI_DB_Manager.report import RunReport
 
 
 class TestIterJsonRecords(unittest.TestCase):
@@ -85,6 +87,30 @@ class TestIterJsonRecords(unittest.TestCase):
             self.assertEqual(got[0][0]["id"], 1)
             self.assertEqual(got[0][1]["line_no"], 1)
             self.assertTrue(str(got[0][1]["source_path"]).endswith("a.jsonl"))
+
+    def test_iter_json_records_quarantines_jsonl_parse_errors(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            q_path = root / "q.jsonl"
+            (root / "a.jsonl").write_text('{"id":1}\n{bad json\n{"id":2}\n', encoding="utf-8")
+            data_config = {
+                "PATH": str(root),
+                "file_name": "a.jsonl",
+                "file_type": "jsonl",
+            }
+            report = RunReport()
+            with QuarantineWriter(q_path) as quarantine:
+                got = list(_iter_json_records(data_config, report=report, quarantine=quarantine))
+
+            self.assertEqual([it["id"] for it in got], [1, 2])
+            self.assertEqual(report.stats.get("issues_error"), 1)
+            lines = q_path.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 1)
+            entry = json.loads(lines[0])
+            self.assertEqual(entry["stage"], "iter_json_records")
+            self.assertEqual(entry["index"], 2)
+            self.assertEqual(entry["record"], "{bad json")
+            self.assertEqual(entry["context"]["line_no"], 2)
 
     def test_iter_json_records_supports_source_sampling(self):
         with tempfile.TemporaryDirectory() as td:

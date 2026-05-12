@@ -39,6 +39,9 @@ docs = [
   "mkdocs>=1.6",
   "mkdocs-material>=9.5",
 ]
+rust = [
+  "maturin>=1.7",
+]
 
 [project.scripts]
 kisti-db-manager = "KISTI_DB_Manager.cli:main"

@@ -312,13 +312,17 @@ def flatten_json_separate_lists(nested_json, except_keys=None, sep="__", parent=
             # If the list contains dictionaries, flatten each dictionary but keep the list structure
             if len(x) > 0 and isinstance(x[0], dict):
                 flat_list = []
+                list_key = name[:-len(sep)]
                 for i, item in enumerate(x):
-                    # Recursively flatten each dictionary inside the list
-                    sub_single, sub_multiple, sub_excepted = flatten_json_separate_lists(
-                        item, except_keys=except_keys, sep=sep, parent=name)
-                    # Append each flattened dictionary to the list
-                    flat_list.append({**sub_single, **sub_multiple})
-                multiple_values[name[:-len(sep)]] = flat_list
+                    if isinstance(item, dict):
+                        # Recursively flatten each dictionary inside the list
+                        sub_single, sub_multiple, sub_excepted = flatten_json_separate_lists(
+                            item, except_keys=except_keys, sep=sep, parent=name)
+                        # Append each flattened dictionary to the list
+                        flat_list.append({**sub_single, **sub_multiple})
+                    else:
+                        flat_list.append({list_key: item})
+                multiple_values[list_key] = flat_list
             else:
                 # If it's a simple list, store it directly in multiple_values
                 multiple_values[name[:-len(sep)]] = x
@@ -433,114 +437,62 @@ def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_ke
         colname_cache = {}
     colname_cache_sep = colname_cache.setdefault(str(sep), {})
 
-    if except_set:
-        def _flatten_dict_keep_lists(obj) -> dict:
-            out: dict = {}
-            stack: list[tuple[object, str]] = [(obj, "")]
-            stack_pop = stack.pop
-            stack_append = stack.append
-            sep_local = sep
-            sep_len = len(sep_local)
-            while stack:
-                cur, prefix = stack_pop()
-                if type(cur) is dict or isinstance(cur, dict):
-                    for k, v in cur.items():
-                        ks = k if type(k) is str else str(k)
-                        full_key = (prefix + ks) if prefix else ks
-                        # Preserve previous semantics: excepted keys inside list-items are dropped.
-                        if ks in except_set or full_key in except_set:
-                            continue
-                        tv = type(v)
-                        if tv is dict:
-                            stack_append((v, full_key + sep_local))
-                            continue
-                        if tv is list:
-                            if v and (type(v[0]) is dict or isinstance(v[0], dict)):
-                                flat_list: list[dict] = []
-                                flat_list_append = flat_list.append
-                                for it in v:
-                                    if type(it) is dict:
-                                        tmp: dict = {}
-                                        deep = False
-                                        for kk, vv in it.items():
-                                            tvv = type(vv)
-                                            if tvv is dict or (
-                                                tvv is list and vv and (type(vv[0]) is dict or isinstance(vv[0], dict))
-                                            ):
-                                                deep = True
-                                                break
-                                            kks = kk if type(kk) is str else str(kk)
-                                            if kks in except_set:
-                                                continue
-                                            tmp[kks] = vv
-                                        if not deep:
-                                            flat_list_append(tmp)
-                                        else:
-                                            flat_list_append(_flatten_dict_keep_lists(it))
-                                    elif isinstance(it, dict):
+    def _flatten_dict_keep_lists(obj) -> dict:
+        out: dict = {}
+        stack: list[tuple[object, str]] = [(obj, "")]
+        stack_pop = stack.pop
+        stack_append = stack.append
+        sep_local = sep
+        sep_len = len(sep_local)
+        while stack:
+            cur, prefix = stack_pop()
+            if type(cur) is dict or isinstance(cur, dict):
+                for k, v in cur.items():
+                    ks = k if type(k) is str else str(k)
+                    full_key = (prefix + ks) if prefix else ks
+                    if except_set and (ks in except_set or full_key in except_set):
+                        continue
+                    tv = type(v)
+                    if tv is dict:
+                        stack_append((v, full_key + sep_local))
+                        continue
+                    if tv is list:
+                        if v and (type(v[0]) is dict or isinstance(v[0], dict)):
+                            flat_list: list[dict] = []
+                            flat_list_append = flat_list.append
+                            for it in v:
+                                if type(it) is dict or isinstance(it, dict):
+                                    tmp: dict = {}
+                                    deep = False
+                                    for kk, vv in it.items():
+                                        tvv = type(vv)
+                                        if tvv is dict or (
+                                            tvv is list
+                                            and vv
+                                            and (type(vv[0]) is dict or isinstance(vv[0], dict))
+                                        ):
+                                            deep = True
+                                            break
+                                        kks = kk if type(kk) is str else str(kk)
+                                        if except_set and kks in except_set:
+                                            continue
+                                        tmp[kks] = vv
+                                    if deep:
                                         flat_list_append(_flatten_dict_keep_lists(it))
-                                out[full_key] = flat_list
-                            else:
-                                out[full_key] = v
-                            continue
-                        out[full_key] = v
-                    continue
-                key = prefix[: -sep_len] if prefix.endswith(sep_local) else prefix
-                if key:
-                    out[key] = cur
-            return out
-    else:
-        def _flatten_dict_keep_lists(obj) -> dict:
-            # Same as above but without except-key checks (common case: no exclusions).
-            out: dict = {}
-            stack: list[tuple[object, str]] = [(obj, "")]
-            stack_pop = stack.pop
-            stack_append = stack.append
-            sep_local = sep
-            sep_len = len(sep_local)
-            while stack:
-                cur, prefix = stack_pop()
-                if type(cur) is dict or isinstance(cur, dict):
-                    for k, v in cur.items():
-                        ks = k if type(k) is str else str(k)
-                        full_key = (prefix + ks) if prefix else ks
-                        tv = type(v)
-                        if tv is dict:
-                            stack_append((v, full_key + sep_local))
-                            continue
-                        if tv is list:
-                            if v and (type(v[0]) is dict or isinstance(v[0], dict)):
-                                flat_list: list[dict] = []
-                                flat_list_append = flat_list.append
-                                for it in v:
-                                    if type(it) is dict:
-                                        tmp: dict = {}
-                                        deep = False
-                                        for kk, vv in it.items():
-                                            tvv = type(vv)
-                                            if tvv is dict or (
-                                                tvv is list and vv and (type(vv[0]) is dict or isinstance(vv[0], dict))
-                                            ):
-                                                deep = True
-                                                break
-                                            kks = kk if type(kk) is str else str(kk)
-                                            tmp[kks] = vv
-                                        if not deep:
-                                            flat_list_append(tmp)
-                                        else:
-                                            flat_list_append(_flatten_dict_keep_lists(it))
-                                    elif isinstance(it, dict):
-                                        flat_list_append(_flatten_dict_keep_lists(it))
-                                out[full_key] = flat_list
-                            else:
-                                out[full_key] = v
-                            continue
-                        out[full_key] = v
-                    continue
-                key = prefix[: -sep_len] if prefix.endswith(sep_local) else prefix
-                if key:
-                    out[key] = cur
-            return out
+                                    else:
+                                        flat_list_append(tmp)
+                                else:
+                                    flat_list_append({full_key: it})
+                            out[full_key] = flat_list
+                        else:
+                            out[full_key] = v
+                        continue
+                    out[full_key] = v
+                continue
+            key = prefix[: -sep_len] if prefix.endswith(sep_local) else prefix
+            if key:
+                out[key] = cur
+        return out
 
 
     # Resolve record id early so we can build subtable rows on-the-fly without a second pass.
@@ -579,6 +531,7 @@ def flatten_nested_json_with_list_rows(_json, index_key="id", index=0, except_ke
                 elif isinstance(item, dict):
                     pass
                 else:
+                    rows_append({index_key: _id, key_s: item})
                     continue
 
                 # One-pass: build fast row while checking if we must fall back to deep flatten.
@@ -793,6 +746,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
     import traceback
     import uuid
 
+    workdir = None
     try:
         # Backward-compatible args parsing:
         #   legacy: (index_offset, jsons, index_key, except_keys, sep, tmp_dir, record_contexts)
@@ -812,6 +766,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         allowed_cols_by_table = args[9] if len(args) > 9 else None
         excepted_expand_dict = args[10] if len(args) > 10 else False
         id_compaction_config = args[11] if len(args) > 11 else None
+        workdir_token = args[12] if len(args) > 12 else None
 
         try:
             index_offset = int(index_offset or 0)
@@ -822,6 +777,11 @@ def _safe_flatten_jsons_to_tsv_worker(args):
         sep = str(sep) if sep is not None else "__"
         tmp_dir = str(tmp_dir or "/tmp")
         base_table = str(base_table or "")
+        workdir_token = "".join(
+            ch for ch in str(workdir_token or "") if ch.isalnum() or ch in {"_", "-"}
+        )[:32]
+        if not workdir_token:
+            workdir_token = uuid.uuid4().hex[:12]
 
         extra_canon = None
         if extra_column_name:
@@ -1082,8 +1042,7 @@ def _safe_flatten_jsons_to_tsv_worker(args):
                 out.append(extra_canon)
             return out
 
-        run_tag = uuid.uuid4().hex[:12]
-        workdir = tempfile.mkdtemp(prefix=f"kisti_flatten_{run_tag}_", dir=tmp_dir)
+        workdir = tempfile.mkdtemp(prefix=f"kisti_flatten_{workdir_token}_", dir=tmp_dir)
 
         def _write_tsv(rows: list[dict], cols: list[str], stem: str) -> dict:
             safe_stem = "".join(ch if ch.isalnum() or ch in {"_", "-", "."} else "_" for ch in str(stem))[:80]
@@ -1134,6 +1093,14 @@ def _safe_flatten_jsons_to_tsv_worker(args):
             "id_compaction": id_compactor.summary() if id_compactor is not None else None,
         }
     except Exception as e:
+        if workdir:
+            try:
+                import shutil
+
+                if getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+                    shutil.rmtree(workdir, ignore_errors=True)
+            except Exception:
+                pass
         return {
             "ok": False,
             "error": {

@@ -1,0 +1,5 @@
+include crates/kisti_json_rs/Cargo.toml
+include crates/kisti_json_rs/Cargo.lock
+recursive-include crates/kisti_json_rs/src *.rs
+recursive-include scripts *.py *.sh
+prune crates/kisti_json_rs/target

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from typing import Any, Mapping
 
@@ -73,25 +74,65 @@ class JsonRunResult:
     report: RunReport
 
 
+_POSSIBLE_LONG_POSITIVE_JSON_INTEGER_RE = re.compile(r"\d{20,}")
+_POSSIBLE_LONG_NEGATIVE_JSON_INTEGER_RE = re.compile(r"-\d{19,}")
+_POSSIBLE_LONG_POSITIVE_JSON_INTEGER_RE_BYTES = re.compile(rb"\d{20,}")
+_POSSIBLE_LONG_NEGATIVE_JSON_INTEGER_RE_BYTES = re.compile(rb"-\d{19,}")
+_JSON_DIGIT_BYTES = b"0123456789"
+_LONG_JSON_INTEGER_RE = re.compile(
+    r"(?:(?:^|[\[\{,:])\s*)(?:-\d{19,}|\d{20,})(?=\s*(?:[,}\]]|$)|[.eE])"
+)
+_LONG_JSON_INTEGER_RE_BYTES = re.compile(
+    rb"(?:(?:^|[\[\{,:])\s*)(?:-\d{19,}|\d{20,})(?=\s*(?:[,}\]]|$)|[.eE])"
+)
+
+
 def _json_loads_factory():
+    import json
+
+    def _loads_stdlib(obj):
+        if isinstance(obj, (bytes, bytearray, memoryview)):
+            obj = bytes(obj).decode("utf-8")
+        return json.loads(obj)
+
+    def _maybe_has_integer_outside_u64(obj) -> bool:
+        """
+        orjson converts integer literals outside i64/u64 range to float. Keep the
+        fast path for normal records, but use stdlib json when a suspicious numeric
+        literal appears so Python's arbitrary-size int semantics are preserved.
+        """
+        if isinstance(obj, str):
+            if _POSSIBLE_LONG_POSITIVE_JSON_INTEGER_RE.search(obj) is None and (
+                "-" not in obj or _POSSIBLE_LONG_NEGATIVE_JSON_INTEGER_RE.search(obj) is None
+            ):
+                return False
+            return _LONG_JSON_INTEGER_RE.search(obj) is not None
+        elif isinstance(obj, (bytes, bytearray, memoryview)):
+            raw = bytes(obj)
+            digit_count = len(raw) - len(raw.translate(None, _JSON_DIGIT_BYTES))
+            if digit_count < 19:
+                return False
+            if _POSSIBLE_LONG_POSITIVE_JSON_INTEGER_RE_BYTES.search(raw) is None and (
+                b"-" not in raw or _POSSIBLE_LONG_NEGATIVE_JSON_INTEGER_RE_BYTES.search(raw) is None
+            ):
+                return False
+            return _LONG_JSON_INTEGER_RE_BYTES.search(raw) is not None
+        else:
+            return False
+
     try:
         import orjson
 
         def loads(obj):
+            if _maybe_has_integer_outside_u64(obj):
+                return _loads_stdlib(obj)
             if isinstance(obj, str):
                 obj = obj.encode("utf-8")
             return orjson.loads(obj)
 
         return loads
     except Exception:
-        import json
-
-        def loads(obj):
-            if isinstance(obj, (bytes, bytearray, memoryview)):
-                obj = bytes(obj).decode("utf-8")
-            return json.loads(obj)
-
-        return loads
+        return _loads_stdlib
 
 
 def _as_string_list(value: Any) -> list[str]:
@@ -233,6 +274,7 @@ def _iter_json_records(
     data_config: Mapping[str, Any],
     *,
     report: RunReport | None = None,
+    quarantine: QuarantineWriter | NullQuarantineWriter | None = None,
     max_records: int | None = None,
     with_context: bool = False,
 ):
@@ -404,6 +446,21 @@ def _iter_json_records(
                         exc=e,
                         source=source_label,
                     )
+                if quarantine is not None:
+                    q_context: dict[str, Any] = {"source": source_label, "line_no": int(line_no)}
+                    if source_member:
+                        q_context["source_member"] = str(source_member)
+                    try:
+                        raw_text = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else str(raw)
+                        quarantine.write(
+                            stage="iter_json_records",
+                            record=raw_text.rstrip("\r\n"),
+                            index=int(line_no),
+                            exc=e,
+                            **q_context,
+                        )
+                    except Exception:
+                        pass
                 continue
 
             if not _can_yield_one():
@@ -1064,6 +1121,11 @@ def run_json_pipeline(
         report.set_artifact("schema_hybrid_warmup_batches", int(hybrid_warmup_batches))
     report.set_artifact("auto_alter_table", bool(auto_alter_table_cfg))
     report.set_artifact("fast_load_session", bool(dc.get("fast_load_session", False)))
+    rust_db_load = _coerce_bool(dc.get("rust_db_load", False), default=False)
+    rust_db_load_batch_size = int(dc.get("rust_db_load_batch_size", dc.get("to_sql_chunksize") or 1000) or 1000)
+    if rust_db_load_batch_size <= 0:
+        rust_db_load_batch_size = 1000
+    report.set_artifact("rust_db_load", bool(rust_db_load))
     persist_parquet_files = _coerce_bool(dc.get("persist_parquet_files", True), default=True)
     persist_parquet_dir = str(dc.get("persist_parquet_dir", "") or "").strip()
     if persist_parquet_files and not persist_parquet_dir:
@@ -1094,9 +1156,57 @@ def run_json_pipeline(
             raise ValueError("id_compaction mode currently supported: semantic_column_strip")
     report.set_artifact("id_compaction", id_compactor.summary())
 
+    from .rust_arrow_backend import (
+        BACKEND_AUTO,
+        BACKEND_PYTHON,
+        BACKEND_RUST_ARROW,
+        RustArrowBackendUnavailable,
+        load_parquet_files_to_mysql,
+        normalize_flatten_backend,
+        persist_json_batch_to_parquet,
+        rust_arrow_unsupported_reason,
+    )
+
+    flatten_backend_requested = normalize_flatten_backend(dc.get("flatten_backend", BACKEND_AUTO))
+    report.set_artifact("flatten_backend", flatten_backend_requested)
+    report.set_artifact("flatten_backend_requested", flatten_backend_requested)
+
     # Best-effort progress checkpointing (for crash recovery / quick shard detection).
     # This intentionally writes a tiny JSON snapshot periodically without waiting for the final report.
     progress_path = str(dc.get("progress_path") or "").strip()
+    if progress_path:
+        try:
+            from pathlib import Path
+
+            def _normalize_progress_path_no_resolve(value: str) -> Path:
+                expanded = Path(str(value)).expanduser()
+                path_abs = expanded if expanded.is_absolute() else Path.cwd() / expanded
+                current = Path(path_abs.anchor)
+                normalized_parts: list[str] = []
+                parts = path_abs.parts[1:] if path_abs.anchor else path_abs.parts
+                for part in parts:
+                    if part in {"", "."}:
+                        continue
+                    if part == "..":
+                        if normalized_parts:
+                            normalized_parts.pop()
+                        current = Path(path_abs.anchor).joinpath(*normalized_parts)
+                        continue
+                    current = current / part
+                    if current.is_symlink():
+                        raise RuntimeError(f"progress path contains a symlink component: {current}")
+                    normalized_parts.append(part)
+                return Path(path_abs.anchor).joinpath(*normalized_parts)
+
+            progress_path = str(_normalize_progress_path_no_resolve(progress_path))
+        except Exception as e:
+            report.warn(
+                stage="json_pipeline.progress",
+                message="Progress checkpointing disabled because progress_path is unsafe",
+                path=progress_path,
+                error={"type": type(e).__name__, "message": str(e)},
+            )
+            progress_path = ""
     try:
         progress_interval_s = float(dc.get("progress_interval_s", 10.0) or 0.0)
     except Exception:
@@ -1193,18 +1303,36 @@ def run_json_pipeline(
             if last_loaded_snapshot:
                 payload["loaded"] = last_loaded_snapshot
 
-            out = Path(progress_path)
-            out.parent.mkdir(parents=True, exist_ok=True)
-            tmp = out.with_name(out.name + ".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
+            import tempfile
+
+            out = _normalize_progress_path_no_resolve(progress_path)
+            parent = _normalize_progress_path_no_resolve(str(out.parent))
+            parent.mkdir(parents=True, exist_ok=True)
+            parent = _normalize_progress_path_no_resolve(str(parent))
+            if parent.is_symlink() or not parent.is_dir():
+                raise RuntimeError(f"progress path parent is not a safe directory: {parent}")
+            out = _normalize_progress_path_no_resolve(str(out))
+            fd, tmp = tempfile.mkstemp(prefix=f".{out.name}.", suffix=".tmp", dir=str(parent))
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
                 import json as _json
 
                 f.write(_json.dumps(payload, ensure_ascii=False, indent=2))
-            os.replace(tmp, out)
+            try:
+                out = _normalize_progress_path_no_resolve(str(out))
+                os.replace(tmp, out)
+            except Exception:
+                try:
+                    tmp_path = _normalize_progress_path_no_resolve(str(tmp))
+                    if not tmp_path.is_symlink() and tmp_path.is_file():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
+                raise
         except Exception:
             # Never fail the ingest because checkpointing failed.
             return
 
+    custom_extract_fn = extract_fn is not None
     if extract_fn is None:
         try:
             from .processing import extract_data_from_jsons as extract_fn
@@ -1321,20 +1449,79 @@ def run_json_pipeline(
     def _column_descriptions_for(table_original: str) -> dict[str, str]:
         return id_compactor.column_descriptions(table_original) if id_compactor.enabled else {}
 
+    def _json_absolute_no_resolve(path: Any):
+        from pathlib import Path
+
+        expanded = Path(str(path)).expanduser()
+        if expanded.is_absolute():
+            return expanded
+        return Path.cwd() / expanded
+
+    def _json_assert_no_symlink_components(path: Any, *, purpose: str):
+        from pathlib import Path
+
+        path_abs = _json_absolute_no_resolve(path)
+        current = Path(path_abs.anchor)
+        normalized_parts: list[str] = []
+        parts = path_abs.parts[1:] if path_abs.anchor else path_abs.parts
+        for part in parts:
+            if part in {"", "."}:
+                continue
+            if part == "..":
+                if normalized_parts:
+                    normalized_parts.pop()
+                current = Path(path_abs.anchor).joinpath(*normalized_parts)
+                continue
+            current = current / part
+            if current.is_symlink():
+                raise RuntimeError(f"{purpose} path contains a symlink component: {current}")
+            normalized_parts.append(part)
+        return Path(path_abs.anchor).joinpath(*normalized_parts)
+
     def _write_id_compaction_schema_manifest() -> None:
         if not id_compactor.enabled or not persist_parquet_files:
             return
         try:
-            from pathlib import Path
             import json as _json
+            import os
+            import tempfile
 
-            root = Path(str(persist_parquet_dir))
+            root = _json_assert_no_symlink_components(persist_parquet_dir, purpose="schema manifest root")
             root.mkdir(parents=True, exist_ok=True)
+            root = _json_assert_no_symlink_components(root, purpose="schema manifest root")
+            if root.is_symlink() or not root.is_dir():
+                raise RuntimeError(f"schema manifest root is not a safe directory: {root}")
             path = root / "schema_manifest.json"
-            tmp = path.with_name(path.name + ".tmp")
+            _json_assert_no_symlink_components(path, purpose="schema manifest")
+            try:
+                path.lstat()
+            except FileNotFoundError:
+                pass
+            else:
+                if path.is_symlink() or path.is_dir():
+                    raise RuntimeError(f"schema manifest path already exists and is not a safe file: {path}")
             payload = id_compactor.schema_manifest(name_maps=name_maps)
-            tmp.write_text(_json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-            tmp.replace(path)
+            fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(root))
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    handle.write(_json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+                _json_assert_no_symlink_components(path, purpose="schema manifest")
+                try:
+                    path.lstat()
+                except FileNotFoundError:
+                    pass
+                else:
+                    if path.is_symlink() or path.is_dir():
+                        raise RuntimeError(f"schema manifest path already exists and is not a safe file: {path}")
+                os.replace(tmp_name, path)
+            except Exception:
+                try:
+                    tmp_path = _json_assert_no_symlink_components(tmp_name, purpose="schema manifest temporary file")
+                    if not tmp_path.is_symlink() and tmp_path.is_file():
+                        tmp_path.unlink()
+                except Exception:
+                    pass
+                raise
             report.set_artifact("schema_manifest", str(path))
         except Exception as e:
             report.warn(
@@ -1587,12 +1774,17 @@ def run_json_pipeline(
 
             global_index = 0
             batch_no = 0
+            rust_auto_disabled_reason: str | None = None
+            rust_auto_success_batches = 0
+            rust_auto_fallback_batches = 0
+            rust_explicit_failed = False
             hybrid_freeze_started = False
             # Frozen schema support (schema_mode=freeze or hybrid frozen):
             # table_original -> allowed canonical columns (unknowns should be packed into extra).
             frozen_allowed_cols_by_table_original: dict[str, set[str]] = {}
             pending_load_futures: list[Any] = []
             pending_load_workdirs: list[str] = []
+            pending_load_tsv_files: list[str] = []
             pending_load_submitted_at: float | None = None
             pending_load_checkpoint_ctx: dict[str, Any] | None = None
             pending_load_checkpoint_extra: dict[str, Any] | None = None
@@ -1601,12 +1793,100 @@ def run_json_pipeline(
                 if not workdirs:
                     return
                 import shutil
+                from pathlib import Path
+
+                if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+                    report.warn(
+                        stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                        message="Skipping TSV worker directory cleanup because shutil.rmtree is not symlink-attack resistant",
+                    )
+                    return
 
                 for wd in workdirs:
                     try:
-                        shutil.rmtree(wd, ignore_errors=True)
-                    except Exception:
-                        pass
+                        path = Path(str(wd))
+                        if not path.is_absolute() or not path.name.startswith("kisti_flatten_"):
+                            report.warn(
+                                stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                message="Skipping unsafe TSV worker cleanup path",
+                                path=str(wd),
+                            )
+                            continue
+                        try:
+                            path.lstat()
+                        except FileNotFoundError:
+                            continue
+                        if path.is_symlink() or not path.is_dir():
+                            report.warn(
+                                stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                message="Skipping non-directory TSV worker cleanup path",
+                                path=str(path),
+                            )
+                            continue
+                        if bool(persist_tsv_files):
+                            try:
+                                has_unpersisted_tsv = any(
+                                    child.is_file() and not child.is_symlink() and child.suffix == ".tsv"
+                                    for child in path.iterdir()
+                                )
+                            except Exception:
+                                has_unpersisted_tsv = True
+                            if has_unpersisted_tsv:
+                                report.warn(
+                                    stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                    message="Leaving TSV worker directory in place because it still contains unpersisted TSV files",
+                                    path=str(path),
+                                )
+                                continue
+                        shutil.rmtree(str(path), ignore_errors=True)
+                    except Exception as e:
+                        try:
+                            report.warn(
+                                stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                message="Failed to clean TSV worker directory",
+                                path=str(wd),
+                                error={"type": type(e).__name__, "message": str(e)},
+                            )
+                        except Exception:
+                            pass
+
+            def _cleanup_parent_tsv_files(paths: list[str]) -> None:
+                if not paths or bool(persist_tsv_files):
+                    return
+                from pathlib import Path
+
+                for raw in paths:
+                    try:
+                        path = Path(str(raw))
+                        if not path.is_absolute() or not path.name.startswith(("kisti_merge_", "kisti_union_")):
+                            report.warn(
+                                stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                message="Skipping unsafe parent TSV cleanup path",
+                                path=str(raw),
+                            )
+                            continue
+                        try:
+                            path.lstat()
+                        except FileNotFoundError:
+                            continue
+                        if path.is_symlink() or not path.is_file():
+                            report.warn(
+                                stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                message="Skipping non-file parent TSV cleanup path",
+                                path=str(path),
+                            )
+                            continue
+                        path.unlink()
+                    except Exception as e:
+                        try:
+                            report.warn(
+                                stage="json_pipeline.flatten.parallel_tsv.cleanup",
+                                message="Failed to clean parent TSV file",
+                                path=str(raw),
+                                error={"type": type(e).__name__, "message": str(e)},
+                            )
+                        except Exception:
+                            pass
 
             def _drain_pending_loads() -> None:
                 """
@@ -1616,7 +1896,7 @@ def run_json_pipeline(
                 let the main thread continue flattening the next batch. Before any DB DDL/load
                 work in the next batch, we drain these futures so schema/cache stay consistent.
                 """
-                nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
+                nonlocal pending_load_futures, pending_load_workdirs, pending_load_tsv_files, pending_load_submitted_at
                 nonlocal pending_load_checkpoint_ctx, pending_load_checkpoint_extra
                 if not pending_load_futures:
                     pending_load_checkpoint_ctx = None
@@ -1625,6 +1905,9 @@ def run_json_pipeline(
                     if pending_load_workdirs:
                         _cleanup_workdirs(pending_load_workdirs)
                         pending_load_workdirs = []
+                    if pending_load_tsv_files:
+                        _cleanup_parent_tsv_files(pending_load_tsv_files)
+                        pending_load_tsv_files = []
                     pending_load_submitted_at = None
                     return
 
@@ -1633,17 +1916,20 @@ def run_json_pipeline(
 
                 futures = list(pending_load_futures)
                 workdirs = list(pending_load_workdirs)
+                tsv_files = list(pending_load_tsv_files)
                 submitted_at = pending_load_submitted_at
                 checkpoint_ctx = pending_load_checkpoint_ctx
                 checkpoint_extra = pending_load_checkpoint_extra
 
                 pending_load_futures = []
                 pending_load_workdirs = []
+                pending_load_tsv_files = []
                 pending_load_submitted_at = None
                 pending_load_checkpoint_ctx = None
                 pending_load_checkpoint_extra = None
 
                 t0 = time.perf_counter()
+                first_failed_table: str | None = None
                 try:
                     with report.timer("json.db.load"):
                         for fut in as_completed(futures):
@@ -1699,8 +1985,10 @@ def run_json_pipeline(
                                     )
                                 except Exception:
                                     pass
-                                if not continue_on_error:
-                                    raise RuntimeError(f"overlapped_table_load_failed: {table_sql}")
+                                if not continue_on_error and first_failed_table is None:
+                                    first_failed_table = table_sql
+                        if first_failed_table is not None:
+                            raise RuntimeError(f"overlapped_table_load_failed: {first_failed_table}")
                 finally:
                     t1 = time.perf_counter()
                     wait_dt = t1 - t0
@@ -1713,6 +2001,7 @@ def run_json_pipeline(
                         report.add_time_s("db.load_data.total.wall", wall_dt)
 
                     _cleanup_workdirs(workdirs)
+                    _cleanup_parent_tsv_files(tsv_files)
                     if checkpoint_ctx:
                         _write_progress_snapshot(stage="loaded", ctx=checkpoint_ctx, extra=checkpoint_extra, force=True)
 
@@ -1730,9 +2019,10 @@ def run_json_pipeline(
                 nonlocal batch_no, hybrid_freeze_started
                 nonlocal flatten_executor, parallel_tsv_disabled
                 nonlocal load_executor, load_tls, load_conns, load_conns_lock, load_parallel_disabled
-                nonlocal pending_load_futures, pending_load_workdirs, pending_load_submitted_at
+                nonlocal pending_load_futures, pending_load_workdirs, pending_load_tsv_files, pending_load_submitted_at
                 nonlocal pending_load_checkpoint_ctx, pending_load_checkpoint_extra
                 nonlocal frozen_allowed_cols_by_table_original
+                nonlocal rust_auto_disabled_reason, rust_auto_success_batches, rust_auto_fallback_batches, rust_explicit_failed
                 batch_idx = int(batch_no)
                 batch_no += 1
                 if record_contexts:
@@ -1742,6 +2032,13 @@ def run_json_pipeline(
                         extra={"batch_idx": int(batch_idx), "index_offset": int(index_offset), "batch_records": int(len(batch_records))},
                         force=True,
                     )
+                if flatten_backend_requested == BACKEND_RUST_ARROW and rust_explicit_failed:
+                    report.warn(
+                        stage="json_pipeline.rust_arrow",
+                        message="Skipping batch after earlier explicit Rust Arrow backend failure",
+                        batch_idx=int(batch_idx),
+                    )
+                    return
 
                 def _batch_progress_extra(
                     *,
@@ -1758,6 +2055,10 @@ def run_json_pipeline(
                         payload["parquet"] = dict(parquet)
                     return payload
 
+                parquet_progress: dict[str, Any] | None = None
+
+                from pathlib import Path
+
                 def _slug(value: str, *, max_len: int = 96) -> str:
                     s = "".join(ch if (ch.isalnum() or ch in {"_", "-", "."}) else "_" for ch in str(value or ""))
                     s = s.strip("._")
@@ -1765,42 +2066,154 @@ def run_json_pipeline(
                         s = "unknown"
                     return s[:max_len]
 
+                def _absolute_no_resolve(path: Any) -> Path:
+                    expanded = Path(str(path)).expanduser()
+                    if expanded.is_absolute():
+                        return expanded
+                    return Path.cwd() / expanded
+
+                def _assert_no_symlink_components(path: Any, *, purpose: str) -> Path:
+                    path_abs = _absolute_no_resolve(path)
+                    current = Path(path_abs.anchor)
+                    normalized_parts: list[str] = []
+                    parts = path_abs.parts[1:] if path_abs.anchor else path_abs.parts
+                    for part in parts:
+                        if part in {"", "."}:
+                            continue
+                        if part == "..":
+                            if normalized_parts:
+                                normalized_parts.pop()
+                            current = Path(path_abs.anchor).joinpath(*normalized_parts)
+                            continue
+                        current = current / part
+                        try:
+                            is_link = current.is_symlink()
+                        except OSError as exc:
+                            raise RuntimeError(f"failed to inspect {purpose} path component: {current}") from exc
+                        if is_link:
+                            raise RuntimeError(f"{purpose} path contains a symlink component: {current}")
+                        normalized_parts.append(part)
+                    return Path(path_abs.anchor).joinpath(*normalized_parts)
+
+                def _is_relative_to(path: Path, parent: Path) -> bool:
+                    try:
+                        path.relative_to(parent)
+                        return True
+                    except ValueError:
+                        return False
+
+                def _prepare_safe_artifact_dir(root_value: Any, child_name: str, *, purpose: str) -> Path:
+                    root = _assert_no_symlink_components(root_value, purpose=f"{purpose} root")
+                    root.mkdir(parents=True, exist_ok=True)
+                    root = _assert_no_symlink_components(root, purpose=f"{purpose} root")
+                    if root.is_symlink() or not root.is_dir():
+                        raise RuntimeError(f"{purpose} root is not a safe directory: {root}")
+
+                    child = root / child_name
+                    _assert_no_symlink_components(child, purpose=purpose)
+                    child.mkdir(parents=True, exist_ok=True)
+                    child = _assert_no_symlink_components(child, purpose=purpose)
+                    if child.is_symlink() or not child.is_dir():
+                        raise RuntimeError(f"{purpose} path is not a safe directory: {child}")
+
+                    root_resolved = root.resolve(strict=True)
+                    child_resolved = child.resolve(strict=True)
+                    if not _is_relative_to(child_resolved, root_resolved):
+                        raise RuntimeError(f"{purpose} path resolves outside root: {child}")
+                    return child_resolved
+
+                def _path_occupied(path: Path) -> bool:
+                    try:
+                        path.lstat()
+                        return True
+                    except FileNotFoundError:
+                        return False
+
+                def _allocate_artifact_path(table_dir: Path, *, base: str, ext: str) -> Path:
+                    for i in range(100_000):
+                        suffix = "" if i == 0 else f"_{i}"
+                        candidate = table_dir / f"{base}{suffix}{ext}"
+                        if not _path_occupied(candidate):
+                            return candidate
+                    raise RuntimeError(f"failed to allocate artifact path: {table_dir / (base + ext)}")
+
+                safe_tsv_workdirs: set[Path] = set()
+                safe_tsv_files: set[Path] = set()
+                finalized_tsv_source_paths: set[str] = set()
+
+                def _safe_worker_tsv_source(path_value: Any) -> Path:
+                    path_text = str(path_value or "").strip()
+                    if not path_text:
+                        raise RuntimeError("empty TSV worker file path")
+                    src = _absolute_no_resolve(path_text)
+                    try:
+                        src.lstat()
+                    except FileNotFoundError as exc:
+                        raise RuntimeError(f"TSV worker file does not exist: {src}") from exc
+                    if src.is_symlink() or not src.is_file():
+                        raise RuntimeError(f"TSV worker file is not a safe regular file: {src}")
+                    src_resolved = src.resolve(strict=True)
+                    if src_resolved in safe_tsv_files:
+                        return src_resolved
+                    if not safe_tsv_workdirs:
+                        raise RuntimeError("no safe TSV worker directory registered")
+                    if not any(_is_relative_to(src_resolved, wd) for wd in safe_tsv_workdirs):
+                        raise RuntimeError(f"TSV worker file resolves outside registered workdirs: {src}")
+                    return src_resolved
+
                 def _finalize_tsv_file(fi: dict | None, *, table_original: str, phase: str) -> None:
-                    import os
                     import shutil
-                    from pathlib import Path
 
                     if not isinstance(fi, dict):
+                        return
+                    if bool(fi.get("_tsv_finalized")):
                         return
                     path = str(fi.get("path") or "").strip()
                     if not path:
                         return
 
+                    src_for_cleanup: Path | None = None
+                    src_key: str | None = None
                     if not persist_tsv_files:
                         try:
-                            os.remove(path)
-                        except Exception:
-                            pass
+                            src_for_cleanup = _safe_worker_tsv_source(path)
+                            src_key = str(src_for_cleanup)
+                            if src_key in finalized_tsv_source_paths:
+                                fi["_tsv_finalized"] = True
+                                return
+                            src_for_cleanup.unlink()
+                            finalized_tsv_source_paths.add(src_key)
+                            fi["_tsv_finalized"] = True
+                        except Exception as e:
+                            report.warn(
+                                stage="json_pipeline.tsv_persist",
+                                message="Failed to remove TSV worker file",
+                                path=path,
+                                error={"type": type(e).__name__, "message": str(e)},
+                            )
                         return
 
                     try:
-                        root = Path(str(persist_tsv_dir))
-                        table_dir = root / _slug(table_original, max_len=120)
-                        table_dir.mkdir(parents=True, exist_ok=True)
+                        src = _safe_worker_tsv_source(path)
+                        src_for_cleanup = src
+                        src_key = str(src)
+                        if src_key in finalized_tsv_source_paths:
+                            fi["_tsv_finalized"] = True
+                            return
+                        table_dir = _prepare_safe_artifact_dir(
+                            persist_tsv_dir,
+                            _slug(table_original, max_len=120),
+                            purpose="TSV artifact",
+                        )
 
-                        src = Path(path)
                         ext = src.suffix if src.suffix else ".tsv"
                         base = f"b{int(batch_idx):06d}_{_slug(phase, max_len=24)}_{_slug(src.stem, max_len=120)}"
-                        dst = table_dir / f"{base}{ext}"
-                        if dst.exists():
-                            dst = table_dir / f"{base}_{src.name}"
-                        i = 1
-                        while dst.exists():
-                            dst = table_dir / f"{base}_{i}{ext}"
-                            i += 1
+                        dst = _allocate_artifact_path(table_dir, base=base, ext=ext)
 
                         shutil.move(str(src), str(dst))
                         fi["path"] = str(dst)
+                        fi["_tsv_finalized"] = True
+                        finalized_tsv_source_paths.add(src_key)
 
                         report.bump("tsv_files_persisted", 1)
                         try:
@@ -1810,28 +2223,35 @@ def run_json_pipeline(
                     except Exception as e:
                         report.warn(
                             stage="json_pipeline.tsv_persist",
-                            message="Failed to persist TSV artifact; removing temporary file",
+                            message="Failed to persist TSV artifact; leaving temporary file in place",
                             path=path,
                             error={"type": type(e).__name__, "message": str(e)},
                         )
-                        try:
-                            os.remove(path)
-                        except Exception:
-                            pass
+
+                def _finalize_remaining_tsv_artifacts(groups: list[dict[str, Any]] | None) -> None:
+                    if not persist_tsv_files or not groups:
+                        return
+                    for group in groups:
+                        if not isinstance(group, dict):
+                            continue
+                        table_original = str(group.get("table_sql") or group.get("table_original") or "")
+                        for fi in list(group.get("entries") or []):
+                            _finalize_tsv_file(fi, table_original=table_original, phase="load")
 
                 def _persist_parquet_table(df: Any, *, table_original: str) -> None:
-                    from pathlib import Path
-
-                    root = Path(str(persist_parquet_dir))
-                    table_dir = root / _slug(table_original, max_len=120)
-                    table_dir.mkdir(parents=True, exist_ok=True)
+                    import json
+                    import math
+                    import os
+                    import uuid
+                    from numbers import Number
 
                     base = f"b{int(batch_idx):06d}"
-                    dst = table_dir / f"{base}.parquet"
-                    i = 1
-                    while dst.exists():
-                        dst = table_dir / f"{base}_{i}.parquet"
-                        i += 1
+                    table_dir = _prepare_safe_artifact_dir(
+                        persist_parquet_dir,
+                        _slug(table_original, max_len=120),
+                        purpose="parquet artifact",
+                    )
+                    dst = _allocate_artifact_path(table_dir, base=base, ext=".parquet")
 
                     parquet_df = df
                     reset_index = getattr(parquet_df, "reset_index", None)
@@ -1841,10 +2261,118 @@ def run_json_pipeline(
                         except Exception:
                             parquet_df = df
 
+                    def _is_parquet_nullish(value: Any) -> bool:
+                        if value is None:
+                            return True
+                        try:
+                            if type(value).__name__ == "NAType":
+                                return True
+                        except Exception:
+                            pass
+                        try:
+                            return isinstance(value, float) and math.isnan(value)
+                        except Exception:
+                            return False
+
+                    def _parquet_value_kind(value: Any) -> str | None:
+                        if _is_parquet_nullish(value):
+                            return None
+                        if isinstance(value, dict):
+                            return "dict"
+                        if isinstance(value, list):
+                            return "list"
+                        if isinstance(value, tuple):
+                            return "tuple"
+                        if isinstance(value, set):
+                            return "set"
+                        if isinstance(value, (str, bytes, bytearray)):
+                            return "string"
+                        if isinstance(value, bool):
+                            return "bool"
+                        if isinstance(value, int) and not (-(2**63) <= value <= (2**64 - 1)):
+                            return "large_int"
+                        if isinstance(value, Number):
+                            return "number"
+                        return type(value).__name__
+
+                    def _stringify_parquet_value(value: Any) -> str | None:
+                        if _is_parquet_nullish(value):
+                            return None
+                        if isinstance(value, (bytes, bytearray)):
+                            return bytes(value).decode("utf-8", errors="replace")
+                        if isinstance(value, bool):
+                            return "true" if value else "false"
+                        if isinstance(value, (dict, list, tuple, set)):
+                            return json.dumps(value, ensure_ascii=False, default=str)
+                        return str(value)
+
+                    def _coerce_object_columns(frame: Any, *, force: bool = False) -> Any:
+                        columns = getattr(frame, "columns", None)
+                        if columns is None:
+                            return frame
+                        out_frame = None
+                        for col in list(columns):
+                            try:
+                                series = frame[col]
+                            except Exception:
+                                continue
+                            dtype_name = str(getattr(series, "dtype", ""))
+                            if not force and dtype_name != "object":
+                                continue
+                            kinds: set[str] = set()
+                            try:
+                                values = series.tolist()
+                            except Exception:
+                                try:
+                                    values = list(series)
+                                except Exception:
+                                    continue
+                            for value in values:
+                                kind = _parquet_value_kind(value)
+                                if kind:
+                                    kinds.add(kind)
+                                if len(kinds) > 1 and not force:
+                                    break
+                            if not kinds:
+                                continue
+                            if (
+                                not force
+                                and len(kinds) <= 1
+                                and "large_int" not in kinds
+                                and not (kinds & {"dict", "list", "tuple", "set"})
+                            ):
+                                continue
+                            if out_frame is None:
+                                try:
+                                    out_frame = frame.copy()
+                                except Exception:
+                                    return frame
+                            out_frame[col] = series.map(_stringify_parquet_value)
+                        return out_frame if out_frame is not None else frame
+
+                    def _write_parquet_file(frame: Any) -> None:
+                        tmp = dst.with_name(f".{dst.name}.{uuid.uuid4().hex}.tmp")
+                        try:
+                            try:
+                                frame.to_parquet(str(tmp), index=False)
+                            except TypeError:
+                                frame.to_parquet(str(tmp))
+                            os.replace(str(tmp), str(dst))
+                        except Exception:
+                            try:
+                                tmp.unlink()
+                            except FileNotFoundError:
+                                pass
+                            raise
+
+                    parquet_df = _coerce_object_columns(parquet_df, force=False)
                     try:
-                        parquet_df.to_parquet(str(dst), index=False)
-                    except TypeError:
-                        parquet_df.to_parquet(str(dst))
+                        _write_parquet_file(parquet_df)
+                    except Exception:
+                        fallback_df = _coerce_object_columns(parquet_df, force=True)
+                        if fallback_df is parquet_df:
+                            raise
+                        _write_parquet_file(fallback_df)
 
                     report.bump("parquet_files_persisted", 1)
                     try:
@@ -1962,13 +2490,69 @@ def run_json_pipeline(
                         ):
                             import os
                             import shutil
+                            import uuid
 
                             tmp_dir = str(dc.get("tmp_dir") or "/tmp")
+                            worker_workdir_token = uuid.uuid4().hex[:12]
                             workdirs: list[str] = []
                             results: list[dict] = []
                             class _ParallelTSVFailed(Exception):
                                 pass
                             defer_workdir_cleanup = False
+
+                            def _register_tsv_workdir(wd: Any) -> str | None:
+                                try:
+                                    workdir = _absolute_no_resolve(str(wd or ""))
+                                    tmp_root = _absolute_no_resolve(tmp_dir)
+                                    try:
+                                        workdir.lstat()
+                                    except FileNotFoundError as exc:
+                                        raise RuntimeError(f"TSV worker directory does not exist: {workdir}") from exc
+                                    if workdir.is_symlink() or not workdir.is_dir():
+                                        raise RuntimeError(f"TSV worker path is not a safe directory: {workdir}")
+                                    workdir_resolved = workdir.resolve(strict=True)
+                                    tmp_root_resolved = tmp_root.resolve(strict=True)
+                                    expected_prefix = f"kisti_flatten_{worker_workdir_token}_"
+                                    if not workdir_resolved.name.startswith(expected_prefix):
+                                        raise RuntimeError(
+                                            f"TSV worker directory has unexpected name: {workdir_resolved.name}"
+                                        )
+                                    if not _is_relative_to(workdir_resolved, tmp_root_resolved):
+                                        raise RuntimeError(
+                                            f"TSV worker directory resolves outside tmp_dir: {workdir}"
+                                        )
+                                    safe_tsv_workdirs.add(workdir_resolved)
+                                    return str(workdir_resolved)
+                                except Exception as e:
+                                    report.warn(
+                                        stage="json_pipeline.flatten.parallel_tsv.workdir",
+                                        message="Ignoring unsafe TSV worker directory",
+                                        path=str(wd),
+                                        error={"type": type(e).__name__, "message": str(e)},
+                                    )
+                                    if not continue_on_error:
+                                        raise RuntimeError(f"unsafe_tsv_worker_directory: {e}") from e
+                                    return None
+
+                            def _register_parent_tsv_file(path_value: Any, *, expected_prefix: str) -> Path:
+                                src = _absolute_no_resolve(str(path_value or ""))
+                                try:
+                                    src.lstat()
+                                except FileNotFoundError as exc:
+                                    raise RuntimeError(f"parent TSV file does not exist: {src}") from exc
+                                if src.is_symlink() or not src.is_file():
+                                    raise RuntimeError(f"parent TSV path is not a safe regular file: {src}")
+                                src_resolved = src.resolve(strict=True)
+                                tmp_root_resolved = _absolute_no_resolve(tmp_dir).resolve(strict=True)
+                                if not src_resolved.name.startswith(expected_prefix):
+                                    raise RuntimeError(
+                                        f"parent TSV file has unexpected name: {src_resolved.name}"
+                                    )
+                                if not _is_relative_to(src_resolved, tmp_root_resolved):
+                                    raise RuntimeError(f"parent TSV file resolves outside tmp_dir: {src}")
+                                safe_tsv_files.add(src_resolved)
+                                return src_resolved
+
                             try:
                                 use_pool = bool(parallel_workers) and int(parallel_workers) > 1 and len(batch_records) >= 2
                                 if use_pool:
@@ -2014,6 +2598,7 @@ def run_json_pipeline(
                                                             tsv_allowed_cols_by_table,
                                                             bool(excepted_expand_dict),
                                                             dict(id_compactor.config) if id_compactor.enabled else None,
+                                                            worker_workdir_token,
                                                         ),
                                                     )
                                                 )
@@ -2057,6 +2642,7 @@ def run_json_pipeline(
                                                     tsv_allowed_cols_by_table,
                                                     bool(excepted_expand_dict),
                                                     dict(id_compactor.config) if id_compactor.enabled else None,
+                                                    worker_workdir_token,
                                                 )
                                             )
                                         if not isinstance(res, dict) or not res.get("ok"):
@@ -2082,6 +2668,19 @@ def run_json_pipeline(
                                     if not isinstance(fi, dict):
                                         return
                                     if not fi.get("path") or not fi.get("columns") or not fi.get("rows"):
+                                        return
+                                    try:
+                                        _safe_worker_tsv_source(fi.get("path"))
+                                    except Exception as e:
+                                        report.warn(
+                                            stage="json_pipeline.flatten.parallel_tsv.file",
+                                            message="Ignoring unsafe TSV worker file",
+                                            table=str(table),
+                                            path=str(fi.get("path")),
+                                            error={"type": type(e).__name__, "message": str(e)},
+                                        )
+                                        if not continue_on_error:
+                                            raise RuntimeError(f"unsafe_tsv_worker_file: {e}") from e
                                         return
                                     tables_files.setdefault(str(table), []).append(fi)
 
@@ -2116,7 +2715,9 @@ def run_json_pipeline(
 
                                     wd = res.get("workdir")
                                     if isinstance(wd, str) and wd:
-                                        workdirs.append(wd)
+                                        safe_wd = _register_tsv_workdir(wd)
+                                        if safe_wd:
+                                            workdirs.append(safe_wd)
 
                                     _add_file(base_table, res.get("main"))
                                     for sub_key, fi in (res.get("subs") or {}).items():
@@ -2274,15 +2875,16 @@ def run_json_pipeline(
                                                                 path = gf.get("path")
                                                                 if not path:
                                                                     continue
+                                                                src_path = _safe_worker_tsv_source(path)
                                                                 file_cols = tuple(gf.get("columns") or ())
                                                                 if file_cols == union_cols_key:
-                                                                    with open(str(path), "rb") as inp:
+                                                                    with open(str(src_path), "rb") as inp:
                                                                         shutil.copyfileobj(inp, out, length=1024 * 1024)
                                                                     continue
 
                                                                 idx = {str(c): i for i, c in enumerate(file_cols)}
                                                                 take = [idx.get(str(c)) for c in union_cols]
-                                                                with open(str(path), "rb") as inp:
+                                                                with open(str(src_path), "rb") as inp:
                                                                     for line in inp:
                                                                         if not line:
                                                                             continue
@@ -2300,11 +2902,17 @@ def run_json_pipeline(
                                                                         out.write(b"\t".join(out_vals) + b"\n")
 
                                                     if merged_path:
+                                                        merged_path = str(
+                                                            _register_parent_tsv_file(
+                                                                merged_path,
+                                                                expected_prefix="kisti_union_",
+                                                            )
+                                                        )
                                                         # Delete originals after successful merge.
                                                         for group_files in groups.values():
                                                             for gf in group_files:
                                                                 try:
-                                                                    os.remove(str(gf.get("path")))
+                                                                    _safe_worker_tsv_source(gf.get("path")).unlink(missing_ok=True)
                                                                 except Exception:
                                                                     pass
 
@@ -2353,7 +2961,8 @@ def run_json_pipeline(
                                                     merged_path = tmp_path
                                                     for gf in group_files:
                                                         try:
-                                                            with open(str(gf.get("path")), "rb") as inp:
+                                                            src_path = _safe_worker_tsv_source(gf.get("path"))
+                                                            with open(str(src_path), "rb") as inp:
                                                                 shutil.copyfileobj(inp, out, length=1024 * 1024)
                                                         except Exception:
                                                             # Best-effort: if merge fails, fall back to loading files individually.
@@ -2370,9 +2979,15 @@ def run_json_pipeline(
                                                     continue
 
                                                 # Delete originals after successful merge.
+                                                merged_path = str(
+                                                    _register_parent_tsv_file(
+                                                        merged_path,
+                                                        expected_prefix="kisti_merge_",
+                                                    )
+                                                )
                                                 for gf in group_files:
                                                     try:
-                                                        os.remove(str(gf.get("path")))
+                                                        _safe_worker_tsv_source(gf.get("path")).unlink(missing_ok=True)
                                                     except Exception:
                                                         pass
 
@@ -2532,20 +3147,31 @@ def run_json_pipeline(
                                             return res
 
                                         futs = []
-                                        for g in load_groups:
+                                        remaining_submit_groups: list[dict] = []
+                                        submit_started_at = time.perf_counter()
+                                        for i, g in enumerate(load_groups):
                                             try:
                                                 futs.append(load_executor.submit(_load_group, g))
                                             except Exception as e:
+                                                remaining_submit_groups = list(load_groups[i:])
                                                 load_parallel_disabled = True
                                                 report.warn(
                                                     stage="json_pipeline.load.overlap",
                                                     message="Overlapped loader submit failed; falling back to synchronous load",
                                                     error={"type": type(e).__name__, "message": str(e)},
                                                 )
-                                                futs = []
                                                 break
 
-                                        if futs:
+                                        if futs and remaining_submit_groups:
+                                            pending_load_futures = list(futs)
+                                            pending_load_workdirs = []
+                                            pending_load_tsv_files = []
+                                            pending_load_submitted_at = submit_started_at
+                                            pending_load_checkpoint_ctx = None
+                                            pending_load_checkpoint_extra = None
+                                            _drain_pending_loads()
+                                            load_groups = remaining_submit_groups
+                                        elif futs:
                                             # Attach to pending list and return; keep workdirs until drained.
                                             pending_load_checkpoint_ctx = dict(record_contexts[-1]) if record_contexts else None
                                             pending_load_checkpoint_extra = _batch_progress_extra(
@@ -2554,7 +3180,8 @@ def run_json_pipeline(
                                             )
                                             pending_load_futures = list(futs)
                                             pending_load_workdirs = list(workdirs)
-                                            pending_load_submitted_at = time.perf_counter()
+                                            pending_load_tsv_files = [str(p) for p in safe_tsv_files]
+                                            pending_load_submitted_at = submit_started_at
                                             defer_workdir_cleanup = True
                                             return
 
@@ -2774,6 +3401,7 @@ def run_json_pipeline(
                                                 )
                                                 break
 
+                                        first_failed_table: str | None = None
                                         for fut in as_completed(futures):
                                             try:
                                                 r = fut.result()
@@ -2817,8 +3445,11 @@ def run_json_pipeline(
                                                     table=str(r.get("table_sql") or ""),
                                                     errors=list(r.get("errors") or [])[:3],
                                                 )
-                                                if not continue_on_error:
-                                                    raise RuntimeError(f"parallel_table_load_failed: {r.get('table_sql')}")
+                                                if not continue_on_error and first_failed_table is None:
+                                                    first_failed_table = str(r.get("table_sql") or "")
+
+                                        if first_failed_table is not None:
+                                            raise RuntimeError(f"parallel_table_load_failed: {first_failed_table}")
 
                                         if remaining_groups:
                                             # Ensure remaining tables are loaded serially (no duplication: they were never submitted).
@@ -2896,11 +3527,11 @@ def run_json_pipeline(
                                 pass
                             finally:
                                 if not defer_workdir_cleanup:
-                                    for wd in workdirs:
-                                        try:
-                                            shutil.rmtree(wd, ignore_errors=True)
-                                        except Exception:
-                                            pass
+                                    _finalize_remaining_tsv_artifacts(
+                                        load_groups if "load_groups" in locals() else None
+                                    )
+                                    _cleanup_workdirs(workdirs)
+                                    _cleanup_parent_tsv_files([str(p) for p in safe_tsv_files])
 
                         # Serial rows backend (rows -> TSV -> LOAD DATA) for maximal correctness/compatibility.
                         try:
@@ -3023,6 +3654,502 @@ def run_json_pipeline(
                                         pass
                         return
 
+                rust_unsupported = rust_arrow_unsupported_reason(
+                    requested_backend=flatten_backend_requested,
+                    persist_parquet_files=bool(persist_parquet_files),
+                    create=bool(create),
+                    load=bool(load),
+                    index=bool(index),
+                    optimize=bool(optimize),
+                    emit_ddl=bool(emit_ddl),
+                    custom_extract_fn=bool(custom_extract_fn),
+                    id_compaction_enabled=bool(id_compactor.enabled),
+                    excepted_expand_dict_enabled=bool(excepted_expand_dict),
+                )
+                if flatten_backend_requested == BACKEND_AUTO and rust_auto_disabled_reason:
+                    rust_unsupported = rust_auto_disabled_reason
+                if flatten_backend_requested == BACKEND_RUST_ARROW and rust_unsupported:
+                    err = RuntimeError(f"rust-arrow backend unavailable for this run: {rust_unsupported}")
+                    report.exception(
+                        stage="json_pipeline.rust_arrow",
+                        message="Rust Arrow backend cannot handle this JSON run",
+                        exc=err,
+                        reason=rust_unsupported,
+                    )
+                    q.write(stage="json_pipeline.rust_arrow", record={"table_name": base_table}, exc=err)
+                    if not continue_on_error:
+                        raise err
+                    return
+
+                if flatten_backend_requested in {BACKEND_AUTO, BACKEND_RUST_ARROW} and rust_unsupported is None:
+                    rust_t0 = time.perf_counter()
+                    rust_existing_parquet: set[str] = set()
+                    rust_existing_table_dirs: set[str] = set()
+
+                    def _safe_rust_table_dirs(root):
+                        try:
+                            if root.is_symlink() or not root.is_dir():
+                                return
+                        except Exception:
+                            return
+                        try:
+                            children = list(root.iterdir())
+                        except FileNotFoundError:
+                            return
+                        except Exception:
+                            return
+                        for table_dir in children:
+                            try:
+                                if table_dir.is_symlink() or not table_dir.is_dir():
+                                    continue
+                                yield table_dir
+                            except Exception:
+                                continue
+
+                    def _safe_rust_batch_parquet_candidates(root, pattern):
+                        for table_dir in _safe_rust_table_dirs(root):
+                            try:
+                                for path in table_dir.glob(pattern):
+                                    if path.is_symlink() or not path.is_file():
+                                        continue
+                                    yield path
+                            except Exception:
+                                continue
+
+                    try:
+                        from pathlib import Path
+
+                        root = Path(str(persist_parquet_dir))
+                        pattern = f"b{int(batch_idx):06d}*.parquet"
+                        rust_existing_parquet = {
+                            str(path) for path in _safe_rust_batch_parquet_candidates(root, pattern)
+                        }
+                        rust_existing_table_dirs = {str(path) for path in _safe_rust_table_dirs(root)}
+                    except Exception:
+                        rust_existing_parquet = set()
+                        rust_existing_table_dirs = set()
+
+                    def _cleanup_rust_batch_parquet() -> None:
+                        try:
+                            from pathlib import Path
+
+                            root = Path(str(persist_parquet_dir))
+                            pattern = f"b{int(batch_idx):06d}*.parquet"
+                            for path in _safe_rust_batch_parquet_candidates(root, pattern):
+                                if str(path) in rust_existing_parquet:
+                                    continue
+                                try:
+                                    path.unlink()
+                                except Exception:
+                                    pass
+                            for table_dir in _safe_rust_table_dirs(root):
+                                if str(table_dir) in rust_existing_table_dirs:
+                                    continue
+                                try:
+                                    if not any(table_dir.iterdir()):
+                                        table_dir.rmdir()
+                                except Exception:
+                                    pass
+                        except Exception:
+                            pass
+
+                    def _record_auto_fallback(reason: str, *, rust_failed: bool) -> None:
+                        nonlocal rust_auto_disabled_reason, rust_auto_fallback_batches
+                        rust_auto_disabled_reason = str(reason)
+                        if rust_failed:
+                            rust_auto_fallback_batches += 1
+                        effective = BACKEND_PYTHON
+                        if rust_auto_success_batches > 0:
+                            effective = "mixed"
+                        report.set_artifact("flatten_backend_effective", effective)
+                        report.set_artifact("flatten_backend_fallback_reason", str(reason))
+                        report.set_artifact("flatten_backend_auto_disabled_reason", str(reason))
+                        report.set_artifact("python_fallback_active", True)
+                        report.set_artifact("rust_arrow_failed_batches", int(rust_auto_fallback_batches))
+                        # Backward-compatible alias. This counts Rust failed batches,
+                        # not every later batch handled by Python after fallback latches.
+                        report.set_artifact("flatten_backend_fallback_batches", int(rust_auto_fallback_batches))
+                        report.warn(
+                            stage="json_pipeline.rust_arrow_auto_fallback",
+                            message="Rust Arrow backend failed in auto mode; remaining batches will use the Python backend",
+                            reason=str(reason),
+                            effective_backend=effective,
+                            rust_failed=bool(rust_failed),
+                        )
+
+                    def _read_rust_tables_for_db(tables_meta: list[Any]) -> dict[str, Any]:
+                        try:
+                            import pandas as pd
+                        except Exception as e:
+                            raise RuntimeError("rust-arrow DB bridge requires pandas to read parquet artifacts") from e
+
+                        root = _assert_no_symlink_components(
+                            persist_parquet_dir,
+                            purpose="rust-arrow parquet DB bridge root",
+                        )
+                        try:
+                            root_canon = root.resolve(strict=True)
+                        except Exception as e:
+                            raise RuntimeError(f"failed to resolve rust-arrow parquet root for DB bridge: {root}") from e
+
+                        tables: dict[str, Any] = {}
+                        for table_info in tables_meta:
+                            if not isinstance(table_info, Mapping):
+                                continue
+                            table_original = str(table_info.get("table") or "")
+                            path_raw = str(table_info.get("path") or "")
+                            if not table_original or not path_raw:
+                                continue
+                            path = _assert_no_symlink_components(
+                                path_raw,
+                                purpose="rust-arrow parquet DB bridge file",
+                            )
+                            try:
+                                path_canon = path.resolve(strict=True)
+                            except Exception as e:
+                                raise RuntimeError(f"failed to resolve rust-arrow parquet file for DB bridge: {path}") from e
+                            if not path_canon.is_relative_to(root_canon):
+                                raise RuntimeError(f"rust-arrow parquet file is outside the configured root: {path}")
+                            if path_canon.is_symlink() or not path_canon.is_file():
+                                raise RuntimeError(f"rust-arrow parquet DB bridge path is not a safe file: {path}")
+                            df = pd.read_parquet(str(path_canon))
+                            if table_original in tables:
+                                tables[table_original] = pd.concat([tables[table_original], df], ignore_index=True)
+                            else:
+                                tables[table_original] = df
+                        return tables
+
+                    try:
+                        rust_result = persist_json_batch_to_parquet(
+                            batch_records,
+                            base_table=base_table,
+                            index_key=index_key,
+                            except_keys=except_keys,
+                            excepted_expand_dict=bool(excepted_expand_dict),
+                            sep=key_sep,
+                            parquet_dir=persist_parquet_dir,
+                            batch_idx=int(batch_idx),
+                            index_offset=int(index_offset),
+                            record_contexts=record_contexts,
+                            parallel_workers=int(parallel_workers or 0),
+                            id_compaction=dict(id_compactor.config) if id_compactor.enabled else None,
+                        )
+                    except RustArrowBackendUnavailable as e:
+                        if flatten_backend_requested == BACKEND_RUST_ARROW:
+                            rust_explicit_failed = True
+                            report.exception(
+                                stage="json_pipeline.rust_arrow",
+                                message="Rust Arrow backend failed before writing parquet artifacts",
+                                exc=e,
+                            )
+                            q.write(stage="json_pipeline.rust_arrow", record={"table_name": base_table}, exc=e)
+                            if not continue_on_error:
+                                raise
+                            return
+                        _record_auto_fallback(f"{type(e).__name__}: {e}", rust_failed=False)
+                    except Exception as e:
+                        _cleanup_rust_batch_parquet()
+                        if flatten_backend_requested == BACKEND_RUST_ARROW:
+                            rust_explicit_failed = True
+                            report.exception(
+                                stage="json_pipeline.rust_arrow",
+                                message="Rust Arrow backend failed while writing parquet artifacts",
+                                exc=e,
+                            )
+                            q.write(stage="json_pipeline.rust_arrow", record={"table_name": base_table}, exc=e)
+                            if not continue_on_error:
+                                raise
+                            return
+                        _record_auto_fallback(f"{type(e).__name__}: {e}", rust_failed=True)
+                    else:
+                        if flatten_backend_requested == BACKEND_AUTO:
+                            rust_auto_success_batches += 1
+                        report.set_artifact("flatten_backend_effective", BACKEND_RUST_ARROW)
+                        timings = (
+                            rust_result.get("timings_ms")
+                            if isinstance(rust_result.get("timings_ms"), Mapping)
+                            else {}
+                        )
+                        total_ms = int(round((time.perf_counter() - rust_t0) * 1000.0))
+                        flatten_ms = int(timings.get("json.flatten", timings.get("flatten_ms", total_ms)) or 0)
+                        parquet_ms = int(timings.get("json.parquet.persist", timings.get("parquet_persist_ms", 0)) or 0)
+                        if flatten_ms > 0:
+                            report.add_time_ms("json.flatten", flatten_ms)
+                        if parquet_ms > 0:
+                            report.add_time_ms("json.parquet.persist", parquet_ms)
+                        if id_compactor.enabled:
+                            id_compactor.merge_summary(rust_result.get("id_compaction"))
+                            report.set_artifact("id_compaction", id_compactor.summary())
+                        report.bump("records_total", int(len(batch_records)))
+                        report.bump("records_ok", int(rust_result.get("records_ok") or len(batch_records)))
+                        failed = int(rust_result.get("records_failed") or 0)
+                        if failed:
+                            report.bump("records_failed", failed)
+
+                        tables_meta = list(rust_result.get("tables") or [])
+                        for table_info in tables_meta:
+                            if not isinstance(table_info, Mapping):
+                                continue
+                            table_original = str(table_info.get("table") or "")
+                            cols = [str(c) for c in list(table_info.get("columns") or []) if str(c)]
+                            if table_original and cols:
+                                ensure_name_map(table_original, cols)
+
+                        parquet_tables_written = int(rust_result.get("parquet_tables_written") or len(tables_meta))
+                        parquet_files_written = int(rust_result.get("parquet_files_persisted") or parquet_tables_written)
+                        parquet_rows_written = int(rust_result.get("parquet_rows_emitted") or 0)
+                        report.bump("parquet_files_persisted", parquet_files_written)
+                        report.bump("parquet_rows_emitted", parquet_rows_written)
+                        parquet_progress = {
+                            "tables": int(parquet_tables_written),
+                            "files_delta": int(parquet_files_written),
+                            "rows_delta": int(parquet_rows_written),
+                            "duration_ms": int(parquet_ms or total_ms),
+                            "backend": BACKEND_RUST_ARROW,
+                        }
+                        if parquet_tables_written > 0:
+                            report.bump("parquet_batches_total", 1)
+                        report.set_artifact("latest_parquet_batch", dict(parquet_progress))
+                        if record_contexts:
+                            _write_progress_snapshot(
+                                stage="parquet_persisted",
+                                ctx=record_contexts[-1],
+                                extra=_batch_progress_extra(
+                                    mode="pre_load" if load else "parse_only",
+                                    parquet=parquet_progress,
+                                ),
+                                force=True,
+                            )
+                        if create or load or emit_ddl:
+                            if overlap_batches:
+                                _drain_pending_loads()
+
+                            rust_direct_load = bool(rust_db_load and load and not use_extra_column and not overlap_batches)
+                            if rust_db_load and load and use_extra_column:
+                                report.set_artifact("rust_db_load_disabled_reason", "schema freeze extra-column mode")
+                            if rust_db_load and load and overlap_batches:
+                                report.set_artifact("rust_db_load_disabled_reason", "overlap_batches is not supported")
+
+                            rust_load_entries: list[dict[str, Any]] = []
+                            if rust_direct_load:
+                                report.set_artifact("rust_arrow_db_bridge", "rust_mysql")
+                                report.set_artifact("rust_db_load_effective", True)
+                                for table_info in tables_meta:
+                                    if not isinstance(table_info, Mapping):
+                                        continue
+                                    table_original = str(table_info.get("table") or "")
+                                    cols = [str(c) for c in list(table_info.get("columns") or []) if str(c)]
+                                    path = str(table_info.get("path") or "")
+                                    if not table_original or not cols or not path:
+                                        continue
+                                    nm = ensure_name_map(table_original, cols)
+                                    if emit_ddl:
+                                        try:
+                                            ddl, _nm2 = manage.generate_create_table_sql_from_columns(
+                                                table_name=table_original,
+                                                columns=list(nm.columns_original),
+                                                name_map=nm,
+                                                key_sep=key_sep,
+                                                column_type=column_type,
+                                                column_descriptions=_column_descriptions_for(table_original),
+                                            )
+                                            ddl_by_table[table_original] = ddl
+                                        except Exception as e:
+                                            report.warn(stage="json_pipeline", message="Failed to generate DDL artifact", exc=str(e))
+
+                                    if create and table_original not in created_tables:
+                                        nm_created = step(
+                                            "create",
+                                            manage.create_table_from_columns,
+                                            dbc,
+                                            table_name=table_original,
+                                            columns=list(nm.columns_original),
+                                            name_map=nm,
+                                            key_sep=key_sep,
+                                            column_type=column_type,
+                                            column_descriptions=_column_descriptions_for(table_original),
+                                        )
+                                        if isinstance(nm_created, NameMap):
+                                            name_maps[table_original] = nm_created
+                                            nm = nm_created
+                                        if nm_created is not None:
+                                            created_tables.add(table_original)
+                                            report.bump("tables_created", 1)
+                                            existing_cols_cache[nm.table_sql] = set(nm.columns_sql)
+
+                                    rust_load_entries.append(
+                                        {
+                                            "path": path,
+                                            "table_original": table_original,
+                                            "table_sql": nm.table_sql,
+                                            "columns_original": list(cols),
+                                            "columns_sql": [nm.map_column(c) for c in cols],
+                                        }
+                                    )
+
+                                if rust_load_entries:
+                                    try:
+                                        load_t0 = time.perf_counter()
+                                        rust_load_res = load_parquet_files_to_mysql(
+                                            rust_load_entries,
+                                            db_config=dbc,
+                                            batch_size=int(rust_db_load_batch_size),
+                                        )
+                                        load_ms = int(round((time.perf_counter() - load_t0) * 1000.0))
+                                        report.add_time_ms("json.db.load", load_ms)
+                                        timings = (
+                                            rust_load_res.get("timings_ms")
+                                            if isinstance(rust_load_res.get("timings_ms"), Mapping)
+                                            else {}
+                                        )
+                                        rust_mysql_ms = int(timings.get("db.rust_mysql.load", load_ms) or 0)
+                                        if rust_mysql_ms > 0:
+                                            report.add_time_ms("db.rust_mysql.load", rust_mysql_ms)
+                                        report.bump("tables_loaded", int(rust_load_res.get("tables_loaded") or 0))
+                                        report.bump("rows_loaded", int(rust_load_res.get("rows_loaded") or 0))
+                                        report.bump("rust_db_load_ok", 1)
+                                        report.set_artifact(
+                                            "latest_rust_db_load",
+                                            {
+                                                "tables": int(rust_load_res.get("tables_loaded") or 0),
+                                                "files": int(rust_load_res.get("files_loaded") or 0),
+                                                "rows": int(rust_load_res.get("rows_loaded") or 0),
+                                                "duration_ms": int(load_ms),
+                                                "transaction": bool(rust_load_res.get("transaction", True)),
+                                            },
+                                        )
+                                    except Exception as e:
+                                        report.exception(
+                                            stage="json_pipeline.rust_db_load",
+                                            message="Rust MySQL loader failed",
+                                            exc=e,
+                                        )
+                                        q.write(stage="json_pipeline.rust_db_load", record={"table_name": base_table}, exc=e)
+                                        report.bump("rust_db_load_failed", 1)
+                                        if not continue_on_error:
+                                            raise
+                                        return
+                            else:
+                                try:
+                                    tables = _read_rust_tables_for_db(tables_meta)
+                                except Exception as e:
+                                    report.exception(
+                                        stage="json_pipeline.rust_arrow_db_bridge",
+                                        message="Failed to read Rust Arrow parquet artifacts for Python DB stages",
+                                        exc=e,
+                                    )
+                                    q.write(stage="json_pipeline.rust_arrow_db_bridge", record={"table_name": base_table}, exc=e)
+                                    if not continue_on_error:
+                                        raise
+                                    return
+                                report.set_artifact("rust_arrow_db_bridge", "parquet_to_dataframe")
+                                report.set_artifact("rust_db_load_effective", False)
+
+                            for table_original, df in ({} if rust_direct_load else tables).items():
+                                cols = list(getattr(df, "columns", []))
+                                if not cols:
+                                    continue
+                                if use_extra_column and extra_column_name not in set(cols):
+                                    cols = list(cols) + [extra_column_name]
+
+                                nm = ensure_name_map(table_original, [str(c) for c in cols])
+                                if emit_ddl:
+                                    try:
+                                        ddl, _nm2 = manage.generate_create_table_sql_from_columns(
+                                            table_name=table_original,
+                                            columns=list(nm.columns_original),
+                                            name_map=nm,
+                                            key_sep=key_sep,
+                                            column_type=column_type,
+                                            column_descriptions=_column_descriptions_for(table_original),
+                                        )
+                                        ddl_by_table[table_original] = ddl
+                                    except Exception as e:
+                                        report.warn(stage="json_pipeline", message="Failed to generate DDL artifact", exc=str(e))
+
+                                if create and table_original not in created_tables:
+                                    nm_created = step(
+                                        "create",
+                                        manage.create_table_from_columns,
+                                        dbc,
+                                        table_name=table_original,
+                                        columns=list(nm.columns_original),
+                                        name_map=nm,
+                                        key_sep=key_sep,
+                                        column_type=column_type,
+                                        column_descriptions=_column_descriptions_for(table_original),
+                                    )
+                                    if isinstance(nm_created, NameMap):
+                                        name_maps[table_original] = nm_created
+                                        nm = nm_created
+                                    if nm_created is not None:
+                                        created_tables.add(table_original)
+                                        report.bump("tables_created", 1)
+                                        existing_cols_cache[nm.table_sql] = set(nm.columns_sql)
+                                        if use_extra_column and not bool(auto_alter_table_effective):
+                                            frozen_allowed_cols_by_table_original[table_original] = set(nm.columns_original)
+
+                                if load:
+                                    load_res = step(
+                                        "load",
+                                        manage.fill_table_from_dataframe,
+                                        df,
+                                        dbc,
+                                        table_name=nm.table_sql,
+                                        name_map=nm,
+                                        extra_column_name=extra_column_name if use_extra_column else None,
+                                        auto_alter_table=bool(auto_alter_table_effective),
+                                        column_type=column_type,
+                                        fallback_on_insert_error=fallback_on_insert_error,
+                                        fallback_column_type=fallback_column_type,
+                                        insert_retry_max=insert_retry_max,
+                                        report=report,
+                                        chunksize=to_sql_chunksize,
+                                        to_sql_method=to_sql_method,
+                                        sanitize_nan_strings=sanitize_nan_strings,
+                                        convert_nan_to_none=convert_nan_to_none,
+                                        engine=engine,
+                                        existing_cols=_get_existing_cols(nm.table_sql),
+                                        load_method=db_load_method,
+                                        fast_load_state=fast_load_state,
+                                        local_infile_conn=local_infile_conn,
+                                        column_descriptions=_column_descriptions_for(table_original),
+                                    )
+                                    if load_res is not None:
+                                        report.bump("tables_loaded", 1)
+                                        try:
+                                            report.bump("rows_loaded", int(len(df)))
+                                        except Exception:
+                                            pass
+
+                            if load and record_contexts:
+                                _write_progress_snapshot(
+                                    stage="loaded",
+                                    ctx=record_contexts[-1],
+                                    extra=_batch_progress_extra(mode="sync", parquet=parquet_progress),
+                                    force=True,
+                                )
+                            elif record_contexts:
+                                _write_progress_snapshot(
+                                    stage="batch_done",
+                                    ctx=record_contexts[-1],
+                                    extra=_batch_progress_extra(mode="parse_only", parquet=parquet_progress),
+                                    force=True,
+                                )
+                        return
+                else:
+                    effective_backend = BACKEND_PYTHON
+                    if (
+                        flatten_backend_requested == BACKEND_AUTO
+                        and rust_auto_success_batches > 0
+                        and rust_auto_disabled_reason
+                    ):
+                        effective_backend = "mixed"
+                    report.set_artifact("flatten_backend_effective", effective_backend)
+                    if flatten_backend_requested == BACKEND_AUTO and rust_unsupported:
+                        report.set_artifact("flatten_backend_fallback_reason", str(rust_unsupported))
+                        report.set_artifact("python_fallback_active", True)
+
                 try:
                     extract_kwargs = {
                         "index_key": index_key,
@@ -3078,7 +4205,6 @@ def run_json_pipeline(
                                     except_key=str(ex_key),
                                 )
 
-                parquet_progress: dict[str, Any] | None = None
                 if persist_parquet_files and tables:
                     parquet_files_before = int(report.stats.get("parquet_files_persisted", 0) or 0)
                     parquet_rows_before = int(report.stats.get("parquet_rows_emitted", 0) or 0)
@@ -3220,7 +4346,24 @@ def run_json_pipeline(
                     )
 
             batch_index_offset = 0
-            for rec_out in _iter_json_records(dc, report=report, max_records=max_records, with_context=True):
+            try:
+                record_iter = _iter_json_records(
+                    dc,
+                    report=report,
+                    quarantine=q,
+                    max_records=max_records,
+                    with_context=True,
+                )
+            except TypeError as e:
+                if "quarantine" not in str(e):
+                    raise
+                record_iter = _iter_json_records(
+                    dc,
+                    report=report,
+                    max_records=max_records,
+                    with_context=True,
+                )
+            for rec_out in record_iter:
                 report.bump("records_read", 1)
                 rec_ctx: dict[str, Any] = {}
                 if isinstance(rec_out, tuple) and len(rec_out) == 2:
