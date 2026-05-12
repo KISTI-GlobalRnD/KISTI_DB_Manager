@@ -1,7 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
+import random
 import shutil
+import statistics
+import tempfile
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Mapping, Sequence
@@ -15,7 +20,7 @@ def _utc_now_iso() -> str:
 
 
 def _default_out_dir() -> Path:
-    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%SZ")
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S_%fZ")
     return Path("runs") / f"profile_parallel_{stamp}"
 
 
@@ -31,6 +36,27 @@ def _as_float(value: Any, default: float = 0.0) -> float:
         return float(value)
     except Exception:
         return float(default)
+
+
+def _median(values: Sequence[float]) -> float | None:
+    vals = [float(v) for v in values]
+    if not vals:
+        return None
+    return float(statistics.median(vals))
+
+
+def _mean(values: Sequence[float]) -> float | None:
+    vals = [float(v) for v in values]
+    if not vals:
+        return None
+    return float(statistics.fmean(vals))
+
+
+def _stdev(values: Sequence[float]) -> float | None:
+    vals = [float(v) for v in values]
+    if len(vals) < 2:
+        return None
+    return float(statistics.stdev(vals))
 
 
 def parse_worker_list(value: str | Sequence[int] | None) -> list[int]:
@@ -66,13 +92,271 @@ def parse_worker_list(value: str | Sequence[int] | None) -> list[int]:
     return workers
 
 
+def _backend_sort_rank(backend: str) -> int:
+    backend_s = str(backend or "python")
+    if backend_s == "python":
+        return 0
+    if backend_s == "auto":
+        return 1
+    if backend_s == "rust-arrow":
+        return 2
+    return 9
+
+
+def _row_backend(row: Mapping[str, Any]) -> str:
+    value = row.get("flatten_backend")
+    if value is None:
+        value = row.get("requested_flatten_backend")
+    if value is None:
+        value = row.get("effective_backend")
+    return str(value or "python")
+
+
+def _recommendation_backend(row: Mapping[str, Any]) -> str:
+    requested = _row_backend(row)
+    effective = str(row.get("effective_backend") or requested)
+    if requested == "auto" and effective in {"python", "rust-arrow"}:
+        return effective
+    return requested
+
+
+def _eligible_workers(candidates: Sequence[Mapping[str, Any]]) -> list[int]:
+    return sorted({int(item.get("workers", 0) or 0) for item in candidates})
+
+
+def _dedupe_recommendation_candidates(candidates: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    best_by_key: dict[tuple[str, int], dict[str, Any]] = {}
+    for item in candidates:
+        backend = str(item.get("flatten_backend") or "python")
+        worker = int(item.get("workers", 0) or 0)
+        current = dict(item)
+        key = (backend, worker)
+        previous = best_by_key.get(key)
+        if previous is None:
+            best_by_key[key] = current
+            continue
+        prev_rate = float(previous.get("records_per_s") or 0.0)
+        cur_rate = float(current.get("records_per_s") or 0.0)
+        if cur_rate > prev_rate:
+            best_by_key[key] = current
+    return list(best_by_key.values())
+
+
 def _read_json(path: Path) -> dict[str, Any]:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+def _validate_profile_file_path(root: Path, path: Path, *, purpose: str) -> None:
+    _assert_profile_child_path(root, path, purpose=purpose)
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return
+    if path.is_symlink() or path.is_dir():
+        raise RuntimeError(f"{purpose} path already exists and is not a safe file: {path}")
+
+
+def _safe_write_text(root: Path, path: Path, text: str, *, purpose: str) -> None:
+    parent = path.parent
+    _assert_profile_child_path(root, parent, purpose=f"{purpose} parent")
+    parent.mkdir(parents=True, exist_ok=True)
+    _assert_profile_child_path(root, parent, purpose=f"{purpose} parent")
+    if parent.is_symlink() or not parent.is_dir():
+        raise RuntimeError(f"{purpose} parent is not a safe directory: {parent}")
+    _validate_profile_file_path(root, path, purpose=purpose)
+
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(parent))
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            handle.write(text)
+        _validate_profile_file_path(root, path, purpose=purpose)
+        os.replace(tmp_name, path)
+    except Exception:
+        try:
+            tmp_path = Path(tmp_name)
+            _assert_profile_child_path(root, tmp_path, purpose=f"{purpose} temporary file")
+            if not tmp_path.is_symlink() and tmp_path.is_file():
+                tmp_path.unlink()
+        except Exception:
+            pass
+        raise
+
+
+def _safe_write_json(root: Path, path: Path, payload: Mapping[str, Any], *, purpose: str) -> None:
+    _safe_write_text(
+        root,
+        path,
+        json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        purpose=purpose,
+    )
+
+
+def _safe_json_value(value: Any) -> Any:
+    try:
+        json.dumps(value)
+        return value
+    except TypeError:
+        return repr(value)
+
+
+@dataclass
+class _ProfileQuarantineWriter:
+    root: Path
+    path: Path
+    flush: bool = True
+    _lines: list[str] = field(default_factory=list, init=False)
+
+    def __enter__(self) -> "_ProfileQuarantineWriter":
+        _validate_profile_file_path(self.root, self.path, purpose="profile quarantine")
+        return self
+
+    def __exit__(self, exc_type, exc, tb) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if not self._lines:
+            return
+        _safe_write_text(
+            self.root,
+            self.path,
+            "".join(self._lines),
+            purpose="profile quarantine",
+        )
+        self._lines = []
+
+    def write(
+        self,
+        *,
+        stage: str,
+        record: Any,
+        index: int | None = None,
+        exc: BaseException | None = None,
+        **context: Any,
+    ) -> None:
+        entry: dict[str, Any] = {
+            "timestamp": _utc_now_iso(),
+            "stage": stage,
+            "index": index,
+            "record": _safe_json_value(record),
+            "context": {k: _safe_json_value(v) for k, v in context.items()},
+        }
+        if exc is not None:
+            entry["exception_type"] = type(exc).__name__
+            entry["exception_message"] = str(exc)
+        self._lines.append(json.dumps(entry, ensure_ascii=False) + "\n")
+
+
+def _is_relative_to(path: Path, parent: Path) -> bool:
+    try:
+        path.relative_to(parent)
+        return True
+    except ValueError:
+        return False
+
+
+def _absolute_no_resolve(path: Path) -> Path:
+    expanded = path.expanduser()
+    if expanded.is_absolute():
+        return expanded
+    return Path.cwd() / expanded
+
+
+def _assert_no_symlink_components(path: Path, *, purpose: str) -> Path:
+    path_abs = _absolute_no_resolve(path)
+    current = Path(path_abs.anchor)
+    normalized_parts: list[str] = []
+    parts = path_abs.parts[1:] if path_abs.anchor else path_abs.parts
+    for part in parts:
+        if part in {"", "."}:
+            continue
+        if part == "..":
+            if normalized_parts:
+                normalized_parts.pop()
+            current = Path(path_abs.anchor).joinpath(*normalized_parts)
+            continue
+        current = current / part
+        try:
+            is_link = current.is_symlink()
+        except OSError as exc:
+            raise RuntimeError(f"failed to inspect {purpose} path component: {current}") from exc
+        if is_link:
+            raise RuntimeError(f"{purpose} path contains a symlink component: {current}")
+        normalized_parts.append(part)
+    return Path(path_abs.anchor).joinpath(*normalized_parts)
+
+
+def _prepare_profile_output_dir(out_dir: str | Path | None) -> Path:
+    out_raw = Path(out_dir).expanduser() if out_dir else _default_out_dir()
+    out_abs = _assert_no_symlink_components(out_raw, purpose="profile output")
+    if out_abs.exists():
+        if out_abs.is_symlink() or not out_abs.is_dir():
+            raise RuntimeError(f"profile output path already exists and is not a directory: {out_abs}")
+    out_abs.mkdir(parents=True, exist_ok=True)
+    out_abs = _assert_no_symlink_components(out_abs, purpose="profile output")
+    if out_abs.is_symlink() or not out_abs.is_dir():
+        raise RuntimeError(f"profile output path is not a safe directory: {out_abs}")
+    return out_abs.resolve(strict=True)
+
+
+def _assert_profile_child_path(root: Path, path: Path, *, purpose: str) -> None:
+    root_raw = _assert_no_symlink_components(root, purpose="profile output")
+    root_abs = root_raw.resolve(strict=False)
+    path_abs = _assert_no_symlink_components(path, purpose=purpose)
+    if not _is_relative_to(path_abs, root_abs):
+        raise RuntimeError(f"{purpose} path escapes the profile output directory: {path}")
+
+    resolved = path_abs.resolve(strict=False)
+    if not _is_relative_to(resolved, root_abs):
+        raise RuntimeError(f"{purpose} path resolves outside the profile output directory: {path}")
+
+
+def _validate_profile_run_dir(root: Path, run_dir: Path) -> None:
+    _assert_profile_child_path(root, run_dir, purpose="profile run")
+    if run_dir.exists():
+        if not run_dir.is_dir():
+            raise RuntimeError(f"profile run path already exists and is not a directory: {run_dir}")
+        try:
+            non_empty = any(run_dir.iterdir())
+        except OSError as exc:
+            raise RuntimeError(f"failed to inspect existing profile run directory: {run_dir}") from exc
+        if non_empty:
+            raise RuntimeError(
+                "profile run directory already exists and is not empty; choose a fresh --out directory "
+                f"or remove the stale run directory: {run_dir}"
+            )
+
+
+def _prepare_profile_run_dir(root: Path, run_dir: Path) -> None:
+    _validate_profile_run_dir(root, run_dir)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    _assert_profile_child_path(root, run_dir, purpose="profile run")
+
+
+def _prepare_profile_run_dirs(root: Path, run_dirs: Sequence[Path]) -> None:
+    unique: list[Path] = []
+    seen: set[str] = set()
+    for run_dir in run_dirs:
+        key = str(run_dir.expanduser().absolute())
+        if key in seen:
+            continue
+        seen.add(key)
+        unique.append(run_dir)
+    for run_dir in unique:
+        _validate_profile_run_dir(root, run_dir)
+    for run_dir in unique:
+        _prepare_profile_run_dir(root, run_dir)
+
+
+def _safe_remove_profile_parquet_dir(root: Path, parquet_dir: Path) -> bool:
+    _assert_profile_child_path(root, parquet_dir, purpose="profile parquet cleanup")
+    if not parquet_dir.exists():
+        return False
+    if parquet_dir.is_symlink() or not parquet_dir.is_dir():
+        raise RuntimeError(f"refusing to delete non-directory or symlink parquet path: {parquet_dir}")
+    if not getattr(shutil.rmtree, "avoids_symlink_attacks", False):
+        raise RuntimeError("refusing to delete parquet path because shutil.rmtree is not symlink-attack resistant")
+    shutil.rmtree(parquet_dir)
+    return True
 
 
 def _issue_counts(run_report: Mapping[str, Any]) -> dict[str, int]:
@@ -132,6 +416,50 @@ def _run_report_profile(run_report: Mapping[str, Any], *, top: int = 8) -> dict[
         return {}
 
 
+def _sample_run_report_issues(run_report: Mapping[str, Any], *, limit: int) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    if limit <= 0:
+        return samples
+    for issue in list(run_report.get("issues") or []):
+        if not isinstance(issue, Mapping):
+            continue
+        samples.append(
+            {
+                "source": "run_report",
+                "level": issue.get("level"),
+                "stage": issue.get("stage"),
+                "message": issue.get("message"),
+                "exception_type": issue.get("exception_type"),
+                "exception_message": issue.get("exception_message"),
+            }
+        )
+        if len(samples) >= limit:
+            break
+    return samples
+
+
+def _sample_artifact_contract_issues(contract: Mapping[str, Any], *, limit: int) -> list[dict[str, Any]]:
+    samples: list[dict[str, Any]] = []
+    if limit <= 0:
+        return samples
+    for kind in ("issues", "warnings"):
+        for issue in list(contract.get(kind) or []):
+            if not isinstance(issue, Mapping):
+                continue
+            samples.append(
+                {
+                    "source": f"artifact_contract.{kind}",
+                    "level": issue.get("severity") or ("warning" if kind == "warnings" else "error"),
+                    "check": issue.get("check"),
+                    "message": issue.get("message"),
+                    "table": issue.get("table"),
+                }
+            )
+            if len(samples) >= limit:
+                return samples
+    return samples
+
+
 def _artifact_contract_failed(contract: Mapping[str, Any]) -> bool:
     return str(contract.get("status") or "").strip().lower() == "failed"
 
@@ -144,9 +472,21 @@ def _row_status(*, run_failed: bool, counts: Mapping[str, int], contract: Mappin
     return "done"
 
 
+def _execution_status(rows: Sequence[Mapping[str, Any]]) -> str:
+    statuses = [str(row.get("status") or "") for row in rows]
+    if not statuses or all(status == "failed" or not status for status in statuses):
+        return "failed"
+    if any(status == "failed" or status != "done" for status in statuses):
+        return "done_with_warnings"
+    return "done"
+
+
 def _summarize_worker_run(
     *,
     worker: int,
+    flatten_backend: str,
+    repeat_index: int,
+    execution_order: int,
     run_dir: Path,
     parquet_dir: Path,
     report_path: Path,
@@ -157,12 +497,18 @@ def _summarize_worker_run(
     run_failed: bool,
     cleanup_requested: bool,
     profile_top: int,
+    issue_sample_limit: int,
 ) -> dict[str, Any]:
     stats = run_report.get("stats") if isinstance(run_report.get("stats"), Mapping) else {}
     timings = run_report.get("timings_ms") if isinstance(run_report.get("timings_ms"), Mapping) else {}
+    artifacts = run_report.get("artifacts") if isinstance(run_report.get("artifacts"), Mapping) else {}
     counts = _issue_counts(run_report)
     row = {
         "workers": int(worker),
+        "flatten_backend": str(flatten_backend),
+        "effective_backend": str(artifacts.get("flatten_backend_effective") or artifacts.get("flatten_backend") or flatten_backend),
+        "repeat_index": int(repeat_index),
+        "execution_order": int(execution_order),
         "status": _row_status(run_failed=run_failed, counts=counts, contract=artifact_contract),
         "run_dir": str(run_dir),
         "parquet_dir": str(parquet_dir),
@@ -186,20 +532,64 @@ def _summarize_worker_run(
         "artifact_contract_status": artifact_contract.get("status"),
         "artifact_contract_issue_count": len(artifact_contract.get("issues") or []),
         "artifact_contract_warning_count": len(artifact_contract.get("warnings") or []),
+        "flatten_backend_fallback_reason": artifacts.get("flatten_backend_fallback_reason"),
+        "flatten_backend_auto_disabled_reason": artifacts.get("flatten_backend_auto_disabled_reason"),
+        "python_fallback_active": bool(artifacts.get("python_fallback_active", False)),
+        "rust_arrow_failed_batches": _as_int(
+            artifacts.get("rust_arrow_failed_batches"),
+            _as_int(artifacts.get("flatten_backend_fallback_batches"), 0),
+        ),
+        "flatten_backend_fallback_batches": _as_int(artifacts.get("flatten_backend_fallback_batches"), 0),
+        "issue_samples": (
+            _sample_run_report_issues(run_report, limit=issue_sample_limit)
+            + _sample_artifact_contract_issues(artifact_contract, limit=issue_sample_limit)
+        )[: max(0, int(issue_sample_limit))],
         "run_report_profile": _run_report_profile(run_report, top=profile_top),
-        "parquet_cleaned": bool(cleanup_requested),
+        "parquet_cleaned": False,
+        "cleanup_error": None,
     }
+    if _as_int(row.get("flatten_backend_fallback_batches"), 0) <= 0:
+        row["flatten_backend_fallback_batches"] = _as_int(row.get("rust_arrow_failed_batches"), 0)
     return row
+
+
+def _eligible_for_recommendation(row: Mapping[str, Any]) -> bool:
+    if str(row.get("status") or "") == "failed":
+        return False
+    if _as_int(row.get("error_count"), 0) > 0:
+        return False
+    if str(row.get("artifact_contract_status") or "") == "failed":
+        return False
+    if str(row.get("effective_backend") or "") == "mixed":
+        return False
+    if _as_int(row.get("rust_arrow_failed_batches"), _as_int(row.get("flatten_backend_fallback_batches"), 0)) > 0:
+        return False
+    if "eligible_attempt_count" in row and _as_int(row.get("eligible_attempt_count"), 0) <= 0:
+        return False
+    if _as_int(row.get("failed_attempt_count"), 0) > 0:
+        return False
+    return True
+
+
+def _aggregate_artifact_contract_status(attempts: Sequence[Mapping[str, Any]]) -> str:
+    statuses = [str(item.get("artifact_contract_status") or "") for item in attempts]
+    statuses = [status for status in statuses if status]
+    if not statuses:
+        return "failed"
+    if any(status == "failed" for status in statuses):
+        return "failed"
+    if any(status == "done_with_warnings" for status in statuses):
+        return "done_with_warnings"
+    unique = sorted(set(statuses))
+    if len(unique) == 1:
+        return unique[0]
+    return "mixed"
 
 
 def recommend_parallel_workers(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
     candidates: list[dict[str, Any]] = []
     for row in rows:
-        if str(row.get("status") or "") == "failed":
-            continue
-        if _as_int(row.get("error_count"), 0) > 0:
-            continue
-        if str(row.get("artifact_contract_status") or "") == "failed":
+        if not _eligible_for_recommendation(row):
             continue
         rps = row.get("records_per_s")
         try:
@@ -208,53 +598,298 @@ def recommend_parallel_workers(rows: Sequence[Mapping[str, Any]]) -> dict[str, A
             continue
         if rps_f < 0:
             continue
-        candidates.append({"workers": _as_int(row.get("workers"), 0), "records_per_s": rps_f})
+        backend = _recommendation_backend(row)
+        candidates.append(
+            {
+                "flatten_backend": backend,
+                "effective_backend": str(row.get("effective_backend") or backend),
+                "workers": _as_int(row.get("workers"), 0),
+                "records_per_s": rps_f,
+                "basis": row.get("records_per_s_basis") or "single_run",
+            }
+        )
 
     if not candidates:
         return {
             "status": "failed",
+            "recommended_flatten_backend": None,
             "recommended_parallel_workers": None,
             "recommendation_reason": "No successful worker run was eligible for recommendation.",
             "eligible_workers": [],
+            "eligible_configurations": [],
         }
 
-    candidates.sort(key=lambda item: (float(item["records_per_s"]), -int(item["workers"])), reverse=True)
+    candidates = _dedupe_recommendation_candidates(candidates)
+    candidates.sort(
+        key=lambda item: (
+            float(item["records_per_s"]),
+            -_backend_sort_rank(str(item.get("effective_backend") or item.get("flatten_backend") or "")),
+            -int(item["workers"]),
+        ),
+        reverse=True,
+    )
     by_worker = {int(item["workers"]): item for item in candidates}
     baseline = by_worker.get(0)
     parallel_candidates = [item for item in candidates if int(item["workers"]) > 0]
-    if baseline is not None and parallel_candidates:
+    backend_count = len({str(item.get("flatten_backend") or "") for item in candidates})
+    if backend_count == 1 and baseline is not None and parallel_candidates:
         base_rate = float(baseline["records_per_s"])
         if all(float(item["records_per_s"]) <= base_rate for item in parallel_candidates):
+            backend = str(baseline.get("flatten_backend") or "python")
             return {
                 "status": "done",
+                "recommended_flatten_backend": backend,
                 "recommended_parallel_workers": 0,
                 "recommendation_reason": (
                     "All successful parallel worker settings were slower than workers=0; "
                     "parallel flatten is not recommended for this data/config sample."
                 ),
-                "eligible_workers": [int(item["workers"]) for item in sorted(candidates, key=lambda x: int(x["workers"]))],
+                "eligible_workers": _eligible_workers(candidates),
+                "eligible_configurations": [
+                    {"flatten_backend": str(item.get("flatten_backend")), "workers": int(item["workers"])}
+                    for item in sorted(candidates, key=lambda x: (_backend_sort_rank(str(x.get("effective_backend"))), int(x["workers"])))
+                ],
             }
 
-    best = max(candidates, key=lambda item: (float(item["records_per_s"]), -int(item["workers"])))
+    best = max(
+        candidates,
+        key=lambda item: (
+            float(item["records_per_s"]),
+            -_backend_sort_rank(str(item.get("effective_backend") or item.get("flatten_backend") or "")),
+            -int(item["workers"]),
+        ),
+    )
     best_rate = float(best["records_per_s"])
     threshold = best_rate * 0.95
     within_tolerance = [item for item in candidates if float(item["records_per_s"]) >= threshold]
-    chosen = min(within_tolerance, key=lambda item: int(item["workers"]))
+    chosen = min(
+        within_tolerance,
+        key=lambda item: (
+            _backend_sort_rank(str(item.get("effective_backend") or item.get("flatten_backend") or "")),
+            int(item["workers"]),
+        ),
+    )
     chosen_worker = int(chosen["workers"])
     best_worker = int(best["workers"])
-    if chosen_worker != best_worker:
+    chosen_backend = str(chosen.get("flatten_backend") or "python")
+    best_backend = str(best.get("flatten_backend") or "python")
+    if chosen_worker != best_worker or chosen_backend != best_backend:
         reason = (
-            f"workers={chosen_worker} is within 5% of the fastest throughput "
-            f"({best_rate:.3f} records/s at workers={best_worker}) and has lower orchestration overhead."
+            f"backend={chosen_backend}, workers={chosen_worker} is within 5% of the fastest eligible throughput "
+            f"({best_rate:.3f} records/s at backend={best_backend}, workers={best_worker}) and has lower operational overhead."
         )
     else:
-        reason = f"workers={best_worker} had the highest eligible throughput ({best_rate:.3f} records/s)."
+        reason = (
+            f"backend={best_backend}, workers={best_worker} had the highest eligible throughput "
+            f"({best_rate:.3f} records/s)."
+        )
     return {
         "status": "done",
+        "recommended_flatten_backend": chosen_backend,
         "recommended_parallel_workers": chosen_worker,
         "recommendation_reason": reason,
-        "eligible_workers": [int(item["workers"]) for item in sorted(candidates, key=lambda x: int(x["workers"]))],
+        "eligible_workers": _eligible_workers(candidates),
+        "eligible_configurations": [
+            {"flatten_backend": str(item.get("flatten_backend")), "workers": int(item["workers"])}
+            for item in sorted(candidates, key=lambda x: (_backend_sort_rank(str(x.get("effective_backend"))), int(x["workers"])))
+        ],
     }
+
+
+def _aggregate_worker_attempts(
+    *,
+    worker: int,
+    flatten_backend: str,
+    attempts: Sequence[Mapping[str, Any]],
+    issue_sample_limit: int,
+) -> dict[str, Any]:
+    if not attempts:
+        return {
+            "workers": int(worker),
+            "flatten_backend": str(flatten_backend),
+            "effective_backend": str(flatten_backend),
+            "status": "failed",
+            "run_dir": None,
+            "parquet_dir": None,
+            "report_path": None,
+            "quarantine_path": None,
+            "artifact_contract_path": None,
+            "duration_s": None,
+            "records_per_s": None,
+            "records_per_s_basis": "none",
+            "records_per_s_median": None,
+            "records_per_s_min": None,
+            "records_per_s_max": None,
+            "records_per_s_mean": None,
+            "records_per_s_stdev": None,
+            "attempt_count": 0,
+            "eligible_attempt_count": 0,
+            "failed_attempt_count": 0,
+            "recommendation_ineligible_attempt_count": 0,
+            "records_read": 0,
+            "records_ok": 0,
+            "parquet_files_persisted": 0,
+            "parquet_rows_emitted": 0,
+            "timings_ms": {},
+            "issue_count": 0,
+            "error_count": 0,
+            "warning_count": 0,
+            "artifact_contract_status": "failed",
+            "artifact_contract_issue_count": 0,
+            "artifact_contract_warning_count": 0,
+            "python_fallback_active": False,
+            "rust_arrow_failed_batches": 0,
+            "flatten_backend_fallback_reason": None,
+            "flatten_backend_auto_disabled_reason": None,
+            "flatten_backend_fallback_batches": 0,
+            "issue_samples": [],
+            "run_report_profile": {},
+            "parquet_cleaned": False,
+            "attempts": [],
+        }
+    if len(attempts) == 1:
+        row = dict(attempts[0])
+        row["flatten_backend"] = str(flatten_backend)
+        row.setdefault("effective_backend", row.get("flatten_backend"))
+        row["attempt_count"] = 1
+        row["eligible_attempt_count"] = 1 if _eligible_for_recommendation(row) else 0
+        row["failed_attempt_count"] = 1 if str(row.get("status") or "") == "failed" else 0
+        row["recommendation_ineligible_attempt_count"] = 0 if row["eligible_attempt_count"] else 1
+        row["records_per_s_basis"] = "single_run"
+        row["records_per_s_median"] = row.get("records_per_s")
+        row["records_per_s_min"] = row.get("records_per_s")
+        row["records_per_s_max"] = row.get("records_per_s")
+        row["records_per_s_mean"] = row.get("records_per_s")
+        row["records_per_s_stdev"] = None
+        row["attempts"] = [dict(attempts[0])]
+        return row
+
+    attempt_rows = [dict(item) for item in attempts]
+    eligible = [item for item in attempt_rows if _eligible_for_recommendation(item)]
+    nonfailed = [item for item in attempt_rows if str(item.get("status") or "") != "failed"]
+    metric_rows = eligible if eligible else nonfailed
+    rates = [float(item["records_per_s"]) for item in metric_rows if item.get("records_per_s") is not None]
+    durations = [float(item["duration_s"]) for item in metric_rows if item.get("duration_s") is not None]
+    status = _execution_status(attempt_rows)
+    records_per_s = _median(rates)
+
+    issue_samples: list[dict[str, Any]] = []
+    issue_seen: set[tuple[str, str, str, str]] = set()
+    for item in attempt_rows:
+        for sample in list(item.get("issue_samples") or []):
+            if not isinstance(sample, Mapping):
+                continue
+            payload = dict(sample)
+            payload.setdefault("repeat_index", item.get("repeat_index"))
+            key = (
+                str(payload.get("source") or ""),
+                str(payload.get("level") or ""),
+                str(payload.get("stage") or payload.get("check") or ""),
+                str(payload.get("message") or ""),
+            )
+            if key in issue_seen:
+                continue
+            issue_seen.add(key)
+            issue_samples.append(payload)
+            if len(issue_samples) >= max(0, int(issue_sample_limit)):
+                break
+        if len(issue_samples) >= max(0, int(issue_sample_limit)):
+            break
+
+    timing_keys = ("io.json_parse", "json.flatten", "json.parquet.persist")
+    timings: dict[str, int] = {}
+    for key in timing_keys:
+        values = []
+        for item in metric_rows:
+            item_timings = item.get("timings_ms") if isinstance(item.get("timings_ms"), Mapping) else {}
+            values.append(float(_as_int(item_timings.get(key), 0)))
+        med = _median(values)
+        timings[key] = int(round(med or 0))
+
+    run_dir = str(Path(str(attempt_rows[0].get("run_dir") or ".")).parent)
+    effective_backends = sorted({str(item.get("effective_backend") or flatten_backend) for item in attempt_rows})
+    artifact_contract_status = _aggregate_artifact_contract_status(attempt_rows)
+    fallback_reasons = [
+        str(item.get("flatten_backend_fallback_reason"))
+        for item in attempt_rows
+        if item.get("flatten_backend_fallback_reason")
+    ]
+    auto_disabled_reasons = [
+        str(item.get("flatten_backend_auto_disabled_reason"))
+        for item in attempt_rows
+        if item.get("flatten_backend_auto_disabled_reason")
+    ]
+    rust_arrow_failed_batches = sum(
+        _as_int(item.get("rust_arrow_failed_batches"), _as_int(item.get("flatten_backend_fallback_batches"), 0))
+        for item in attempt_rows
+    )
+    return {
+        "workers": int(worker),
+        "flatten_backend": str(flatten_backend),
+        "effective_backend": effective_backends[0] if len(effective_backends) == 1 else "mixed",
+        "status": status,
+        "run_dir": run_dir,
+        "parquet_dir": None,
+        "report_path": None,
+        "quarantine_path": None,
+        "artifact_contract_path": None,
+        "duration_s": _median(durations),
+        "records_per_s": records_per_s,
+        "records_per_s_basis": "median",
+        "records_per_s_median": _median(rates),
+        "records_per_s_min": min(rates) if rates else None,
+        "records_per_s_max": max(rates) if rates else None,
+        "records_per_s_mean": _mean(rates),
+        "records_per_s_stdev": _stdev(rates),
+        "attempt_count": len(attempt_rows),
+        "eligible_attempt_count": len(eligible),
+        "failed_attempt_count": sum(1 for item in attempt_rows if str(item.get("status") or "") == "failed"),
+        "recommendation_ineligible_attempt_count": len(attempt_rows) - len(eligible),
+        "records_read": sum(_as_int(item.get("records_read"), 0) for item in attempt_rows),
+        "records_ok": sum(_as_int(item.get("records_ok"), 0) for item in attempt_rows),
+        "parquet_files_persisted": sum(_as_int(item.get("parquet_files_persisted"), 0) for item in attempt_rows),
+        "parquet_rows_emitted": sum(_as_int(item.get("parquet_rows_emitted"), 0) for item in attempt_rows),
+        "timings_ms": timings,
+        "issue_count": sum(_as_int(item.get("issue_count"), 0) for item in attempt_rows),
+        "error_count": sum(_as_int(item.get("error_count"), 0) for item in attempt_rows),
+        "warning_count": sum(_as_int(item.get("warning_count"), 0) for item in attempt_rows),
+        "artifact_contract_status": artifact_contract_status,
+        "artifact_contract_issue_count": sum(_as_int(item.get("artifact_contract_issue_count"), 0) for item in attempt_rows),
+        "artifact_contract_warning_count": sum(_as_int(item.get("artifact_contract_warning_count"), 0) for item in attempt_rows),
+        "python_fallback_active": any(bool(item.get("python_fallback_active")) for item in attempt_rows),
+        "rust_arrow_failed_batches": rust_arrow_failed_batches,
+        "flatten_backend_fallback_reason": "; ".join(sorted(set(fallback_reasons))) if fallback_reasons else None,
+        "flatten_backend_auto_disabled_reason": "; ".join(sorted(set(auto_disabled_reasons))) if auto_disabled_reasons else None,
+        "flatten_backend_fallback_batches": rust_arrow_failed_batches,
+        "issue_samples": issue_samples,
+        "run_report_profile": {},
+        "parquet_cleaned": any(bool(item.get("parquet_cleaned")) for item in attempt_rows),
+        "attempts": attempt_rows,
+    }
+
+
+def _execution_plan(
+    *,
+    workers: Sequence[int],
+    flatten_backends: Sequence[str],
+    repeat: int,
+    shuffle_order: bool,
+    seed: int | None,
+) -> list[tuple[str, int, int]]:
+    plan = [
+        (str(backend), int(worker), int(repeat_index))
+        for repeat_index in range(1, repeat + 1)
+        for backend in flatten_backends
+        for worker in workers
+    ]
+    if shuffle_order and len(plan) > 1:
+        rng = random.Random(seed)
+        rng.shuffle(plan)
+    return plan
+
+
+def _markdown_table_cell(value: Any) -> str:
+    return str(value or "").replace("\n", " ").replace("|", r"\|")
 
 
 def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
@@ -262,37 +897,78 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append("# JSON Parallel Profile")
     lines.append("")
     lines.append(f"- status: `{summary.get('status')}`")
+    if "execution_status" in summary:
+        lines.append(f"- execution_status: `{summary.get('execution_status')}`")
+    if "recommendation_status" in summary:
+        lines.append(f"- recommendation_status: `{summary.get('recommendation_status')}`")
     lines.append(f"- config: `{summary.get('config')}`")
     lines.append(f"- mode: `{summary.get('mode')}`")
     lines.append(f"- max_records: `{summary.get('max_records')}`")
+    lines.append(f"- flatten_backends: `{','.join(str(x) for x in (summary.get('flatten_backends') or []))}`")
+    lines.append(f"- repeat: `{summary.get('repeat')}`")
+    lines.append(f"- records_per_s_basis: `{summary.get('records_per_s_basis')}`")
+    lines.append(f"- recommended_flatten_backend: `{summary.get('recommended_flatten_backend')}`")
     lines.append(f"- recommended_parallel_workers: `{summary.get('recommended_parallel_workers')}`")
     lines.append(f"- recommendation_reason: {summary.get('recommendation_reason')}")
     lines.append("")
     lines.append("## Worker Runs")
     lines.append("")
     lines.append(
-        "| workers | status | duration_s | records_per_s | io.json_parse_ms | json.flatten_ms | "
-        "json.parquet.persist_ms | issues | errors | warnings | artifact_contract |"
+        "| backend | effective | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
+        "io.json_parse_ms | json.flatten_ms | json.parquet.persist_ms | issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
-    lines.append("|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---|")
+    lines.append(
+        "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+    )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
         duration = row.get("duration_s")
         rps = row.get("records_per_s")
         duration_s = "" if duration is None else f"{float(duration):.3f}"
         rps_s = "" if rps is None else f"{float(rps):.3f}"
+        rps_min = row.get("records_per_s_min")
+        rps_max = row.get("records_per_s_max")
+        rps_min_s = "" if rps_min is None else f"{float(rps_min):.3f}"
+        rps_max_s = "" if rps_max is None else f"{float(rps_max):.3f}"
         lines.append(
             "| "
-            f"{row.get('workers')} | {row.get('status')} | {duration_s} | {rps_s} | "
+            f"{row.get('flatten_backend')} | {row.get('effective_backend')} | "
+            f"{row.get('workers')} | {row.get('status')} | "
+            f"{_as_int(row.get('attempt_count'), 1)} | {_as_int(row.get('eligible_attempt_count'), 0)} | "
+            f"{duration_s} | {rps_s} | {rps_min_s} | {rps_max_s} | "
             f"{_as_int(timings.get('io.json_parse'), 0)} | "
             f"{_as_int(timings.get('json.flatten'), 0)} | "
             f"{_as_int(timings.get('json.parquet.persist'), 0)} | "
             f"{_as_int(row.get('issue_count'), 0)} | "
             f"{_as_int(row.get('error_count'), 0)} | "
             f"{_as_int(row.get('warning_count'), 0)} | "
-            f"{row.get('artifact_contract_status')} |"
+            f"{row.get('artifact_contract_status')} | "
+            f"{_as_int(row.get('rust_arrow_failed_batches'), _as_int(row.get('flatten_backend_fallback_batches'), 0))} | "
+            f"{_markdown_table_cell(row.get('flatten_backend_fallback_reason'))} |"
         )
     lines.append("")
+    issue_rows: list[tuple[Any, Mapping[str, Any]]] = []
+    for row in summary.get("runs") or []:
+        for sample in list(row.get("issue_samples") or []):
+            if isinstance(sample, Mapping):
+                issue_rows.append((f"{row.get('flatten_backend')}/w{row.get('workers')}", sample))
+    if issue_rows:
+        lines.append("## Issue Samples")
+        lines.append("")
+        lines.append("| run | source | level | stage/check | message |")
+        lines.append("|---|---|---|---|---|")
+        for run_label, sample in issue_rows:
+            stage = sample.get("stage") or sample.get("check") or ""
+            message = sample.get("message") or ""
+            lines.append(
+                "| "
+                f"{_markdown_table_cell(run_label)} | "
+                f"{_markdown_table_cell(sample.get('source'))} | "
+                f"{_markdown_table_cell(sample.get('level'))} | "
+                f"{_markdown_table_cell(stage)} | "
+                f"{_markdown_table_cell(message)} |"
+            )
+        lines.append("")
     lines.append("## Artifacts")
     lines.append("")
     lines.append(f"- summary_json: `{summary.get('summary_json_path')}`")
@@ -351,7 +1027,7 @@ def _failed_contract(parquet_dir: Path, *, require_schema_manifest: bool, requir
     return {
         "status": "failed",
         "generated_at": _utc_now_iso(),
-        "parquet_root": str(parquet_dir.expanduser().resolve()),
+        "parquet_root": str(_absolute_no_resolve(parquet_dir.expanduser())),
         "input": {
             "require_schema_manifest": bool(require_schema_manifest),
             "require_id_compaction": bool(require_id_compaction),
@@ -376,6 +1052,7 @@ def profile_parallel(
     *,
     config_path: str | Path,
     workers: str | Sequence[int] | None = None,
+    flatten_backends: str | Sequence[str] | None = None,
     out_dir: str | Path | None = None,
     max_records: int | None = 20000,
     chunk_size: int | None = None,
@@ -390,16 +1067,26 @@ def profile_parallel(
     id_compaction_collision_policy: str | None = None,
     id_compaction_namespace_conflict_policy: str | None = None,
     profile_top: int = 8,
+    repeat: int = 1,
+    shuffle_order: bool = True,
+    seed: int | None = 42,
+    issue_sample_limit: int = 5,
 ) -> dict[str, Any]:
     from . import pipeline
     from .parquet_artifacts import inspect_parquet_artifact_contract
-    from .quarantine import QuarantineWriter
     from .report import RunReport
+    from .rust_arrow_backend import parse_backend_list
 
     config = Path(config_path).expanduser().resolve()
     worker_values = parse_worker_list(workers)
-    out = Path(out_dir).expanduser().resolve() if out_dir else _default_out_dir().resolve()
-    out.mkdir(parents=True, exist_ok=True)
+    backend_values = parse_backend_list(flatten_backends)
+    out = _prepare_profile_output_dir(out_dir)
+    summary_json_path = out / "parallel_profile.json"
+    summary_md_path = out / "parallel_profile.md"
+    _validate_profile_file_path(out, summary_json_path, purpose="profile summary json")
+    _validate_profile_file_path(out, summary_md_path, purpose="profile summary markdown")
+    repeat_count = max(1, int(repeat or 1))
+    sample_limit = max(0, int(issue_sample_limit or 0))
 
     cleanup_requested = bool(cleanup_parquet) or not bool(keep_artifacts)
     max_records_arg = None
@@ -407,14 +1094,44 @@ def profile_parallel(
         max_records_int = int(max_records)
         max_records_arg = max_records_int if max_records_int > 0 else None
 
-    rows: list[dict[str, Any]] = []
-    for worker in worker_values:
-        run_dir = out / f"w{int(worker)}"
+    attempts_by_config: dict[tuple[str, int], list[dict[str, Any]]] = {
+        (str(backend), int(worker)): [] for backend in backend_values for worker in worker_values
+    }
+    plan = _execution_plan(
+        workers=worker_values,
+        flatten_backends=backend_values,
+        repeat=repeat_count,
+        shuffle_order=bool(shuffle_order),
+        seed=seed,
+    )
+    execution_order: list[dict[str, Any]] = []
+    use_backend_dirs = len(backend_values) > 1
+    planned_run_dirs: list[Path] = []
+    for flatten_backend, worker, repeat_index in plan:
+        backend_root = out / str(flatten_backend).replace("-", "_") if use_backend_dirs else out
+        worker_root = backend_root / f"w{int(worker)}"
+        run_dir = worker_root if repeat_count == 1 else worker_root / f"r{int(repeat_index)}"
+        planned_run_dirs.append(run_dir)
+    _prepare_profile_run_dirs(out, planned_run_dirs)
+
+    for order, (flatten_backend, worker, repeat_index) in enumerate(plan, start=1):
+        backend_root = out / str(flatten_backend).replace("-", "_") if use_backend_dirs else out
+        worker_root = backend_root / f"w{int(worker)}"
+        run_dir = worker_root if repeat_count == 1 else worker_root / f"r{int(repeat_index)}"
         parquet_dir = run_dir / "parquet"
         report_path = run_dir / "run_report.json"
         quarantine_path = run_dir / "quarantine.jsonl"
         artifact_contract_path = run_dir / "artifact_contract.json"
-        run_dir.mkdir(parents=True, exist_ok=True)
+        _assert_profile_child_path(out, run_dir, purpose="profile run")
+        execution_order.append(
+            {
+                "execution_order": int(order),
+                "flatten_backend": str(flatten_backend),
+                "workers": int(worker),
+                "repeat_index": int(repeat_index),
+                "run_dir": str(run_dir),
+            }
+        )
 
         data_config, db_config, mode_name = _load_profile_config(config, mode=mode)
         data_config["json_streaming_load"] = False
@@ -422,8 +1139,9 @@ def profile_parallel(
         data_config["persist_tsv_files"] = False
         data_config["persist_parquet_dir"] = str(parquet_dir)
         data_config["parallel_workers"] = int(worker)
-        data_config["progress_path"] = str(report_path) + ".progress.json"
-        data_config["progress_interval_s"] = 10.0
+        data_config["flatten_backend"] = str(flatten_backend)
+        data_config["progress_path"] = ""
+        data_config["progress_interval_s"] = 0.0
         if chunk_size is not None:
             data_config["chunk_size"] = int(chunk_size)
         effective_chunk_size = _as_int(data_config.get("chunk_size"), 0) or None
@@ -443,6 +1161,9 @@ def profile_parallel(
             "parallel_profile",
             {
                 "workers": int(worker),
+                "flatten_backend": str(flatten_backend),
+                "repeat_index": int(repeat_index),
+                "execution_order": int(order),
                 "out_dir": str(out),
                 "run_dir": str(run_dir),
                 "max_records": max_records_arg,
@@ -463,7 +1184,7 @@ def profile_parallel(
                 optimize=False,
                 continue_on_error=True,
                 report=report,
-                quarantine=QuarantineWriter(quarantine_path),
+                quarantine=_ProfileQuarantineWriter(out, quarantine_path),
             )
             run_report_obj = result.report
         except Exception as exc:
@@ -477,12 +1198,27 @@ def profile_parallel(
             run_report_obj = report
 
         run_report_obj.finish()
-        run_report_obj.save_json(str(report_path))
+        try:
+            _safe_write_text(
+                out,
+                report_path,
+                run_report_obj.to_json(),
+                purpose="profile run report",
+            )
+        except Exception as exc:
+            run_failed = True
+            run_report_obj.exception(
+                stage="json.profile_parallel.report_write",
+                message="Failed to save profile run report",
+                exc=exc,
+                path=str(report_path),
+            )
         run_report = run_report_obj.to_dict()
 
         require_schema_manifest = bool(effective_id_compaction)
         require_id_compaction = bool(effective_id_compaction)
         try:
+            _assert_profile_child_path(out, parquet_dir, purpose="profile parquet inspect")
             artifact_contract = inspect_parquet_artifact_contract(
                 parquet_dir,
                 require_schema_manifest=require_schema_manifest,
@@ -495,10 +1231,32 @@ def profile_parallel(
                 require_id_compaction=require_id_compaction,
                 exc=exc,
             )
-        _write_json(artifact_contract_path, artifact_contract)
+        try:
+            _safe_write_json(
+                out,
+                artifact_contract_path,
+                artifact_contract,
+                purpose="profile artifact contract",
+            )
+        except Exception as exc:
+            artifact_contract = dict(artifact_contract)
+            issues = list(artifact_contract.get("issues") or [])
+            issues.append(
+                {
+                    "severity": "error",
+                    "check": "artifact_contract_write_failed",
+                    "message": str(exc),
+                    "error_type": type(exc).__name__,
+                }
+            )
+            artifact_contract["issues"] = issues
+            artifact_contract["status"] = "failed"
 
         row = _summarize_worker_run(
             worker=int(worker),
+            flatten_backend=str(flatten_backend),
+            repeat_index=int(repeat_index),
+            execution_order=int(order),
             run_dir=run_dir,
             parquet_dir=parquet_dir,
             report_path=report_path,
@@ -509,37 +1267,81 @@ def profile_parallel(
             run_failed=run_failed,
             cleanup_requested=cleanup_requested,
             profile_top=profile_top,
+            issue_sample_limit=sample_limit,
         )
-        rows.append(row)
 
-        if cleanup_requested and parquet_dir.exists():
-            shutil.rmtree(parquet_dir, ignore_errors=True)
+        if cleanup_requested:
+            try:
+                row["parquet_cleaned"] = bool(_safe_remove_profile_parquet_dir(out, parquet_dir))
+            except Exception as exc:
+                cleanup_sample = {
+                    "source": "profile_cleanup",
+                    "level": "error",
+                    "stage": "json.profile_parallel.cleanup",
+                    "message": str(exc),
+                    "exception_type": type(exc).__name__,
+                }
+                row["status"] = "failed"
+                row["issue_count"] = int(row.get("issue_count") or 0) + 1
+                row["error_count"] = int(row.get("error_count") or 0) + 1
+                row["cleanup_error"] = cleanup_sample
+                samples = list(row.get("issue_samples") or [])
+                if sample_limit > 0 and len(samples) < sample_limit:
+                    samples.append(cleanup_sample)
+                row["issue_samples"] = samples[:sample_limit] if sample_limit > 0 else []
 
+        attempts_by_config[(str(flatten_backend), int(worker))].append(row)
+
+    rows = [
+        _aggregate_worker_attempts(
+            worker=int(worker),
+            flatten_backend=str(backend),
+            attempts=attempts_by_config.get((str(backend), int(worker)), []),
+            issue_sample_limit=sample_limit,
+        )
+        for backend in backend_values
+        for worker in worker_values
+    ]
     recommendation = recommend_parallel_workers(rows)
-    status = str(recommendation.get("status") or "failed")
-    if status != "failed" and any(str(row.get("status") or "") != "done" for row in rows):
+    execution_status = _execution_status(rows)
+    recommendation_status = str(recommendation.get("status") or "failed")
+    status = execution_status
+    if status == "done" and recommendation_status == "failed":
         status = "done_with_warnings"
 
-    summary_json_path = out / "parallel_profile.json"
-    summary_md_path = out / "parallel_profile.md"
     summary: dict[str, Any] = {
         "status": status,
+        "execution_status": execution_status,
+        "recommendation_status": recommendation_status,
         "generated_at": _utc_now_iso(),
         "config": str(config),
         "out_dir": str(out),
         "mode": str(mode),
         "workers": worker_values,
+        "flatten_backends": backend_values,
+        "repeat": int(repeat_count),
+        "shuffle_order": bool(shuffle_order),
+        "seed": seed,
         "max_records": max_records_arg,
         "chunk_size": chunk_size,
+        "records_per_s_basis": "median" if repeat_count > 1 else "single_run",
         "keep_artifacts": bool(keep_artifacts),
         "cleanup_parquet": bool(cleanup_requested),
+        "execution_order": execution_order,
         "runs": rows,
+        "recommended_flatten_backend": recommendation.get("recommended_flatten_backend"),
         "recommended_parallel_workers": recommendation.get("recommended_parallel_workers"),
         "recommendation_reason": recommendation.get("recommendation_reason"),
         "eligible_workers": recommendation.get("eligible_workers") or [],
+        "eligible_configurations": recommendation.get("eligible_configurations") or [],
         "summary_json_path": str(summary_json_path),
         "summary_md_path": str(summary_md_path),
     }
-    _write_json(summary_json_path, summary)
-    summary_md_path.write_text(_render_parallel_profile_markdown(summary) + "\n", encoding="utf-8")
+    _safe_write_json(out, summary_json_path, summary, purpose="profile summary json")
+    _safe_write_text(
+        out,
+        summary_md_path,
+        _render_parallel_profile_markdown(summary) + "\n",
+        purpose="profile summary markdown",
+    )
     return summary

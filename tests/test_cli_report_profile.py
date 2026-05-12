@@ -2,7 +2,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 
@@ -80,6 +80,25 @@ class TestCLIReportProfile(unittest.TestCase):
             prof = json.loads(out_path.read_text(encoding="utf-8"))
             self.assertEqual(prof["run_id"], "r2")
             self.assertEqual(prof["bottleneck"]["class"], "flatten-bound")
+
+    def test_report_profile_rejects_symlink_output_without_traceback(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            report_path = root / "run_report.json"
+            external = root / "external.md"
+            out_path = root / "profile.md"
+            report_path.write_text(json.dumps({"stats": {}, "timings_ms": {}, "issues": [], "artifacts": {}}), encoding="utf-8")
+            external.write_text("keep", encoding="utf-8")
+            out_path.symlink_to(external)
+
+            err = io.StringIO()
+            with redirect_stderr(err):
+                rc = main(["report", "profile", str(report_path), "--out", str(out_path)])
+
+            self.assertEqual(rc, 2)
+            self.assertIn("symlink", err.getvalue())
+            self.assertNotIn("Traceback", err.getvalue())
+            self.assertEqual(external.read_text(encoding="utf-8"), "keep")
 
 
 if __name__ == "__main__":

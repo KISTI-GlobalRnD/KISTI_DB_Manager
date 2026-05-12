@@ -9,6 +9,7 @@ from typing import Any, Mapping
 
 from . import __version__
 from .naming import make_index_name, truncate_table_name
+from .runstate import UnsafePathError, atomic_write_text
 
 
 def _resolve_bool(value: bool | None, default: bool) -> bool:
@@ -64,6 +65,7 @@ def _validate_json_run_config(data_config: Mapping[str, Any], *, mode_name: str)
             "persist_parquet_files=true cannot be combined with persist_tsv_files=true; "
             "choose one artifact strategy."
         )
+    id_compaction: Mapping[str, Any] = {}
     try:
         from .id_compaction import normalize_id_compaction_config, validate_id_compaction_config
 
@@ -71,7 +73,13 @@ def _validate_json_run_config(data_config: Mapping[str, Any], *, mode_name: str)
         validate_id_compaction_config(id_compaction)
     except Exception as e:
         errors.append(f"invalid id_compaction config: {e}")
+    flatten_backend = "auto"
+    try:
+        from .rust_arrow_backend import normalize_flatten_backend
 
+        flatten_backend = normalize_flatten_backend(data_config.get("flatten_backend", "auto"))
+    except Exception as e:
+        errors.append(f"invalid flatten_backend config: {e}")
     if errors:
         mode_hint = f" mode={mode_name!r}" if str(mode_name or "").strip() else ""
         raise ConfigValidationError("Invalid json run configuration" + mode_hint + ": " + " ".join(errors))
@@ -201,7 +209,7 @@ def _cmd_report_diff(args: argparse.Namespace) -> int:
 
     out = "\n".join(lines) + "\n"
     if args.out:
-        Path(args.out).write_text(out, encoding="utf-8")
+        atomic_write_text(args.out, out, purpose="report diff output")
         print(f"diff: {args.out}")
         return 0
 
@@ -446,7 +454,7 @@ def _cmd_report_profile(args: argparse.Namespace) -> int:
         out = _render_run_report_profile_markdown(profile)
 
     if args.out:
-        Path(args.out).write_text(out + ("" if out.endswith("\n") else "\n"), encoding="utf-8")
+        atomic_write_text(args.out, out + ("" if out.endswith("\n") else "\n"), purpose="report profile output")
         print(f"profile: {args.out}")
         return 0
 
@@ -563,8 +571,12 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["extra_column_name"] = str(args.extra_column_name)
     if getattr(args, "db_load_method", None):
         data_config["db_load_method"] = args.db_load_method
+    if getattr(args, "rust_db_load", None) is not None:
+        data_config["rust_db_load"] = bool(args.rust_db_load)
     if getattr(args, "parallel_workers", None) is not None:
         data_config["parallel_workers"] = int(args.parallel_workers)
+    if getattr(args, "flatten_backend", None):
+        data_config["flatten_backend"] = str(args.flatten_backend)
     if getattr(args, "db_load_parallel_tables", None) is not None:
         data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
     if getattr(args, "load_data_commit_strategy", None):
@@ -704,9 +716,14 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
 
 def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
     from .json_parallel_profile import parse_worker_list, profile_parallel
+    from .rust_arrow_backend import parse_backend_list
 
     try:
         workers = parse_worker_list(args.workers)
+    except ValueError as e:
+        raise ConfigValidationError(str(e)) from e
+    try:
+        flatten_backends = parse_backend_list(args.flatten_backends)
     except ValueError as e:
         raise ConfigValidationError(str(e)) from e
 
@@ -719,6 +736,7 @@ def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
     result = profile_parallel(
         config_path=args.config,
         workers=workers,
+        flatten_backends=flatten_backends,
         out_dir=args.out or None,
         max_records=args.max_records,
         chunk_size=args.chunk_size,
@@ -732,9 +750,15 @@ def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
         id_compaction_mode=args.id_compaction_mode,
         id_compaction_collision_policy=args.id_compaction_collision_policy,
         id_compaction_namespace_conflict_policy=args.id_compaction_namespace_conflict_policy,
+        repeat=args.repeat,
+        shuffle_order=bool(args.shuffle_order),
+        seed=args.seed,
+        issue_sample_limit=args.issue_sample_limit,
     )
     print(f"parallel_profile: {result.get('summary_json_path')}")
     print(f"parallel_profile_md: {result.get('summary_md_path')}")
+    if "recommended_flatten_backend" in result:
+        print(f"recommended_flatten_backend: {result.get('recommended_flatten_backend')}")
     print(f"recommended_parallel_workers: {result.get('recommended_parallel_workers')}")
     return 1 if result.get("status") == "failed" else 0
 
@@ -782,7 +806,11 @@ def _cmd_json_id_compaction_preflight(args: argparse.Namespace) -> int:
     )
 
     if args.report:
-        Path(args.report).write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        atomic_write_text(
+            args.report,
+            json.dumps(result, ensure_ascii=False, indent=2, default=str),
+            purpose="id compaction preflight report",
+        )
         print(f"preflight: {args.report}")
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
@@ -941,12 +969,12 @@ def _cmd_review_diff(args: argparse.Namespace) -> int:
         print(f"diff_html: {res['diff_html']}")
         print(f"schema_diff_svg: {res['schema_diff_svg']}")
         if args.out:
-            Path(args.out).write_text(md, encoding="utf-8")
+            atomic_write_text(args.out, md, purpose="review diff output")
             print(f"diff: {args.out}")
         return 0
 
     if args.out:
-        Path(args.out).write_text(md, encoding="utf-8")
+        atomic_write_text(args.out, md, purpose="review diff output")
         print(f"diff: {args.out}")
         return 0
 
@@ -1031,9 +1059,8 @@ def _cmd_parquet_inspect(args: argparse.Namespace) -> int:
             strict_schema_manifest=bool(args.strict_schema_manifest),
         )
     if args.out:
-        out = Path(args.out).expanduser().resolve()
-        out.parent.mkdir(parents=True, exist_ok=True)
-        out.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+        out = Path(args.out).expanduser()
+        atomic_write_text(out, json.dumps(result, ensure_ascii=False, indent=2), purpose="parquet inspect output")
         print(f"artifact_contract: {out}")
     else:
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -1204,9 +1231,20 @@ def build_parser() -> argparse.ArgumentParser:
         help="DB load method override (default: config or 'auto')",
     )
     p_json_run.add_argument(
+        "--rust-db-load",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use the optional Rust MySQL loader for Rust parquet artifacts (default: config or false)",
+    )
+    p_json_run.add_argument(
         "--parallel-workers",
         type=int,
         help="ProcessPool workers for JSON flatten (default: config or 0/off)",
+    )
+    p_json_run.add_argument(
+        "--flatten-backend",
+        choices=["auto", "python", "rust-arrow"],
+        help="JSON parse/parquet backend: auto, python, or rust-arrow (default: config or auto)",
     )
     p_json_run.add_argument(
         "--db-load-parallel-tables",
@@ -1372,6 +1410,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Comma-separated parallel_workers values to test (default: 0,2,4,8)",
     )
     p_json_profile_parallel.add_argument(
+        "--flatten-backends",
+        default="auto",
+        help="Comma-separated flatten backends to test: auto, python, rust-arrow (default: auto)",
+    )
+    p_json_profile_parallel.add_argument(
         "--max-records",
         type=int,
         default=20000,
@@ -1381,6 +1424,30 @@ def build_parser() -> argparse.ArgumentParser:
         "--chunk-size",
         type=int,
         help="Records per batch override (default: selected mode/config)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--repeat",
+        type=int,
+        default=1,
+        help="Run each worker setting N times and recommend by median throughput (default: 1)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--shuffle-order",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Shuffle worker/repeat execution order to reduce cache/order bias (default: true)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--seed",
+        type=int,
+        default=42,
+        help="Random seed for --shuffle-order (default: 42)",
+    )
+    p_json_profile_parallel.add_argument(
+        "--issue-sample-limit",
+        type=int,
+        default=5,
+        help="Max warning/error samples to embed per worker in the summary (default: 5)",
     )
     p_json_profile_parallel.add_argument(
         "--mode",
@@ -1624,7 +1691,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         return int(args.func(args))
-    except (MissingDependencyError, ConfigValidationError) as e:
+    except (MissingDependencyError, ConfigValidationError, UnsafePathError) as e:
         print(f"error: {e}", file=sys.stderr)
         return 2
 
