@@ -136,9 +136,11 @@ def main() -> int:
     ap.add_argument("--max-files-per-table", type=int, default=1, help="Number of parquet files per table to load")
     ap.add_argument("--limit-rows-per-file", type=int, default=0, help="Optional row cap after reading each parquet file")
     ap.add_argument("--table-prefix", default="bench_oa_parquet_", help="Temporary DB table prefix")
+    ap.add_argument("--loader", choices=["python", "rust-mysql"], default="python", help="DB loader to benchmark")
     ap.add_argument("--load-method", choices=["auto", "load_data", "to_sql"], default="load_data")
     ap.add_argument("--staging-writer", choices=["python", "duckdb"], default="duckdb")
     ap.add_argument("--staging-dir", default=None, help="Temp staging directory for LOAD DATA files")
+    ap.add_argument("--rust-batch-size", type=int, default=1000, help="Record batch size for --loader rust-mysql")
     ap.add_argument("--latest-first", action="store_true", help="Pick newest parquet files first")
     ap.add_argument("--keep-tables", action="store_true", help="Keep benchmark tables instead of dropping them")
     ap.add_argument("--column-type", default="LONGTEXT")
@@ -152,6 +154,8 @@ def main() -> int:
     )
     if args.db_name:
         db_config["database"] = str(args.db_name).strip()
+    if args.loader == "rust-mysql" and int(args.limit_rows_per_file or 0) > 0:
+        raise SystemExit("--limit-rows-per-file is not supported with --loader rust-mysql")
     data_config = coerce_data_config(cfg.get("data_config") or {}, inplace=False)
     staging_dir = str(args.staging_dir or _default_staging_dir())
 
@@ -159,9 +163,11 @@ def main() -> int:
     report.set_artifact("parquet_root", str(parquet_root))
     report.set_artifact("config_path", str(Path(args.config).expanduser().resolve()))
     report.set_artifact("db_name", str(db_config.get("database") or ""))
+    report.set_artifact("loader", str(args.loader))
     report.set_artifact("load_method", args.load_method)
     report.set_artifact("staging_writer", args.staging_writer)
     report.set_artifact("staging_dir", staging_dir)
+    report.set_artifact("rust_batch_size", int(args.rust_batch_size))
     report.set_artifact("latest_first", bool(args.latest_first))
     report.set_artifact("max_tables", int(args.max_tables))
     report.set_artifact("max_files_per_table", int(args.max_files_per_table))
@@ -173,7 +179,16 @@ def main() -> int:
 
     import pandas as pd
 
-    fast_load_state = manage.FastLoadState(enabled=(args.load_method in {"auto", "load_data"}))
+    pq = None
+    rust_load_fn = None
+    if args.loader == "rust-mysql":
+        import pyarrow.parquet as pq_module
+        from KISTI_DB_Manager.rust_arrow_backend import load_parquet_files_to_mysql
+
+        pq = pq_module
+        rust_load_fn = load_parquet_files_to_mysql
+
+    fast_load_state = manage.FastLoadState(enabled=(args.loader == "python" and args.load_method in {"auto", "load_data"}))
     local_infile_conn = None
     created_sql_tables: list[str] = []
     per_table: list[dict[str, Any]] = []
@@ -202,25 +217,36 @@ def main() -> int:
             existing_cols: set[str] | None = None
 
             for idx, parquet_file in enumerate(files):
-                t0_read = time.perf_counter()
-                df = pd.read_parquet(parquet_file)
-                if args.limit_rows_per_file and int(args.limit_rows_per_file) > 0:
-                    df = df.head(int(args.limit_rows_per_file)).copy()
-                report.add_time_s("bench.parquet.read", time.perf_counter() - t0_read)
                 report.bump("bench_parquet_files_read", 1)
-                report.bump("bench_rows_read", int(len(df)))
+                if args.loader == "rust-mysql":
+                    assert pq is not None
+                    t0_schema = time.perf_counter()
+                    schema = pq.read_schema(parquet_file)
+                    metadata = pq.read_metadata(parquet_file)
+                    columns = [str(name) for name in schema.names]
+                    rows_in_file = int(metadata.num_rows)
+                    report.add_time_s("bench.parquet.schema_read", time.perf_counter() - t0_schema)
+                else:
+                    t0_read = time.perf_counter()
+                    df = pd.read_parquet(parquet_file)
+                    if args.limit_rows_per_file and int(args.limit_rows_per_file) > 0:
+                        df = df.head(int(args.limit_rows_per_file)).copy()
+                    columns = [str(c) for c in list(df.columns)]
+                    rows_in_file = int(len(df))
+                    report.add_time_s("bench.parquet.read", time.perf_counter() - t0_read)
+                report.bump("bench_rows_read", rows_in_file)
 
                 if nm is None:
                     nm = NameMap.build(
                         table_name=bench_table_original,
-                        columns=list(df.columns),
+                        columns=columns,
                         key_sep=str(data_config.get("KEY_SEP") or "__"),
                     )
                     t0_create = time.perf_counter()
                     nm = manage.create_table_from_columns(
                         db_config,
                         table_name=bench_table_original,
-                        columns=list(df.columns),
+                        columns=columns,
                         name_map=nm,
                         key_sep=str(data_config.get("KEY_SEP") or "__"),
                         column_type=str(args.column_type),
@@ -230,32 +256,53 @@ def main() -> int:
                     created_sql_tables.append(nm.table_sql)
 
                 t0_load = time.perf_counter()
-                nm = manage.fill_table_from_dataframe(
-                    df,
-                    db_config,
-                    table_name=nm.table_sql,
-                    name_map=nm,
-                    extra_column_name=str(data_config.get("extra_column_name") or "__extra__"),
-                    auto_alter_table=False,
-                    column_type=str(args.column_type),
-                    fallback_on_insert_error=False,
-                    report=report,
-                    load_method=args.load_method,
-                    fast_load_state=fast_load_state,
-                    local_infile_conn=local_infile_conn,
-                    existing_cols=existing_cols,
-                    load_data_staging_writer=args.staging_writer,
-                    load_data_staging_dir=staging_dir,
-                )
+                if args.loader == "rust-mysql":
+                    assert rust_load_fn is not None
+                    rust_res = rust_load_fn(
+                        [
+                            {
+                                "path": str(parquet_file),
+                                "table_sql": nm.table_sql,
+                                "columns_original": columns,
+                                "columns_sql": [nm.map_column(c) for c in columns],
+                            }
+                        ],
+                        db_config=db_config,
+                        batch_size=int(args.rust_batch_size),
+                    )
+                    rows_loaded = int(rust_res.get("rows_loaded") or 0)
+                    timings = rust_res.get("timings_ms") if isinstance(rust_res.get("timings_ms"), dict) else {}
+                    if int(timings.get("db.rust_mysql.load") or 0) > 0:
+                        report.add_time_ms("bench.db.rust_mysql.load", int(timings.get("db.rust_mysql.load") or 0))
+                else:
+                    nm = manage.fill_table_from_dataframe(
+                        df,
+                        db_config,
+                        table_name=nm.table_sql,
+                        name_map=nm,
+                        extra_column_name=str(data_config.get("extra_column_name") or "__extra__"),
+                        auto_alter_table=False,
+                        column_type=str(args.column_type),
+                        fallback_on_insert_error=False,
+                        report=report,
+                        load_method=args.load_method,
+                        fast_load_state=fast_load_state,
+                        local_infile_conn=local_infile_conn,
+                        existing_cols=existing_cols,
+                        load_data_staging_writer=args.staging_writer,
+                        load_data_staging_dir=staging_dir,
+                    )
+                    rows_loaded = int(len(df))
                 load_s = time.perf_counter() - t0_load
+                report.add_time_s("bench.db.load", load_s)
                 if existing_cols is None:
                     existing_cols = set(nm.columns_sql)
                 report.bump("bench_files_loaded", 1)
-                report.bump("bench_rows_loaded", int(len(df)))
+                report.bump("bench_rows_loaded", rows_loaded)
                 table_summary["files"].append(
                     {
                         "path": str(parquet_file),
-                        "rows": int(len(df)),
+                        "rows": rows_loaded,
                         "load_seconds": round(load_s, 6),
                     }
                 )

@@ -44,8 +44,31 @@ kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fa
 kisti-db-manager json run --config path/to/openalex_config.json --mode finalize
 kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe
 kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe --id-compaction
+kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe --flatten-backend rust-arrow
+kisti-db-manager json profile-parallel \
+  --config path/to/openalex_config.json \
+  --flatten-backends python,rust-arrow \
+  --workers 0,2,4,8 \
+  --max-records 20000 \
+  --chunk-size 5000 \
+  --repeat 3 \
+  --out runs/profile_parallel_test
 kisti-db-manager json id-compaction-preflight --config path/to/openalex_config.json --report id_compaction_preflight.json
 ```
+
+`json run --flatten-backend auto|python|rust-arrow` selects the JSON parse/parquet backend. `auto` is the default: it uses the optional Rust Arrow/Parquet extension for supported parquet artifact runs when installed and falls back to Python otherwise. The Rust backend preserves nested object/list values as JSON string parquet columns and supports the OpenAlex `semantic_column_strip` ID compaction manifest contract. When DB/DDL stages are enabled, the default bridge reads the Rust parquet artifacts back into the existing Python create/load path. `--rust-db-load` opts into the experimental Rust MySQL insert path for Rust parquet artifacts while keeping table creation/schema mapping/index/optimize in Python. Rust DB load batches run in a transaction by default, so an insert failure rolls back the batch. `excepted_expand_dict=true` still uses the Python flatten path. Build the optional extension with `pip install -e '.[json,rust]'` and `python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release`.
+
+Operational Rust DB checks:
+
+```bash
+python scripts/smoke_rust_db_load.py --dotenv .env
+python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
+  --config runs/example/config.json \
+  --loader rust-mysql \
+  --report runs/example/rust_mysql_load_benchmark.json
+```
+
+`json profile-parallel` compares JSON parse/parquet-only sample runs across `parallel_workers` values and optional `--flatten-backends` values. It disables DB stages, writes artifacts under `<out>/w<workers>/` for one backend or `<out>/<backend>/w<workers>/` for multiple backends, runs `parquet inspect`-style artifact contract checks, and creates `parallel_profile.json` plus `parallel_profile.md`. Use `--repeat N` to run each worker/backend setting multiple times; recommendations use median `records_per_s`. `--shuffle-order` is enabled by default with `--seed 42` to reduce cache/order bias while keeping runs reproducible. Add `--cleanup-parquet` when you want to keep reports/contracts but remove sample parquet directories. For `excepted_expand_dict=true` profiles, use `--flatten-backends python` because that expanded excepted-object contract remains Python-only.
 
 `--id-compaction` currently supports the OpenAlex semantic column strip mode. It keeps compacted schemas stable across URL, bare ID, and null values, can run with `--parallel-workers`, and fails fast on conflicting nonblank values that would collapse into the same output column. The conflict policies can be set with `--id-compaction-collision-policy error|preserve` and `--id-compaction-namespace-conflict-policy error|preserve`.
 
