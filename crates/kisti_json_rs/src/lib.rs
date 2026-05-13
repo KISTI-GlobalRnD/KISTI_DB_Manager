@@ -110,6 +110,38 @@ struct PersistExtras {
     timings_ms: Vec<(&'static str, u64)>,
 }
 
+struct TableMeta {
+    table: String,
+    path: String,
+    columns: Vec<String>,
+    rows: usize,
+}
+
+struct PersistOutput {
+    records_ok: usize,
+    records_failed: usize,
+    parquet_files_persisted: usize,
+    parquet_rows_emitted: usize,
+    tables: Vec<TableMeta>,
+    errors: Vec<String>,
+    error_indices: Vec<usize>,
+    timings_ms: Vec<(&'static str, u64)>,
+    id_compaction_state: Option<IdCompactionState>,
+}
+
+struct RustMysqlTable {
+    path: PathBuf,
+    table_sql: String,
+    columns_original: Vec<String>,
+    columns_sql: Vec<String>,
+}
+
+struct RustMysqlTableMeta {
+    table_sql: String,
+    path: String,
+    rows_loaded: usize,
+}
+
 fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if obj.is_none() {
         return Ok(Value::Null);
@@ -1805,7 +1837,7 @@ struct RustMysqlLoadStats {
     files_loaded: usize,
     tables_loaded: usize,
     rows_loaded: usize,
-    table_meta: Vec<HashMap<String, PyObject>>,
+    table_meta: Vec<RustMysqlTableMeta>,
 }
 
 impl RustMysqlLoadStats {
@@ -1832,14 +1864,8 @@ fn rust_mysql_context_error(
     ))
 }
 
-fn load_parquet_tables_with_queryable<Q: Queryable>(
-    py: Python<'_>,
-    table_items: &Bound<'_, PyList>,
-    batch_size: usize,
-    queryable: &mut Q,
-) -> PyResult<RustMysqlLoadStats> {
-    let mut stats = RustMysqlLoadStats::new();
-
+fn parse_rust_mysql_tables(table_items: &Bound<'_, PyList>) -> PyResult<Vec<RustMysqlTable>> {
+    let mut tables = Vec::<RustMysqlTable>::with_capacity(table_items.len());
     for item in table_items.iter() {
         let info = item.downcast::<PyDict>()?;
         let path = PathBuf::from(get_required_string_option(info, "path")?);
@@ -1865,6 +1891,28 @@ fn load_parquet_tables_with_queryable<Q: Queryable>(
                 "invalid Rust MySQL loader column mapping for table {table_sql}"
             )));
         }
+        tables.push(RustMysqlTable {
+            path,
+            table_sql,
+            columns_original,
+            columns_sql,
+        });
+    }
+    Ok(tables)
+}
+
+fn load_parquet_tables_with_queryable<Q: Queryable>(
+    table_items: &[RustMysqlTable],
+    batch_size: usize,
+    queryable: &mut Q,
+) -> PyResult<RustMysqlLoadStats> {
+    let mut stats = RustMysqlLoadStats::new();
+
+    for item in table_items.iter() {
+        let path = item.path.clone();
+        let table_sql = item.table_sql.clone();
+        let columns_original = &item.columns_original;
+        let columns_sql = &item.columns_sql;
 
         let file = fs::File::open(&path)
             .map_err(|e| rust_mysql_context_error(&table_sql, &path, "opening parquet", e))?;
@@ -1941,14 +1989,11 @@ fn load_parquet_tables_with_queryable<Q: Queryable>(
         }
         stats.files_loaded += 1;
         stats.tables_loaded += 1;
-        let mut meta = HashMap::<String, PyObject>::new();
-        meta.insert("table_sql".to_string(), table_sql.into_py(py));
-        meta.insert(
-            "path".to_string(),
-            path.to_string_lossy().to_string().into_py(py),
-        );
-        meta.insert("rows_loaded".to_string(), table_rows.into_py(py));
-        stats.table_meta.push(meta);
+        stats.table_meta.push(RustMysqlTableMeta {
+            table_sql,
+            path: path.to_string_lossy().to_string(),
+            rows_loaded: table_rows,
+        });
     }
 
     Ok(stats)
@@ -1962,6 +2007,7 @@ fn load_parquet_files_to_mysql(
     options: &Bound<'_, PyDict>,
 ) -> PyResult<PyObject> {
     let table_items = tables.downcast::<PyList>()?;
+    let table_items = parse_rust_mysql_tables(table_items)?;
     let db_config = options
         .get_item("db_config")?
         .ok_or_else(|| PyRuntimeError::new_err("missing db_config for Rust MySQL loader"))?;
@@ -1982,71 +2028,80 @@ fn load_parquet_files_to_mysql(
         .pass(Some(password))
         .db_name(Some(database))
         .tcp_connect_timeout(Some(std::time::Duration::from_secs(connect_timeout_s)));
-    let pool = mysql::Pool::new(opts).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
-    let mut conn = pool
-        .get_conn()
-        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let (stats, load_ms) = py.allow_threads(move || -> PyResult<(RustMysqlLoadStats, u64)> {
+        let pool = mysql::Pool::new(opts).map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let mut conn = pool
+            .get_conn()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
 
-    let t0 = Instant::now();
-    let stats = if use_transaction {
-        let mut tx = conn
-            .start_transaction(mysql::TxOpts::default())
-            .map_err(|e| {
-                PyRuntimeError::new_err(format!(
-                    "failed to start Rust MySQL loader transaction: {e}"
-                ))
-            })?;
-        match load_parquet_tables_with_queryable(py, table_items, batch_size, &mut tx) {
-            Ok(stats) => {
-                tx.commit().map_err(|e| {
+        let t0 = Instant::now();
+        let stats = if use_transaction {
+            let mut tx = conn
+                .start_transaction(mysql::TxOpts::default())
+                .map_err(|e| {
                     PyRuntimeError::new_err(format!(
-                        "failed to commit Rust MySQL loader transaction: {e}"
+                        "failed to start Rust MySQL loader transaction: {e}"
                     ))
                 })?;
-                stats
-            }
-            Err(err) => {
-                let rollback_result = tx.rollback();
-                if let Err(rollback_err) = rollback_result {
-                    return Err(PyRuntimeError::new_err(format!(
+            match load_parquet_tables_with_queryable(&table_items, batch_size, &mut tx) {
+                Ok(stats) => {
+                    tx.commit().map_err(|e| {
+                        PyRuntimeError::new_err(format!(
+                            "failed to commit Rust MySQL loader transaction: {e}"
+                        ))
+                    })?;
+                    stats
+                }
+                Err(err) => {
+                    let rollback_result = tx.rollback();
+                    if let Err(rollback_err) = rollback_result {
+                        return Err(PyRuntimeError::new_err(format!(
                         "{}; additionally failed to rollback Rust MySQL loader transaction: {rollback_err}",
                         err
                     )));
+                    }
+                    return Err(err);
                 }
-                return Err(err);
             }
-        }
-    } else {
-        load_parquet_tables_with_queryable(py, table_items, batch_size, &mut conn)?
-    };
+        } else {
+            load_parquet_tables_with_queryable(&table_items, batch_size, &mut conn)?
+        };
+        Ok((stats, t0.elapsed().as_millis() as u64))
+    })?;
 
     let result = PyDict::new_bound(py);
     result.set_item("ok", true)?;
     result.set_item("files_loaded", stats.files_loaded)?;
     result.set_item("tables_loaded", stats.tables_loaded)?;
     result.set_item("rows_loaded", stats.rows_loaded)?;
-    result.set_item("tables", stats.table_meta)?;
+    let table_meta = PyList::empty_bound(py);
+    for meta in stats.table_meta {
+        let item = PyDict::new_bound(py);
+        item.set_item("table_sql", meta.table_sql)?;
+        item.set_item("path", meta.path)?;
+        item.set_item("rows_loaded", meta.rows_loaded)?;
+        table_meta.append(item)?;
+    }
+    result.set_item("tables", table_meta)?;
     result.set_item("transaction", use_transaction)?;
     let timings = PyDict::new_bound(py);
-    timings.set_item("db.rust_mysql.load", t0.elapsed().as_millis() as u64)?;
+    timings.set_item("db.rust_mysql.load", load_ms)?;
     result.set_item("timings_ms", timings)?;
     Ok(result.into())
 }
 
-#[allow(clippy::useless_conversion)]
-fn persist_indexed_json_values(
-    py: Python<'_>,
+fn persist_indexed_json_values_inner(
     options: Options,
     parquet_root: PathBuf,
     indexed_values: IndexedJsonValues,
     extras: PersistExtras,
     total_start: Instant,
-) -> PyResult<PyObject> {
+) -> PyResult<PersistOutput> {
     let PersistExtras {
         initial_records_failed,
         mut errors,
         error_indices,
-        timings_ms,
+        mut timings_ms,
     } = extras;
     let flatten_start = Instant::now();
     let outs: Vec<RecordOut> = if options.parallel_workers >= 2 && indexed_values.len() >= 2 {
@@ -2100,7 +2155,7 @@ fn persist_indexed_json_values(
 
     let parquet_start = Instant::now();
     let mut id_compaction_state = IdCompactionState::default();
-    let mut table_meta = Vec::<HashMap<String, PyObject>>::new();
+    let mut table_meta = Vec::<TableMeta>::new();
     let mut file_count = 0usize;
     let mut row_count = 0usize;
     for (table, rows) in tables.iter() {
@@ -2126,44 +2181,91 @@ fn persist_indexed_json_values(
         )?;
         file_count += 1;
         row_count += rows_written;
-        let mut meta = HashMap::<String, PyObject>::new();
-        meta.insert("table".to_string(), table.clone().into_py(py));
-        meta.insert(
-            "path".to_string(),
-            path.to_string_lossy().to_string().into_py(py),
-        );
-        meta.insert("columns".to_string(), columns.into_py(py));
-        meta.insert("rows".to_string(), rows_written.into_py(py));
-        table_meta.push(meta);
+        table_meta.push(TableMeta {
+            table: table.clone(),
+            path: path.to_string_lossy().to_string(),
+            columns,
+            rows: rows_written,
+        });
     }
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
+    timings_ms.push(("json.flatten", flatten_ms));
+    timings_ms.push(("json.parquet.persist", parquet_ms));
+    timings_ms.push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
 
+    Ok(PersistOutput {
+        records_ok,
+        records_failed,
+        parquet_files_persisted: file_count,
+        parquet_rows_emitted: row_count,
+        tables: table_meta,
+        errors,
+        error_indices,
+        timings_ms,
+        id_compaction_state: if options.id_compaction.enabled {
+            Some(id_compaction_state)
+        } else {
+            None
+        },
+    })
+}
+
+fn persist_output_to_py(
+    py: Python<'_>,
+    output: PersistOutput,
+    id_compaction_options: &IdCompactionOptions,
+) -> PyResult<PyObject> {
     let result = PyDict::new_bound(py);
     result.set_item("ok", true)?;
     result.set_item("effective_backend", "rust-arrow")?;
-    result.set_item("records_ok", records_ok)?;
-    result.set_item("records_failed", records_failed)?;
-    result.set_item("parquet_files_persisted", file_count)?;
-    result.set_item("parquet_rows_emitted", row_count)?;
-    result.set_item("parquet_tables_written", table_meta.len())?;
-    result.set_item("tables", table_meta)?;
-    result.set_item("errors", errors)?;
-    result.set_item("error_indices", error_indices)?;
+    result.set_item("records_ok", output.records_ok)?;
+    result.set_item("records_failed", output.records_failed)?;
+    result.set_item("parquet_files_persisted", output.parquet_files_persisted)?;
+    result.set_item("parquet_rows_emitted", output.parquet_rows_emitted)?;
+    result.set_item("parquet_tables_written", output.tables.len())?;
+    let table_items = PyList::empty_bound(py);
+    for meta in output.tables {
+        let item = PyDict::new_bound(py);
+        item.set_item("table", meta.table)?;
+        item.set_item("path", meta.path)?;
+        item.set_item("columns", meta.columns)?;
+        item.set_item("rows", meta.rows)?;
+        table_items.append(item)?;
+    }
+    result.set_item("tables", table_items)?;
+    result.set_item("errors", output.errors)?;
+    result.set_item("error_indices", output.error_indices)?;
     let timings = PyDict::new_bound(py);
-    for (key, value) in timings_ms {
+    for (key, value) in output.timings_ms {
         timings.set_item(key, value)?;
     }
-    timings.set_item("json.flatten", flatten_ms)?;
-    timings.set_item("json.parquet.persist", parquet_ms)?;
-    timings.set_item("rust_arrow.total", total_start.elapsed().as_millis() as u64)?;
     result.set_item("timings_ms", timings)?;
-    if options.id_compaction.enabled {
-        result.set_item(
-            "id_compaction",
-            id_compaction_state.to_py(py, &options.id_compaction)?,
-        )?;
+    if let Some(state) = output.id_compaction_state {
+        result.set_item("id_compaction", state.to_py(py, id_compaction_options)?)?;
     }
     Ok(result.into())
+}
+
+#[allow(clippy::useless_conversion)]
+fn persist_indexed_json_values(
+    py: Python<'_>,
+    options: Options,
+    parquet_root: PathBuf,
+    indexed_values: IndexedJsonValues,
+    extras: PersistExtras,
+    total_start: Instant,
+) -> PyResult<PyObject> {
+    let id_compaction_options = options.id_compaction.clone();
+    let output = py.allow_threads(move || {
+        persist_indexed_json_values_inner(
+            options,
+            parquet_root,
+            indexed_values,
+            extras,
+            total_start,
+        )
+    })?;
+    persist_output_to_py(py, output, &id_compaction_options)
 }
 
 #[allow(clippy::useless_conversion)]
