@@ -69,6 +69,8 @@ class TestJsonParallelProfile(unittest.TestCase):
                 "--rust-raw-jsonl-file-parse",
                 "--rust-parallel-table-writes",
                 "--rust-columnar-accumulator",
+                "--rust-parquet-flush-records",
+                "10000",
                 "--id-compaction",
                 "--out",
                 "runs/profile",
@@ -87,6 +89,7 @@ class TestJsonParallelProfile(unittest.TestCase):
         self.assertEqual(args.rust_raw_jsonl_file_parse, True)
         self.assertEqual(args.rust_parallel_table_writes, True)
         self.assertEqual(args.rust_columnar_accumulator, True)
+        self.assertEqual(args.rust_parquet_flush_records, 10000)
         self.assertEqual(args.id_compaction, True)
 
     def test_cli_profile_parallel_invokes_orchestrator(self):
@@ -130,6 +133,8 @@ class TestJsonParallelProfile(unittest.TestCase):
                             "--rust-raw-jsonl-file-parse",
                             "--rust-parallel-table-writes",
                             "--rust-columnar-accumulator",
+                            "--rust-parquet-flush-records",
+                            "10000",
                             "--out",
                             str(Path(td, "out")),
                         ]
@@ -143,6 +148,7 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertEqual(p_profile.call_args.kwargs["rust_raw_jsonl_file_parse"], True)
             self.assertEqual(p_profile.call_args.kwargs["rust_parallel_table_writes"], True)
             self.assertEqual(p_profile.call_args.kwargs["rust_columnar_accumulator"], True)
+            self.assertEqual(p_profile.call_args.kwargs["rust_parquet_flush_records"], 10000)
 
     def test_cli_profile_parallel_rejects_bad_workers(self):
         with tempfile.TemporaryDirectory() as td:

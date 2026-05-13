@@ -108,6 +108,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
                 index_offset=11,
                 parallel_workers=3,
                 chunk_size=99,
+                parquet_flush_records=500,
                 parallel_table_writes=True,
                 columnar_accumulator=True,
                 max_records=123,
@@ -122,6 +123,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
         self.assertEqual(options["parallel_table_writes"], True)
         self.assertEqual(options["columnar_accumulator"], True)
         self.assertEqual(options["chunk_size"], 99)
+        self.assertEqual(options["parquet_flush_records"], 500)
         self.assertEqual(options["max_records"], 123)
 
 

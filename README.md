@@ -134,6 +134,8 @@ Add `--rust-raw-jsonl-file-parse` to also let Rust read plain JSONL/NDJSON sourc
 
 Use `--rust-columnar-accumulator` as a profiled opt-in for Rust parquet runs when you want to avoid materializing full row maps before Arrow arrays are built. Keep it disabled for ID compaction runs until that path has dedicated manifest/accounting support.
 
+For direct Rust JSONL file parsing, combine a small `--chunk-size` with `--rust-parquet-flush-records` to keep parser/flatten batches cache-friendly without writing a parquet file for every micro-batch.
+
 Use `--rust-parallel-table-writes` only as a profiled opt-in; it can lower parquet write time but may increase total runtime on I/O-bound runs.
 
 For an experimental Rust-driven DB load after Rust parquet creation:
@@ -183,7 +185,7 @@ kisti-db-manager json profile-parallel \
   --out runs/profile_parallel_test
 ```
 
-Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` to include Rust-side JSONL decoding and direct file reading in the `rust-arrow` profile runs. Add `--rust-columnar-accumulator` to profile the opt-in columnar Rust accumulator against the default row accumulator.
+Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` to include Rust-side JSONL decoding and direct file reading in the `rust-arrow` profile runs. Add `--rust-columnar-accumulator` to profile the opt-in columnar Rust accumulator against the default row accumulator. Add `--rust-parquet-flush-records` when testing small chunk sizes without keeping thousands of parquet files.
 
 Detailed Rust backend, profile, smoke-test, benchmark, and limitation notes are in [docs/manual/json-rust-backend.md](docs/manual/json-rust-backend.md).
 

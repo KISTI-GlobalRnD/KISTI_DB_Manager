@@ -2621,6 +2621,61 @@ class TestJsonPipeline(unittest.TestCase):
                     table_name,
                 )
 
+    def test_run_json_pipeline_rust_arrow_columnar_flush_records_decouples_output_batches(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "x.jsonl").write_text(
+                "\n".join(json.dumps({"id": i, "items": [{"x": i}], "extra": {"v": i}}) for i in range(1, 5)) + "\n",
+                encoding="utf-8",
+            )
+            out_dir = root / "parquet_out"
+            res = run_json_pipeline(
+                {
+                    "PATH": str(root),
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "base",
+                    "KEY_SEP": "__",
+                    "except_keys": ["extra"],
+                    "persist_parquet_files": True,
+                    "persist_parquet_dir": str(out_dir),
+                    "flatten_backend": "rust-arrow",
+                    "rust_raw_jsonl_parse": True,
+                    "rust_raw_jsonl_file_parse": True,
+                    "rust_columnar_accumulator": True,
+                    "rust_parquet_flush_records": 10,
+                    "parallel_workers": 2,
+                },
+                {"host": "h", "user": "u", "password": "p", "database": "d"},
+                chunk_size=1,
+                create=False,
+                load=False,
+                index=False,
+                optimize=False,
+                continue_on_error=False,
+            )
+
+            self.assertEqual(res.report.artifacts.get("rust_raw_jsonl_file_parse_effective"), True)
+            self.assertEqual(res.report.artifacts.get("rust_columnar_accumulator"), True)
+            self.assertEqual(res.report.artifacts.get("rust_parquet_flush_records"), 10)
+            self.assertEqual(res.report.stats.get("records_ok"), 4)
+            self.assertEqual(res.report.stats.get("parquet_batches_total"), 1)
+            self.assertEqual(len(list((out_dir / "base").glob("*.parquet"))), 1)
+            self.assertEqual(len(list((out_dir / "base__items").glob("*.parquet"))), 1)
+            self.assertEqual(len(list((out_dir / "base__excepted__extra").glob("*.parquet"))), 1)
+            base = self._read_single_parquet_table(pq, out_dir, "base").to_pydict()
+            items = self._read_single_parquet_table(pq, out_dir, "base__items").to_pydict()
+            excepted = self._read_single_parquet_table(pq, out_dir, "base__excepted__extra").to_pydict()
+            self.assertEqual(base["id"], [1, 2, 3, 4])
+            self.assertEqual(items["id"], [1, 2, 3, 4])
+            self.assertEqual(items["items__x"], [1, 2, 3, 4])
+            self.assertEqual(excepted["id"], [1, 2, 3, 4])
+            self.assertEqual(excepted["__line_no__"], [1, 2, 3, 4])
+            self.assertEqual(excepted["__record_index__"], [0, 1, 2, 3])
+            self.assertEqual(excepted["value"], ['{"v":1}', '{"v":2}', '{"v":3}', '{"v":4}'])
+
     def test_run_json_pipeline_rust_arrow_matches_excepted_value_storage(self):
         _pa, pq = self._require_rust_arrow_with_pyarrow()
 

@@ -289,6 +289,8 @@ class TestCLIJson(unittest.TestCase):
                         "--rust-raw-jsonl-file-parse",
                         "--rust-parallel-table-writes",
                         "--rust-columnar-accumulator",
+                        "--rust-parquet-flush-records",
+                        "10000",
                     ]
                 )
 
@@ -298,6 +300,7 @@ class TestCLIJson(unittest.TestCase):
             self.assertEqual(data_cfg["rust_raw_jsonl_file_parse"], True)
             self.assertEqual(data_cfg["rust_parallel_table_writes"], True)
             self.assertEqual(data_cfg["rust_columnar_accumulator"], True)
+            self.assertEqual(data_cfg["rust_parquet_flush_records"], 10000)
 
     def test_json_run_accepts_rust_arrow_with_id_compaction(self):
         with tempfile.TemporaryDirectory() as td:

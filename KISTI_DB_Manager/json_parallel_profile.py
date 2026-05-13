@@ -539,6 +539,7 @@ def _summarize_worker_run(
         "records_ok": _as_int(stats.get("records_ok"), 0),
         "parquet_files_persisted": _as_int(stats.get("parquet_files_persisted"), 0),
         "parquet_rows_emitted": _as_int(stats.get("parquet_rows_emitted"), 0),
+        "parquet_batches_total": _as_int(stats.get("parquet_batches_total"), 0),
         "timings_ms": {
             "io.json_parse": _as_int(timings.get("io.json_parse"), 0),
             "rust_arrow.json_parse": _as_int(timings.get("rust_arrow.json_parse"), 0),
@@ -564,6 +565,7 @@ def _summarize_worker_run(
         "rust_raw_jsonl_file_parse_disabled_reason": artifacts.get("rust_raw_jsonl_file_parse_disabled_reason"),
         "rust_parallel_table_writes": bool(artifacts.get("rust_parallel_table_writes", False)),
         "rust_columnar_accumulator": bool(artifacts.get("rust_columnar_accumulator", False)),
+        "rust_parquet_flush_records": _as_int(artifacts.get("rust_parquet_flush_records"), 0),
         "rust_arrow_failed_batches": _as_int(
             artifacts.get("rust_arrow_failed_batches"),
             _as_int(artifacts.get("flatten_backend_fallback_batches"), 0),
@@ -759,6 +761,7 @@ def _aggregate_worker_attempts(
             "records_ok": 0,
             "parquet_files_persisted": 0,
             "parquet_rows_emitted": 0,
+            "parquet_batches_total": 0,
             "timings_ms": {},
             "issue_count": 0,
             "error_count": 0,
@@ -775,6 +778,7 @@ def _aggregate_worker_attempts(
             "rust_raw_jsonl_file_parse_disabled_reason": None,
             "rust_parallel_table_writes": False,
             "rust_columnar_accumulator": False,
+            "rust_parquet_flush_records": 0,
             "rust_arrow_failed_batches": 0,
             "flatten_backend_fallback_reason": None,
             "flatten_backend_auto_disabled_reason": None,
@@ -903,6 +907,7 @@ def _aggregate_worker_attempts(
         "records_ok": sum(_as_int(item.get("records_ok"), 0) for item in attempt_rows),
         "parquet_files_persisted": sum(_as_int(item.get("parquet_files_persisted"), 0) for item in attempt_rows),
         "parquet_rows_emitted": sum(_as_int(item.get("parquet_rows_emitted"), 0) for item in attempt_rows),
+        "parquet_batches_total": sum(_as_int(item.get("parquet_batches_total"), 0) for item in attempt_rows),
         "timings_ms": timings,
         "issue_count": sum(_as_int(item.get("issue_count"), 0) for item in attempt_rows),
         "error_count": sum(_as_int(item.get("error_count"), 0) for item in attempt_rows),
@@ -927,6 +932,7 @@ def _aggregate_worker_attempts(
         ),
         "rust_parallel_table_writes": any(bool(item.get("rust_parallel_table_writes")) for item in attempt_rows),
         "rust_columnar_accumulator": any(bool(item.get("rust_columnar_accumulator")) for item in attempt_rows),
+        "rust_parquet_flush_records": max(_as_int(item.get("rust_parquet_flush_records"), 0) for item in attempt_rows),
         "rust_arrow_failed_batches": rust_arrow_failed_batches,
         "flatten_backend_fallback_reason": "; ".join(sorted(set(fallback_reasons))) if fallback_reasons else None,
         "flatten_backend_auto_disabled_reason": "; ".join(sorted(set(auto_disabled_reasons))) if auto_disabled_reasons else None,
@@ -979,6 +985,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append(f"- rust_raw_jsonl_file_parse: `{summary.get('rust_raw_jsonl_file_parse')}`")
     lines.append(f"- rust_parallel_table_writes: `{summary.get('rust_parallel_table_writes')}`")
     lines.append(f"- rust_columnar_accumulator: `{summary.get('rust_columnar_accumulator')}`")
+    lines.append(f"- rust_parquet_flush_records: `{summary.get('rust_parquet_flush_records')}`")
     lines.append(f"- repeat: `{summary.get('repeat')}`")
     lines.append(f"- records_per_s_basis: `{summary.get('records_per_s_basis')}`")
     lines.append(f"- recommended_flatten_backend: `{summary.get('recommended_flatten_backend')}`")
@@ -1153,6 +1160,7 @@ def profile_parallel(
     rust_raw_jsonl_file_parse: bool | None = None,
     rust_parallel_table_writes: bool | None = None,
     rust_columnar_accumulator: bool | None = None,
+    rust_parquet_flush_records: int | None = None,
     profile_top: int = 8,
     repeat: int = 1,
     shuffle_order: bool = True,
@@ -1253,6 +1261,12 @@ def profile_parallel(
             else _as_bool(data_config.get("rust_columnar_accumulator", False), default=False)
         )
         data_config["rust_columnar_accumulator"] = bool(columnar_requested and str(flatten_backend) == "rust-arrow")
+        flush_requested = (
+            max(0, int(rust_parquet_flush_records))
+            if rust_parquet_flush_records is not None
+            else _as_int(data_config.get("rust_parquet_flush_records"), 0)
+        )
+        data_config["rust_parquet_flush_records"] = int(flush_requested if str(flatten_backend) == "rust-arrow" else 0)
         data_config["progress_path"] = ""
         data_config["progress_interval_s"] = 0.0
         if chunk_size is not None:
@@ -1279,6 +1293,7 @@ def profile_parallel(
                 "rust_raw_jsonl_file_parse": bool(data_config.get("rust_raw_jsonl_file_parse", False)),
                 "rust_parallel_table_writes": bool(data_config.get("rust_parallel_table_writes", False)),
                 "rust_columnar_accumulator": bool(data_config.get("rust_columnar_accumulator", False)),
+                "rust_parquet_flush_records": int(data_config.get("rust_parquet_flush_records", 0) or 0),
                 "repeat_index": int(repeat_index),
                 "execution_order": int(order),
                 "out_dir": str(out),
@@ -1445,6 +1460,9 @@ def profile_parallel(
         ),
         "rust_columnar_accumulator": (
             bool(_as_bool(rust_columnar_accumulator, default=False)) if rust_columnar_accumulator is not None else None
+        ),
+        "rust_parquet_flush_records": (
+            max(0, int(rust_parquet_flush_records)) if rust_parquet_flush_records is not None else None
         ),
         "repeat": int(repeat_count),
         "shuffle_order": bool(shuffle_order),

@@ -117,6 +117,8 @@ kisti-db-manager json run \
 
 `--rust-columnar-accumulator`는 Rust가 Arrow array를 만들기 전에 전체 row map을 쌓는 비용을 줄이기 위한 opt-in 경로입니다. profile에서 이득이 확인된 parse/parquet-only 실행에만 적용하고, ID compaction 실행은 현재 기본 row accumulator 경로를 유지합니다.
 
+direct Rust JSONL file parsing에서는 작은 `--chunk-size`와 `--rust-parquet-flush-records`를 같이 쓰면 parser/flatten은 작은 단위로 빠르게 처리하면서 parquet 파일은 더 큰 단위로 묶어 쓸 수 있습니다.
+
 `--rust-parallel-table-writes`는 table 단위 parquet write 병렬화를 검증할 때만 켭니다. parquet write 시간은 줄 수 있지만 I/O 경합으로 전체 시간은 늘 수 있으므로 profile 결과를 보고 선택합니다.
 
 Rust MySQL loader는 아직 명시 opt-in입니다. 테이블 생성/스키마 매핑은 Python이 유지하고, Rust가 parquet를 읽어 batch insert합니다.

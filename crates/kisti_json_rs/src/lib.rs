@@ -120,6 +120,12 @@ struct TableMeta {
     rows: usize,
 }
 
+struct ColumnarWriteOutput {
+    table_meta: Vec<TableMeta>,
+    file_count: usize,
+    row_count: usize,
+}
+
 struct PersistOutput {
     records_read: usize,
     bytes_read: usize,
@@ -2101,6 +2107,75 @@ fn write_columnar_table(
     Ok((path, cols, accumulator.rows))
 }
 
+fn write_columnar_tables(
+    options: &Options,
+    parquet_root: &Path,
+    tables: &ColumnarTables,
+) -> PyResult<ColumnarWriteOutput> {
+    let mut table_meta = Vec::<TableMeta>::new();
+    let mut file_count = 0usize;
+    let mut row_count = 0usize;
+    let table_entries: Vec<(&String, &TableAccumulator)> = tables
+        .tables
+        .iter()
+        .filter(|(_, table)| table.rows > 0)
+        .collect();
+
+    if options.parallel_table_writes && options.parallel_workers >= 2 && table_entries.len() >= 2 {
+        let pool = rayon_pool(options.parallel_workers)?;
+        let results: Vec<PyResult<TableMeta>> = pool.install(|| {
+            table_entries
+                .par_iter()
+                .map(|(table, accumulator)| {
+                    let (path, columns, rows_written) = write_columnar_table(
+                        parquet_root,
+                        table,
+                        accumulator,
+                        options.batch_idx,
+                        &options.index_key,
+                    )?;
+                    Ok(TableMeta {
+                        table: (*table).clone(),
+                        path: path.to_string_lossy().to_string(),
+                        columns,
+                        rows: rows_written,
+                    })
+                })
+                .collect()
+        });
+        for result in results {
+            let meta = result?;
+            file_count += 1;
+            row_count += meta.rows;
+            table_meta.push(meta);
+        }
+    } else {
+        for (table, accumulator) in table_entries {
+            let (path, columns, rows_written) = write_columnar_table(
+                parquet_root,
+                table,
+                accumulator,
+                options.batch_idx,
+                &options.index_key,
+            )?;
+            file_count += 1;
+            row_count += rows_written;
+            table_meta.push(TableMeta {
+                table: table.clone(),
+                path: path.to_string_lossy().to_string(),
+                columns,
+                rows: rows_written,
+            });
+        }
+    }
+
+    Ok(ColumnarWriteOutput {
+        table_meta,
+        file_count,
+        row_count,
+    })
+}
+
 fn sql_quote_ident(value: &str) -> String {
     format!("`{}`", value.replace('`', "``"))
 }
@@ -2695,61 +2770,7 @@ fn persist_indexed_json_values_columnar_inner(
     let flatten_ms = flatten_start.elapsed().as_millis() as u64;
 
     let parquet_start = Instant::now();
-    let mut table_meta = Vec::<TableMeta>::new();
-    let mut file_count = 0usize;
-    let mut row_count = 0usize;
-    let table_entries: Vec<(&String, &TableAccumulator)> = tables
-        .tables
-        .iter()
-        .filter(|(_, table)| table.rows > 0)
-        .collect();
-    if options.parallel_table_writes && options.parallel_workers >= 2 && table_entries.len() >= 2 {
-        let pool = rayon_pool(options.parallel_workers)?;
-        let results: Vec<PyResult<TableMeta>> = pool.install(|| {
-            table_entries
-                .par_iter()
-                .map(|(table, accumulator)| {
-                    let (path, columns, rows_written) = write_columnar_table(
-                        &parquet_root,
-                        table,
-                        accumulator,
-                        options.batch_idx,
-                        &options.index_key,
-                    )?;
-                    Ok(TableMeta {
-                        table: (*table).clone(),
-                        path: path.to_string_lossy().to_string(),
-                        columns,
-                        rows: rows_written,
-                    })
-                })
-                .collect()
-        });
-        for result in results {
-            let meta = result?;
-            file_count += 1;
-            row_count += meta.rows;
-            table_meta.push(meta);
-        }
-    } else {
-        for (table, accumulator) in table_entries {
-            let (path, columns, rows_written) = write_columnar_table(
-                &parquet_root,
-                table,
-                accumulator,
-                options.batch_idx,
-                &options.index_key,
-            )?;
-            file_count += 1;
-            row_count += rows_written;
-            table_meta.push(TableMeta {
-                table: table.clone(),
-                path: path.to_string_lossy().to_string(),
-                columns,
-                rows: rows_written,
-            });
-        }
-    }
+    let write_output = write_columnar_tables(&options, &parquet_root, &tables)?;
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
     timings_ms.push(("json.flatten", flatten_ms));
     timings_ms.push(("json.parquet.persist", parquet_ms));
@@ -2762,10 +2783,10 @@ fn persist_indexed_json_values_columnar_inner(
         bytes_read: 0,
         records_ok,
         records_failed,
-        parquet_files_persisted: file_count,
-        parquet_rows_emitted: row_count,
-        parquet_batches_total: usize::from(file_count > 0),
-        tables: table_meta,
+        parquet_files_persisted: write_output.file_count,
+        parquet_rows_emitted: write_output.row_count,
+        parquet_batches_total: usize::from(write_output.file_count > 0),
+        tables: write_output.table_meta,
         errors,
         error_indices,
         error_records: Vec::new(),
@@ -3083,11 +3104,141 @@ fn merge_persist_outputs(target: &mut PersistOutput, output: PersistOutput) {
     }
 }
 
+fn set_timing_ms(timings: &mut Vec<(&'static str, u64)>, key: &'static str, value: u64) {
+    if let Some((_, existing)) = timings.iter_mut().find(|(name, _)| *name == key) {
+        *existing = value;
+    } else {
+        timings.push((key, value));
+    }
+}
+
+struct PendingColumnarJsonl {
+    tables: ColumnarTables,
+    records_ok: usize,
+}
+
+impl PendingColumnarJsonl {
+    fn new() -> Self {
+        Self {
+            tables: ColumnarTables::new(),
+            records_ok: 0,
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.records_ok == 0
+    }
+
+    fn clear(&mut self) {
+        self.tables = ColumnarTables::new();
+        self.records_ok = 0;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_indexed_jsonl_chunk(
+    values: &mut IndexedJsonValues,
+    contexts: &mut Vec<Value>,
+    batch_idx: &mut usize,
+    chunk_start_index: usize,
+    aggregate: &mut PersistOutput,
+    options: &Options,
+    parquet_root: &Path,
+    chunk_size: usize,
+    collect_contexts: bool,
+) -> PyResult<()> {
+    if values.is_empty() {
+        return Ok(());
+    }
+    let mut chunk_options = options.clone();
+    chunk_options.batch_idx = *batch_idx;
+    chunk_options.index_offset = chunk_start_index;
+    chunk_options.record_contexts = if collect_contexts {
+        std::mem::replace(contexts, Vec::with_capacity(chunk_size))
+    } else {
+        Vec::new()
+    };
+    let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
+    let output = persist_indexed_json_values_inner(
+        chunk_options,
+        parquet_root.to_path_buf(),
+        chunk_values,
+        PersistExtras {
+            initial_records_failed: 0,
+            errors: Vec::new(),
+            error_indices: Vec::new(),
+            timings_ms: Vec::new(),
+        },
+        Instant::now(),
+    )?;
+    merge_persist_outputs(aggregate, output);
+    *batch_idx += 1;
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
+fn flush_columnar_jsonl_micro_chunk(
+    values: &mut IndexedJsonValues,
+    contexts: &mut Vec<Value>,
+    chunk_start_index: usize,
+    pending: &mut PendingColumnarJsonl,
+    flatten_ns: &mut u128,
+    options: &Options,
+    chunk_size: usize,
+    collect_contexts: bool,
+) {
+    if values.is_empty() {
+        return;
+    }
+    let mut chunk_options = options.clone();
+    chunk_options.index_offset = chunk_start_index;
+    chunk_options.record_contexts = if collect_contexts {
+        std::mem::replace(contexts, Vec::with_capacity(chunk_size))
+    } else {
+        Vec::new()
+    };
+    let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
+    let flatten_start = Instant::now();
+    let chunk = flatten_columnar_chunk(&chunk_values, &chunk_options);
+    *flatten_ns += flatten_start.elapsed().as_nanos();
+    pending.records_ok += chunk.records_ok;
+    pending.tables.merge_from(chunk.tables);
+}
+
+fn flush_pending_columnar_jsonl(
+    pending: &mut PendingColumnarJsonl,
+    batch_idx: &mut usize,
+    aggregate: &mut PersistOutput,
+    options: &Options,
+    parquet_root: &Path,
+    parquet_ns: &mut u128,
+) -> PyResult<()> {
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let mut write_options = options.clone();
+    write_options.batch_idx = *batch_idx;
+    let parquet_start = Instant::now();
+    let output = write_columnar_tables(&write_options, parquet_root, &pending.tables)?;
+    *parquet_ns += parquet_start.elapsed().as_nanos();
+
+    aggregate.records_ok += pending.records_ok;
+    aggregate.parquet_files_persisted += output.file_count;
+    aggregate.parquet_rows_emitted += output.row_count;
+    aggregate.parquet_batches_total += usize::from(output.file_count > 0);
+    aggregate.tables.extend(output.table_meta);
+
+    pending.clear();
+    *batch_idx += 1;
+    Ok(())
+}
+
 fn persist_jsonl_sources_inner(
     options: Options,
     parquet_root: PathBuf,
     sources: Vec<String>,
     chunk_size: usize,
+    parquet_flush_records: usize,
     max_records: Option<usize>,
     total_start: Instant,
 ) -> PyResult<PersistOutput> {
@@ -3128,42 +3279,10 @@ fn persist_jsonl_sources_inner(
     let mut next_record_index = options.index_offset;
     let mut batch_idx = options.batch_idx;
     let mut parse_ns = 0u128;
-
-    let flush_chunk = |values: &mut IndexedJsonValues,
-                       contexts: &mut Vec<Value>,
-                       batch_idx: &mut usize,
-                       chunk_start_index: usize,
-                       aggregate: &mut PersistOutput,
-                       options: &Options|
-     -> PyResult<()> {
-        if values.is_empty() {
-            return Ok(());
-        }
-        let mut chunk_options = options.clone();
-        chunk_options.batch_idx = *batch_idx;
-        chunk_options.index_offset = chunk_start_index;
-        chunk_options.record_contexts = if collect_contexts {
-            std::mem::replace(contexts, Vec::with_capacity(chunk_size))
-        } else {
-            Vec::new()
-        };
-        let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
-        let output = persist_indexed_json_values_inner(
-            chunk_options,
-            parquet_root.clone(),
-            chunk_values,
-            PersistExtras {
-                initial_records_failed: 0,
-                errors: Vec::new(),
-                error_indices: Vec::new(),
-                timings_ms: Vec::new(),
-            },
-            Instant::now(),
-        )?;
-        merge_persist_outputs(aggregate, output);
-        *batch_idx += 1;
-        Ok(())
-    };
+    let stream_columnar = options.columnar_accumulator && parquet_flush_records > chunk_size;
+    let mut pending_columnar = PendingColumnarJsonl::new();
+    let mut flatten_ns = 0u128;
+    let mut parquet_ns = 0u128;
 
     'sources: for source in sources.iter() {
         let path = PathBuf::from(source);
@@ -3265,44 +3384,96 @@ fn persist_jsonl_sources_inner(
             }
 
             if values.len() >= chunk_size {
-                flush_chunk(
-                    &mut values,
-                    &mut contexts,
-                    &mut batch_idx,
-                    chunk_start_index,
-                    &mut aggregate,
-                    &options,
-                )?;
+                if stream_columnar {
+                    flush_columnar_jsonl_micro_chunk(
+                        &mut values,
+                        &mut contexts,
+                        chunk_start_index,
+                        &mut pending_columnar,
+                        &mut flatten_ns,
+                        &options,
+                        chunk_size,
+                        collect_contexts,
+                    );
+                    if pending_columnar.records_ok >= parquet_flush_records {
+                        flush_pending_columnar_jsonl(
+                            &mut pending_columnar,
+                            &mut batch_idx,
+                            &mut aggregate,
+                            &options,
+                            &parquet_root,
+                            &mut parquet_ns,
+                        )?;
+                    }
+                } else {
+                    flush_indexed_jsonl_chunk(
+                        &mut values,
+                        &mut contexts,
+                        &mut batch_idx,
+                        chunk_start_index,
+                        &mut aggregate,
+                        &options,
+                        &parquet_root,
+                        chunk_size,
+                        collect_contexts,
+                    )?;
+                }
             }
         }
     }
 
-    flush_chunk(
-        &mut values,
-        &mut contexts,
-        &mut batch_idx,
-        chunk_start_index,
-        &mut aggregate,
-        &options,
-    )?;
-    if let Some((_, total_ms)) = aggregate
-        .timings_ms
-        .iter_mut()
-        .find(|(name, _)| *name == "rust_arrow.total")
-    {
-        *total_ms = total_start.elapsed().as_millis() as u64;
+    if stream_columnar {
+        flush_columnar_jsonl_micro_chunk(
+            &mut values,
+            &mut contexts,
+            chunk_start_index,
+            &mut pending_columnar,
+            &mut flatten_ns,
+            &options,
+            chunk_size,
+            collect_contexts,
+        );
+        flush_pending_columnar_jsonl(
+            &mut pending_columnar,
+            &mut batch_idx,
+            &mut aggregate,
+            &options,
+            &parquet_root,
+            &mut parquet_ns,
+        )?;
+        set_timing_ms(
+            &mut aggregate.timings_ms,
+            "json.flatten",
+            (flatten_ns / 1_000_000) as u64,
+        );
+        set_timing_ms(
+            &mut aggregate.timings_ms,
+            "json.parquet.persist",
+            (parquet_ns / 1_000_000) as u64,
+        );
     } else {
-        aggregate
-            .timings_ms
-            .push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
+        flush_indexed_jsonl_chunk(
+            &mut values,
+            &mut contexts,
+            &mut batch_idx,
+            chunk_start_index,
+            &mut aggregate,
+            &options,
+            &parquet_root,
+            chunk_size,
+            collect_contexts,
+        )?;
     }
-    if let Some((_, parse_ms)) = aggregate
-        .timings_ms
-        .iter_mut()
-        .find(|(name, _)| *name == "rust_arrow.json_parse")
-    {
-        *parse_ms = (parse_ns / 1_000_000) as u64;
-    }
+    set_timing_ms(
+        &mut aggregate.timings_ms,
+        "rust_arrow.total",
+        total_start.elapsed().as_millis() as u64,
+    );
+    set_timing_ms(
+        &mut aggregate.timings_ms,
+        "rust_arrow.json_parse",
+        (parse_ns / 1_000_000) as u64,
+    );
     Ok(aggregate)
 }
 
@@ -3407,6 +3578,10 @@ fn persist_jsonl_sources(
 ) -> PyResult<PyObject> {
     let total_start = Instant::now();
     let chunk_size = get_usize_option(options, "chunk_size", 1000)?.max(1);
+    let parquet_flush_records = match get_usize_option(options, "parquet_flush_records", 0)? {
+        0 => chunk_size,
+        value => value.max(chunk_size),
+    };
     let max_records = match options.get_item("max_records")? {
         Some(value) if !value.is_none() => Some(value.extract::<usize>()?),
         _ => None,
@@ -3425,6 +3600,7 @@ fn persist_jsonl_sources(
             parquet_root,
             source_paths,
             chunk_size,
+            parquet_flush_records,
             max_records,
             total_start,
         )

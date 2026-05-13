@@ -68,6 +68,8 @@ For the narrowest fast path, add `--rust-raw-jsonl-file-parse` as well. That kee
 
 `--rust-columnar-accumulator` is an opt-in Rust parquet path that accumulates column data directly instead of materializing full row maps before Arrow arrays are built. It is intended for profile-driven optimization of parse/parquet-only `rust-arrow` runs. Keep it disabled for ID compaction runs; the current ID compaction path still uses the mature row accumulator so manifest and compaction accounting stay unchanged.
 
+For direct Rust JSONL file parsing, `--rust-parquet-flush-records N` decouples the parser/flatten micro-batch size from parquet output batch size. For example, `--chunk-size 500 --rust-parquet-flush-records 10000` keeps the small-cache-friendly flatten path but writes far fewer parquet files than flushing every 500 records. The option only affects the direct Rust JSONL file path; `0` or omission keeps the legacy `chunk_size` flush behavior.
+
 For backend comparison:
 
 ```bash
@@ -85,6 +87,7 @@ kisti-db-manager json profile-parallel \
 Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser and direct file reader fast paths.
 Add `--rust-parallel-table-writes` only when you want to test table-level parquet write parallelism explicitly.
 Add `--rust-columnar-accumulator` to compare the opt-in columnar Rust accumulator against the existing row accumulator before using it in a real run.
+Add `--rust-parquet-flush-records` when profiling small `--chunk-size` values so the speed benefit does not imply thousands of parquet files.
 It also writes:
 
 - `parallel_profile.json`

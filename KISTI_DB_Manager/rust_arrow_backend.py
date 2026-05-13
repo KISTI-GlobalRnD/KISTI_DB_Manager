@@ -248,6 +248,7 @@ def persist_jsonl_sources_to_parquet(
     index_offset: int,
     parallel_workers: int,
     chunk_size: int,
+    parquet_flush_records: int | None = None,
     parallel_table_writes: bool = False,
     columnar_accumulator: bool = False,
     max_records: int | None = None,
@@ -273,6 +274,8 @@ def persist_jsonl_sources_to_parquet(
         id_compaction=id_compaction,
     )
     options["chunk_size"] = int(chunk_size or 1000)
+    if parquet_flush_records is not None:
+        options["parquet_flush_records"] = int(parquet_flush_records or 0)
     if max_records is not None:
         options["max_records"] = int(max_records)
     result = persist_fn([str(Path(source)) for source in sources], options)

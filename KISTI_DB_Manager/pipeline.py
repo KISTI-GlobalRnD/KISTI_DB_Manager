@@ -1130,6 +1130,10 @@ def run_json_pipeline(
     report.set_artifact("rust_parallel_table_writes", bool(rust_parallel_table_writes))
     rust_columnar_accumulator = _coerce_bool(dc.get("rust_columnar_accumulator", False), default=False)
     report.set_artifact("rust_columnar_accumulator", bool(rust_columnar_accumulator))
+    rust_parquet_flush_records = int(dc.get("rust_parquet_flush_records", 0) or 0)
+    if rust_parquet_flush_records < 0:
+        rust_parquet_flush_records = 0
+    report.set_artifact("rust_parquet_flush_records", int(rust_parquet_flush_records))
     persist_parquet_files = _coerce_bool(dc.get("persist_parquet_files", True), default=True)
     persist_parquet_dir = str(dc.get("persist_parquet_dir", "") or "").strip()
     if persist_parquet_files and not persist_parquet_dir:
@@ -4494,6 +4498,7 @@ def run_json_pipeline(
                         parallel_table_writes=bool(rust_parallel_table_writes),
                         columnar_accumulator=bool(rust_columnar_accumulator),
                         chunk_size=int(chunk_size),
+                        parquet_flush_records=int(rust_parquet_flush_records or 0),
                         max_records=max_records,
                         id_compaction=None,
                     )
