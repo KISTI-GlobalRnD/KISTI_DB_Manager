@@ -406,13 +406,15 @@ fn json_dumps_python_spacing(value: &Value) -> String {
     }
 }
 
-fn scalar_to_string(value: &Value) -> Option<String> {
+fn append_large_utf8_value(builder: &mut LargeStringBuilder, value: Option<&Value>) {
     match value {
-        Value::Null => None,
-        Value::Bool(v) => Some(if *v { "true" } else { "false" }.to_string()),
-        Value::Number(v) => Some(v.to_string()),
-        Value::String(v) => Some(v.clone()),
-        Value::Array(_) | Value::Object(_) => Some(json_dumps_python_spacing(value)),
+        Some(Value::Null) | None => builder.append_null(),
+        Some(Value::Bool(v)) => builder.append_value(if *v { "true" } else { "false" }),
+        Some(Value::Number(v)) => builder.append_value(v.to_string()),
+        Some(Value::String(v)) => builder.append_value(v),
+        Some(v @ (Value::Array(_) | Value::Object(_))) => {
+            builder.append_value(json_dumps_python_spacing(v))
+        }
     }
 }
 
@@ -1499,7 +1501,7 @@ fn write_table(
             .unwrap_or(ColumnKind::LargeUtf8)
         {
             ColumnKind::Bool => {
-                let mut builder = BooleanBuilder::new();
+                let mut builder = BooleanBuilder::with_capacity(rows.len());
                 for row in rows {
                     match row.get(col) {
                         Some(Value::Bool(value)) => builder.append_value(*value),
@@ -1509,7 +1511,7 @@ fn write_table(
                 arrays.push(Arc::new(builder.finish()) as ArrayRef);
             }
             ColumnKind::Int64 => {
-                let mut builder = Int64Builder::new();
+                let mut builder = Int64Builder::with_capacity(rows.len());
                 for row in rows {
                     match row.get(col).and_then(value_as_i64) {
                         Some(value) => builder.append_value(value),
@@ -1519,7 +1521,7 @@ fn write_table(
                 arrays.push(Arc::new(builder.finish()) as ArrayRef);
             }
             ColumnKind::Float64 => {
-                let mut builder = Float64Builder::new();
+                let mut builder = Float64Builder::with_capacity(rows.len());
                 for row in rows {
                     match row.get(col).and_then(|v| match v {
                         Value::Number(n) => n.as_f64(),
@@ -1532,12 +1534,9 @@ fn write_table(
                 arrays.push(Arc::new(builder.finish()) as ArrayRef);
             }
             ColumnKind::LargeUtf8 => {
-                let mut builder = LargeStringBuilder::new();
+                let mut builder = LargeStringBuilder::with_capacity(rows.len(), 0);
                 for row in rows {
-                    match row.get(col).and_then(scalar_to_string) {
-                        Some(value) => builder.append_value(value),
-                        None => builder.append_null(),
-                    }
+                    append_large_utf8_value(&mut builder, row.get(col));
                 }
                 arrays.push(Arc::new(builder.finish()) as ArrayRef);
             }
