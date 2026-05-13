@@ -136,7 +136,7 @@ Use `--rust-columnar-accumulator` as a profiled opt-in for Rust parquet runs whe
 
 For direct Rust JSONL file parsing, combine a small `--chunk-size` with `--rust-parquet-flush-records` to keep parser/flatten batches cache-friendly without writing a parquet file for every micro-batch.
 
-Rust reports include detailed timing keys such as `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, and `rust_arrow.py_result_convert` so profile runs can separate parser, flatten, Arrow build, parquet output, and Python result conversion bottlenecks.
+Rust reports include detailed timing keys such as `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms` so profile runs can separate parser, flatten, Arrow build, parquet output, Python result conversion, and remaining unattributed overhead.
 
 Use `--rust-parallel-table-writes` only as a profiled opt-in; it can lower parquet write time but may increase total runtime on I/O-bound runs.
 

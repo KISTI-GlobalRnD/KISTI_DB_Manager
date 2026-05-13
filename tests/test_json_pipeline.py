@@ -2311,7 +2311,7 @@ class TestJsonPipeline(unittest.TestCase):
                         "rust_arrow.arrow_build": 5,
                         "rust_arrow.parquet_write": 6,
                         "rust_arrow.py_result_convert": 7,
-                        "rust_arrow.total": 9,
+                        "rust_arrow.total": 50,
                     },
                 }
 
@@ -2339,7 +2339,8 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(res.report.timings_ms.get("rust_arrow.arrow_build"), 5)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.parquet_write"), 6)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.py_result_convert"), 7)
-            self.assertEqual(res.report.timings_ms.get("rust_arrow.total"), 9)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.total"), 50)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.unaccounted_ms"), 17)
             self.assertIn("base", res.name_maps)
 
     def test_run_json_pipeline_rust_arrow_feeds_existing_db_path_from_parquet(self):

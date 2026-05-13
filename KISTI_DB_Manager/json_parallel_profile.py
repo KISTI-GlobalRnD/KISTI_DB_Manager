@@ -13,6 +13,17 @@ from typing import Any, Mapping, Sequence
 
 
 DEFAULT_WORKERS = (0, 2, 4, 8)
+_RUST_ARROW_UNACCOUNTED_DETAIL_KEYS = (
+    "rust_arrow.read_line",
+    "rust_arrow.json_parse",
+    "rust_arrow.number_validate",
+    "json.flatten",
+    "rust_arrow.columnar_merge",
+    "json.parquet.persist",
+    "rust_arrow.arrow_build",
+    "rust_arrow.parquet_write",
+    "rust_arrow.py_result_convert",
+)
 
 
 def _utc_now_iso() -> str:
@@ -54,6 +65,14 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     if text in {"0", "false", "f", "no", "n", "off", ""}:
         return False
     return bool(default)
+
+
+def _rust_arrow_unaccounted_ms(timings: Mapping[str, Any]) -> int:
+    total_ms = _as_int(timings.get("rust_arrow.total"), 0)
+    if total_ms <= 0:
+        return 0
+    measured_ms = sum(_as_int(timings.get(key), 0) for key in _RUST_ARROW_UNACCOUNTED_DETAIL_KEYS)
+    return max(0, int(total_ms) - int(measured_ms))
 
 
 def _median(values: Sequence[float]) -> float | None:
@@ -553,6 +572,7 @@ def _summarize_worker_run(
             "rust_arrow.parquet_write": _as_int(timings.get("rust_arrow.parquet_write"), 0),
             "rust_arrow.py_result_convert": _as_int(timings.get("rust_arrow.py_result_convert"), 0),
             "rust_arrow.total": _as_int(timings.get("rust_arrow.total"), 0),
+            "rust_arrow.unaccounted_ms": _rust_arrow_unaccounted_ms(timings),
         },
         "issue_count": int(counts["issue_count"]),
         "error_count": int(counts["error_count"]),
@@ -856,6 +876,7 @@ def _aggregate_worker_attempts(
         "rust_arrow.parquet_write",
         "rust_arrow.py_result_convert",
         "rust_arrow.total",
+        "rust_arrow.unaccounted_ms",
     )
     timings: dict[str, int] = {}
     for key in timing_keys:
@@ -1011,11 +1032,11 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
         "io.json_parse_ms | rust_arrow.read_line_ms | rust_arrow.json_parse_ms | rust_arrow.number_validate_ms | "
         "rust_arrow.py_to_json_ms | json.flatten_ms | rust_arrow.columnar_merge_ms | "
         "json.parquet.persist_ms | rust_arrow.arrow_build_ms | rust_arrow.parquet_write_ms | "
-        "rust_arrow.py_result_convert_ms | rust_arrow.total_ms | "
+        "rust_arrow.py_result_convert_ms | rust_arrow.total_ms | rust_arrow.unaccounted_ms | "
         "issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
     lines.append(
-        "|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+        "|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
     )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
@@ -1049,6 +1070,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
             f"{_as_int(timings.get('rust_arrow.parquet_write'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.py_result_convert'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.total'), 0)} | "
+            f"{_as_int(timings.get('rust_arrow.unaccounted_ms'), 0)} | "
             f"{_as_int(row.get('issue_count'), 0)} | "
             f"{_as_int(row.get('error_count'), 0)} | "
             f"{_as_int(row.get('warning_count'), 0)} | "

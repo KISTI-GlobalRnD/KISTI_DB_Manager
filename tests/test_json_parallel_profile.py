@@ -404,7 +404,10 @@ class TestJsonParallelProfile(unittest.TestCase):
             saved = json.loads(Path(out_dir, "parallel_profile.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["runs"][0]["timings_ms"]["json.parquet.persist"], 50)
             self.assertEqual(saved["runs"][0]["timings_ms"]["rust_arrow.py_to_json"], 25)
-            self.assertIn("rust_arrow.py_to_json_ms", Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8"))
+            self.assertEqual(saved["runs"][0]["timings_ms"]["rust_arrow.unaccounted_ms"], 450)
+            md = Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8")
+            self.assertIn("rust_arrow.py_to_json_ms", md)
+            self.assertIn("rust_arrow.unaccounted_ms", md)
 
     def test_profile_parallel_compares_flatten_backends(self):
         with tempfile.TemporaryDirectory() as td:
@@ -1012,6 +1015,7 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertEqual(row["timings_ms"]["rust_arrow.parquet_write"], 9)
             self.assertEqual(row["timings_ms"]["rust_arrow.py_result_convert"], 11)
             self.assertEqual(row["timings_ms"]["rust_arrow.total"], 60)
+            self.assertEqual(row["timings_ms"]["rust_arrow.unaccounted_ms"], 0)
 
     def test_profile_parallel_id_compaction_requires_contract_flags_and_cleanup(self):
         with tempfile.TemporaryDirectory() as td:

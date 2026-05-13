@@ -97,6 +97,43 @@ struct Options {
     id_compaction: IdCompactionOptions,
 }
 
+#[derive(Default)]
+struct NameCache {
+    sub_tables: HashMap<String, String>,
+    excepted_tables: HashMap<String, String>,
+    prefixed_cols: HashMap<(String, String), String>,
+}
+
+impl NameCache {
+    fn new() -> Self {
+        Self::default()
+    }
+
+    fn table_for_sub(&mut self, options: &Options, sub_key: &str) -> String {
+        self.sub_tables
+            .entry(sub_key.to_string())
+            .or_insert_with(|| table_for_sub(options, sub_key))
+            .clone()
+    }
+
+    fn table_for_excepted(&mut self, options: &Options, ex_key: &str) -> String {
+        self.excepted_tables
+            .entry(ex_key.to_string())
+            .or_insert_with(|| table_for_excepted(options, ex_key))
+            .clone()
+    }
+
+    fn prefixed_col(&mut self, list_key: &str, col: &str, sep: &str) -> String {
+        if col == list_key {
+            return col.to_string();
+        }
+        self.prefixed_cols
+            .entry((list_key.to_string(), col.to_string()))
+            .or_insert_with(|| prefixed_col(list_key, col, sep))
+            .clone()
+    }
+}
+
 #[derive(Clone)]
 struct RecordOut {
     ok: bool,
@@ -598,6 +635,7 @@ fn process_value_list(
     values: &[Value],
     id_value: &Value,
     options: &Options,
+    name_cache: &mut NameCache,
     sub_rows: &mut TableRows,
 ) {
     if values.is_empty() {
@@ -624,14 +662,17 @@ fn process_value_list(
                 for (col, value) in
                     flatten_dict_keep_lists(item, &options.except_keys, &options.sep)
                 {
-                    row.insert(prefixed_col(list_key, &col, &options.sep), value);
+                    row.insert(name_cache.prefixed_col(list_key, &col, &options.sep), value);
                 }
             } else {
                 for (col, value) in map.iter() {
                     if options.except_keys.contains(col) {
                         continue;
                     }
-                    row.insert(prefixed_col(list_key, col, &options.sep), value.clone());
+                    row.insert(
+                        name_cache.prefixed_col(list_key, col, &options.sep),
+                        value.clone(),
+                    );
                 }
             }
             rows.push(row);
@@ -774,12 +815,13 @@ fn process_value_list_columnar(
     values: &[Value],
     id_value: &Value,
     options: &Options,
+    name_cache: &mut NameCache,
     tables: &mut ColumnarTables,
 ) {
     if values.is_empty() {
         return;
     }
-    let table = table_for_sub(options, list_key);
+    let table = name_cache.table_for_sub(options, list_key);
     if matches!(values.first(), Some(Value::Object(_))) {
         for item in values {
             let Value::Object(map) = item else {
@@ -801,7 +843,7 @@ fn process_value_list_columnar(
                     flatten_dict_keep_lists(item, &options.except_keys, &options.sep)
                 {
                     row.insert(
-                        prefixed_col(list_key, &col, &options.sep),
+                        name_cache.prefixed_col(list_key, &col, &options.sep),
                         cell_from_value(&value),
                     );
                 }
@@ -811,7 +853,7 @@ fn process_value_list_columnar(
                         continue;
                     }
                     row.insert(
-                        prefixed_col(list_key, col, &options.sep),
+                        name_cache.prefixed_col(list_key, col, &options.sep),
                         cell_from_value(value),
                     );
                 }
@@ -833,6 +875,7 @@ fn flatten_record_columnar(
     record_index: usize,
     context: Option<&Value>,
     options: &Options,
+    name_cache: &mut NameCache,
     tables: &mut ColumnarTables,
 ) {
     let id_value = match record {
@@ -860,9 +903,9 @@ fn flatten_record_columnar(
                 }
                 match v {
                     Value::Object(_) => stack.push((v, format!("{full_key}{}", options.sep))),
-                    Value::Array(items) => {
-                        process_value_list_columnar(&full_key, items, &id_value, options, tables)
-                    }
+                    Value::Array(items) => process_value_list_columnar(
+                        &full_key, items, &id_value, options, name_cache, tables,
+                    ),
                     _ => {
                         single.insert(full_key, cell_from_value(v));
                     }
@@ -888,7 +931,7 @@ fn flatten_record_columnar(
 
     tables.push_row(options.base_table.clone(), single);
     for (key, value) in excepted_values {
-        let table = table_for_excepted(options, &key);
+        let table = name_cache.table_for_excepted(options, &key);
         tables.push_row(
             table,
             build_excepted_cell_row(&key, value, &id_value, context, options),
@@ -901,6 +944,7 @@ fn flatten_record(
     record_index: usize,
     context: Option<&Value>,
     options: &Options,
+    name_cache: &mut NameCache,
 ) -> RecordOut {
     let id_value = match record {
         Value::Object(map) if !options.except_keys.contains(&options.index_key) => {
@@ -928,9 +972,14 @@ fn flatten_record(
                 }
                 match v {
                     Value::Object(_) => stack.push((v, format!("{full_key}{}", options.sep))),
-                    Value::Array(items) => {
-                        process_value_list(&full_key, items, &id_value, options, &mut sub_rows)
-                    }
+                    Value::Array(items) => process_value_list(
+                        &full_key,
+                        items,
+                        &id_value,
+                        options,
+                        name_cache,
+                        &mut sub_rows,
+                    ),
                     _ => {
                         single.insert(full_key, v.clone());
                     }
@@ -956,7 +1005,7 @@ fn flatten_record(
 
     let mut excepted = TableRows::new();
     for (key, value) in excepted_values.iter() {
-        let table = table_for_excepted(options, key);
+        let table = name_cache.table_for_excepted(options, key);
         excepted
             .entry(table)
             .or_default()
@@ -2773,13 +2822,14 @@ struct ColumnarChunkOut {
 fn flatten_columnar_chunk_into(
     chunk: &[(usize, Value)],
     options: &Options,
+    name_cache: &mut NameCache,
     tables: &mut ColumnarTables,
 ) -> usize {
     let mut records_ok = 0usize;
     for (local_i, record) in chunk {
         let global_i = options.index_offset + *local_i;
         let ctx = options.record_contexts.get(*local_i);
-        flatten_record_columnar(record, global_i, ctx, options, tables);
+        flatten_record_columnar(record, global_i, ctx, options, name_cache, tables);
         records_ok += 1;
     }
     records_ok
@@ -2787,7 +2837,8 @@ fn flatten_columnar_chunk_into(
 
 fn flatten_columnar_chunk(chunk: &[(usize, Value)], options: &Options) -> ColumnarChunkOut {
     let mut tables = ColumnarTables::new();
-    let records_ok = flatten_columnar_chunk_into(chunk, options, &mut tables);
+    let mut name_cache = NameCache::new();
+    let records_ok = flatten_columnar_chunk_into(chunk, options, &mut name_cache, &mut tables);
     ColumnarChunkOut { tables, records_ok }
 }
 
@@ -2832,7 +2883,9 @@ fn persist_indexed_json_values_columnar_inner(
         count
     } else {
         let flatten_start = Instant::now();
-        let count = flatten_columnar_chunk_into(&indexed_values, &options, &mut tables);
+        let mut name_cache = NameCache::new();
+        let count =
+            flatten_columnar_chunk_into(&indexed_values, &options, &mut name_cache, &mut tables);
         flatten_ns += flatten_start.elapsed().as_nanos();
         count
     };
@@ -2908,23 +2961,26 @@ fn persist_indexed_json_values_inner(
                 .map(|(local_i, record)| {
                     let global_i = options.index_offset + *local_i;
                     let ctx = options.record_contexts.get(*local_i);
-                    flatten_record(record, global_i, ctx, &options)
+                    let mut name_cache = NameCache::new();
+                    flatten_record(record, global_i, ctx, &options, &mut name_cache)
                 })
                 .collect()
         })
     } else {
+        let mut name_cache = NameCache::new();
         indexed_values
             .iter()
             .map(|(local_i, record)| {
                 let global_i = options.index_offset + *local_i;
                 let ctx = options.record_contexts.get(*local_i);
-                flatten_record(record, global_i, ctx, &options)
+                flatten_record(record, global_i, ctx, &options, &mut name_cache)
             })
             .collect()
     };
     let flatten_ms = flatten_start.elapsed().as_millis() as u64;
 
     let mut tables: TableRows = BTreeMap::new();
+    let mut name_cache = NameCache::new();
     let mut records_ok = 0usize;
     let mut records_failed = initial_records_failed;
     for out in outs {
@@ -2935,7 +2991,7 @@ fn persist_indexed_json_values_inner(
                 .or_default()
                 .push(out.main);
             for (sub_key, rows) in out.subs {
-                let table = table_for_sub(&options, &sub_key);
+                let table = name_cache.table_for_sub(&options, &sub_key);
                 tables.entry(table).or_default().extend(rows);
             }
             for (table, rows) in out.excepted {
@@ -3222,6 +3278,7 @@ fn set_timing_ms(timings: &mut Vec<(&'static str, u64)>, key: &'static str, valu
 
 struct PendingColumnarJsonl {
     tables: ColumnarTables,
+    name_cache: NameCache,
     records_ok: usize,
 }
 
@@ -3229,6 +3286,7 @@ impl PendingColumnarJsonl {
     fn new() -> Self {
         Self {
             tables: ColumnarTables::new(),
+            name_cache: NameCache::new(),
             records_ok: 0,
         }
     }
@@ -3307,8 +3365,12 @@ fn flush_columnar_jsonl_micro_chunk(
     };
     let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
     let flatten_start = Instant::now();
-    let records_ok =
-        flatten_columnar_chunk_into(&chunk_values, &chunk_options, &mut pending.tables);
+    let records_ok = flatten_columnar_chunk_into(
+        &chunk_values,
+        &chunk_options,
+        &mut pending.name_cache,
+        &mut pending.tables,
+    );
     *flatten_ns += flatten_start.elapsed().as_nanos();
     pending.records_ok += records_ok;
 }

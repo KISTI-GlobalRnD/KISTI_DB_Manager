@@ -93,6 +93,32 @@ _RUST_ARROW_DETAIL_TIMING_KEYS = (
     "rust_arrow.parquet_write",
     "rust_arrow.py_result_convert",
 )
+_RUST_ARROW_UNACCOUNTED_DETAIL_KEYS = (
+    "rust_arrow.read_line",
+    "rust_arrow.json_parse",
+    "rust_arrow.number_validate",
+    "json.flatten",
+    "rust_arrow.columnar_merge",
+    "json.parquet.persist",
+    "rust_arrow.arrow_build",
+    "rust_arrow.parquet_write",
+    "rust_arrow.py_result_convert",
+)
+
+
+def _timing_ms(timings: Mapping[str, Any], key: str) -> int:
+    try:
+        return int(timings.get(key, 0) or 0)
+    except Exception:
+        return 0
+
+
+def _rust_arrow_unaccounted_ms(timings: Mapping[str, Any]) -> int:
+    total_ms = _timing_ms(timings, "rust_arrow.total")
+    if total_ms <= 0:
+        return 0
+    measured_ms = sum(_timing_ms(timings, key) for key in _RUST_ARROW_UNACCOUNTED_DETAIL_KEYS)
+    return max(0, int(total_ms) - int(measured_ms))
 
 
 def _json_loads_factory():
@@ -3929,6 +3955,9 @@ def run_json_pipeline(
                             detail_ms = int(timings.get(timing_key, 0) or 0)
                             if detail_ms > 0:
                                 report.add_time_ms(timing_key, detail_ms)
+                        rust_unaccounted_ms = _rust_arrow_unaccounted_ms(timings)
+                        if rust_unaccounted_ms > 0:
+                            report.add_time_ms("rust_arrow.unaccounted_ms", rust_unaccounted_ms)
                         if id_compactor.enabled:
                             id_compactor.merge_summary(rust_result.get("id_compaction"))
                             report.set_artifact("id_compaction", id_compactor.summary())
@@ -4544,6 +4573,9 @@ def run_json_pipeline(
                         detail_ms = int(timings.get(timing_key, 0) or 0)
                         if detail_ms > 0:
                             report.add_time_ms(timing_key, detail_ms)
+                    rust_unaccounted_ms = _rust_arrow_unaccounted_ms(timings)
+                    if rust_unaccounted_ms > 0:
+                        report.add_time_ms("rust_arrow.unaccounted_ms", rust_unaccounted_ms)
                     records_read = int(rust_result.get("records_read") or 0)
                     bytes_read = int(rust_result.get("bytes_read") or 0)
                     records_ok = int(rust_result.get("records_ok") or 0)

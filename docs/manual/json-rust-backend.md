@@ -62,7 +62,7 @@ kisti-db-manager json run \
 
 This path is opt-in and intentionally narrow. It requires `flatten_backend=rust-arrow`, `persist_parquet_files=true`, no DB/create/index/optimize stages, no `records_key`, and plain `.jsonl`/`.ndjson` input. Reports include `rust_raw_jsonl_parse_effective` and the Rust parser timing key `rust_arrow.json_parse` when measurable.
 
-Rust run reports also expose lower-level timing keys when measurable: `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.columnar_merge`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, and `rust_arrow.py_result_convert`. Use these with `json.flatten`, `json.parquet.persist`, and `rust_arrow.total` to identify whether the next bottleneck is source reading, JSON decoding, flattening, Arrow array construction, parquet output, or Python result conversion.
+Rust run reports also expose lower-level timing keys when measurable: `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.columnar_merge`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms`. Use these with `json.flatten`, `json.parquet.persist`, and `rust_arrow.total` to identify whether the next bottleneck is source reading, JSON decoding, flattening, Arrow array construction, parquet output, Python result conversion, or remaining unattributed overhead.
 
 For the narrowest fast path, add `--rust-raw-jsonl-file-parse` as well. That keeps the same parse/parquet-only constraints and bypasses Python's line-reading loop. It currently falls back to the batch raw parser when ID compaction is enabled.
 
