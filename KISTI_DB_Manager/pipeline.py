@@ -85,6 +85,14 @@ _LONG_JSON_INTEGER_RE = re.compile(
 _LONG_JSON_INTEGER_RE_BYTES = re.compile(
     rb"(?:(?:^|[\[\{,:])\s*)(?:-\d{19,}|\d{20,})(?=\s*(?:[,}\]]|$)|[.eE])"
 )
+_RUST_ARROW_DETAIL_TIMING_KEYS = (
+    "rust_arrow.read_line",
+    "rust_arrow.number_validate",
+    "rust_arrow.columnar_merge",
+    "rust_arrow.arrow_build",
+    "rust_arrow.parquet_write",
+    "rust_arrow.py_result_convert",
+)
 
 
 def _json_loads_factory():
@@ -3917,6 +3925,10 @@ def run_json_pipeline(
                             report.add_time_ms("json.parquet.persist", parquet_ms)
                         if rust_total_ms > 0:
                             report.add_time_ms("rust_arrow.total", rust_total_ms)
+                        for timing_key in _RUST_ARROW_DETAIL_TIMING_KEYS:
+                            detail_ms = int(timings.get(timing_key, 0) or 0)
+                            if detail_ms > 0:
+                                report.add_time_ms(timing_key, detail_ms)
                         if id_compactor.enabled:
                             id_compactor.merge_summary(rust_result.get("id_compaction"))
                             report.set_artifact("id_compaction", id_compactor.summary())
@@ -4528,6 +4540,10 @@ def run_json_pipeline(
                         report.add_time_ms("json.parquet.persist", parquet_ms)
                     if rust_total_ms > 0:
                         report.add_time_ms("rust_arrow.total", rust_total_ms)
+                    for timing_key in _RUST_ARROW_DETAIL_TIMING_KEYS:
+                        detail_ms = int(timings.get(timing_key, 0) or 0)
+                        if detail_ms > 0:
+                            report.add_time_ms(timing_key, detail_ms)
                     records_read = int(rust_result.get("records_read") or 0)
                     bytes_read = int(rust_result.get("bytes_read") or 0)
                     records_ok = int(rust_result.get("records_ok") or 0)
@@ -4731,22 +4747,52 @@ def run_json_pipeline(
             if rust_json_parse_ms > 0:
                 tp["rust_arrow.json_parse.records_per_s"] = per_s(records_read, rust_json_parse_ms)
 
+            rust_read_line_ms = int(report.timings_ms.get("rust_arrow.read_line", 0) or 0)
+            if rust_read_line_ms > 0:
+                tp["rust_arrow.read_line.records_per_s"] = per_s(records_read, rust_read_line_ms)
+                if bytes_read > 0:
+                    tp["rust_arrow.read_line.mb_per_s"] = (float(bytes_read) / (1024.0 * 1024.0)) / (
+                        float(rust_read_line_ms) / 1000.0
+                    )
+
+            rust_number_validate_ms = int(report.timings_ms.get("rust_arrow.number_validate", 0) or 0)
+            if rust_number_validate_ms > 0:
+                tp["rust_arrow.number_validate.records_per_s"] = per_s(records_ok or records_read, rust_number_validate_ms)
+
             flatten_ms = int(report.timings_ms.get("json.flatten", 0) or 0)
             if flatten_ms > 0:
                 tp["json.flatten.records_per_s"] = per_s(records_ok or records_read, flatten_ms)
 
-            parquet_persist_ms = int(report.timings_ms.get("json.parquet.persist", 0) or 0)
             parquet_files_persisted = int(report.stats.get("parquet_files_persisted", 0) or 0)
             parquet_rows_emitted = int(report.stats.get("parquet_rows_emitted", 0) or 0)
             parquet_batches_total = int(report.stats.get("parquet_batches_total", 0) or 0)
+
+            rust_columnar_merge_ms = int(report.timings_ms.get("rust_arrow.columnar_merge", 0) or 0)
+            if rust_columnar_merge_ms > 0:
+                tp["rust_arrow.columnar_merge.rows_per_s"] = per_s(parquet_rows_emitted, rust_columnar_merge_ms)
+
+            parquet_persist_ms = int(report.timings_ms.get("json.parquet.persist", 0) or 0)
             if parquet_persist_ms > 0:
                 tp["json.parquet.persist.files_per_s"] = per_s(parquet_files_persisted, parquet_persist_ms)
                 tp["json.parquet.persist.rows_per_s"] = per_s(parquet_rows_emitted, parquet_persist_ms)
                 tp["json.parquet.persist.batches_per_s"] = per_s(parquet_batches_total, parquet_persist_ms)
 
+            rust_arrow_build_ms = int(report.timings_ms.get("rust_arrow.arrow_build", 0) or 0)
+            if rust_arrow_build_ms > 0:
+                tp["rust_arrow.arrow_build.rows_per_s"] = per_s(parquet_rows_emitted, rust_arrow_build_ms)
+
+            rust_parquet_write_ms = int(report.timings_ms.get("rust_arrow.parquet_write", 0) or 0)
+            if rust_parquet_write_ms > 0:
+                tp["rust_arrow.parquet_write.files_per_s"] = per_s(parquet_files_persisted, rust_parquet_write_ms)
+                tp["rust_arrow.parquet_write.rows_per_s"] = per_s(parquet_rows_emitted, rust_parquet_write_ms)
+
             rust_py_to_json_ms = int(report.timings_ms.get("rust_arrow.py_to_json", 0) or 0)
             if rust_py_to_json_ms > 0:
                 tp["rust_arrow.py_to_json.records_per_s"] = per_s(records_read, rust_py_to_json_ms)
+
+            rust_py_result_convert_ms = int(report.timings_ms.get("rust_arrow.py_result_convert", 0) or 0)
+            if rust_py_result_convert_ms > 0:
+                tp["rust_arrow.py_result_convert.rows_per_s"] = per_s(parquet_rows_emitted, rust_py_result_convert_ms)
 
             rust_total_ms = int(report.timings_ms.get("rust_arrow.total", 0) or 0)
             if rust_total_ms > 0:

@@ -124,6 +124,16 @@ struct ColumnarWriteOutput {
     table_meta: Vec<TableMeta>,
     file_count: usize,
     row_count: usize,
+    arrow_build_ns: u128,
+    parquet_write_ns: u128,
+}
+
+struct TableWriteOutput {
+    path: PathBuf,
+    columns: Vec<String>,
+    rows: usize,
+    arrow_build_ns: u128,
+    parquet_write_ns: u128,
 }
 
 struct PersistOutput {
@@ -1238,9 +1248,25 @@ fn append_large_utf8_cell(builder: &mut LargeStringBuilder, value: Option<&CellV
     }
 }
 
+fn large_utf8_cell_len(value: &CellValue) -> usize {
+    match value {
+        CellValue::Null => 0,
+        CellValue::Bool(v) => {
+            if *v {
+                4
+            } else {
+                5
+            }
+        }
+        CellValue::Number(v) => v.as_str().len(),
+        CellValue::String(v) => v.len(),
+    }
+}
+
 struct ColumnAccumulator {
     kind: Option<ColumnKind>,
     entries: Vec<(usize, CellValue)>,
+    string_bytes: usize,
 }
 
 impl ColumnAccumulator {
@@ -1248,11 +1274,13 @@ impl ColumnAccumulator {
         Self {
             kind: None,
             entries: Vec::new(),
+            string_bytes: 0,
         }
     }
 
     fn push(&mut self, row_index: usize, value: CellValue) {
         self.kind = merge_kind(self.kind, cell_kind(&value));
+        self.string_bytes += large_utf8_cell_len(&value);
         self.entries.push((row_index, value));
     }
 }
@@ -1290,6 +1318,7 @@ impl TableAccumulator {
                 .entry(column)
                 .or_insert_with(ColumnAccumulator::new);
             target.kind = merge_kind(target.kind, incoming.kind);
+            target.string_bytes += incoming.string_bytes;
             target.entries.reserve(incoming.entries.len());
             for (row_index, value) in incoming.entries.drain(..) {
                 target.entries.push((row_index + offset, value));
@@ -1816,7 +1845,8 @@ fn write_table(
     rows: &[Row],
     batch_idx: usize,
     index_key: &str,
-) -> PyResult<(PathBuf, Vec<String>, usize)> {
+) -> PyResult<TableWriteOutput> {
+    let arrow_start = Instant::now();
     let mut inferred_kinds: BTreeMap<String, Option<ColumnKind>> = BTreeMap::new();
     for row in rows {
         for (key, value) in row.iter() {
@@ -1904,6 +1934,8 @@ fn write_table(
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let arrow_build_ns = arrow_start.elapsed().as_nanos();
+    let parquet_start = Instant::now();
     let mut path = output_path(root, table, batch_idx)?;
     let table_dir = path
         .parent()
@@ -1938,7 +1970,13 @@ fn write_table(
         }
     }
     let _ = fs::remove_file(&tmp_path);
-    Ok((path, cols, rows.len()))
+    Ok(TableWriteOutput {
+        path,
+        columns: cols,
+        rows: rows.len(),
+        arrow_build_ns,
+        parquet_write_ns: parquet_start.elapsed().as_nanos(),
+    })
 }
 
 fn write_columnar_table(
@@ -1947,7 +1985,8 @@ fn write_columnar_table(
     accumulator: &TableAccumulator,
     batch_idx: usize,
     index_key: &str,
-) -> PyResult<(PathBuf, Vec<String>, usize)> {
+) -> PyResult<TableWriteOutput> {
+    let arrow_start = Instant::now();
     let mut cols: Vec<String> = accumulator.columns.keys().cloned().collect();
     if let Some(pos) = cols.iter().position(|c| c == index_key) {
         let index_col = cols.remove(pos);
@@ -2049,7 +2088,8 @@ fn write_columnar_table(
                 arrays.push(Arc::new(builder.finish()) as ArrayRef);
             }
             ColumnKind::LargeUtf8 => {
-                let mut builder = LargeStringBuilder::with_capacity(accumulator.rows, 0);
+                let mut builder =
+                    LargeStringBuilder::with_capacity(accumulator.rows, column.string_bytes);
                 let mut next_row = 0usize;
                 for (row_index, value) in column.entries.iter() {
                     while next_row < *row_index {
@@ -2070,6 +2110,8 @@ fn write_columnar_table(
 
     let batch = RecordBatch::try_new(schema.clone(), arrays)
         .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let arrow_build_ns = arrow_start.elapsed().as_nanos();
+    let parquet_start = Instant::now();
     let mut path = output_path(root, table, batch_idx)?;
     let table_dir = path
         .parent()
@@ -2104,7 +2146,13 @@ fn write_columnar_table(
         }
     }
     let _ = fs::remove_file(&tmp_path);
-    Ok((path, cols, accumulator.rows))
+    Ok(TableWriteOutput {
+        path,
+        columns: cols,
+        rows: accumulator.rows,
+        arrow_build_ns,
+        parquet_write_ns: parquet_start.elapsed().as_nanos(),
+    })
 }
 
 fn write_columnar_tables(
@@ -2115,6 +2163,8 @@ fn write_columnar_tables(
     let mut table_meta = Vec::<TableMeta>::new();
     let mut file_count = 0usize;
     let mut row_count = 0usize;
+    let mut arrow_build_ns = 0u128;
+    let mut parquet_write_ns = 0u128;
     let table_entries: Vec<(&String, &TableAccumulator)> = tables
         .tables
         .iter()
@@ -2123,35 +2173,36 @@ fn write_columnar_tables(
 
     if options.parallel_table_writes && options.parallel_workers >= 2 && table_entries.len() >= 2 {
         let pool = rayon_pool(options.parallel_workers)?;
-        let results: Vec<PyResult<TableMeta>> = pool.install(|| {
+        let results: Vec<PyResult<TableWriteOutput>> = pool.install(|| {
             table_entries
                 .par_iter()
                 .map(|(table, accumulator)| {
-                    let (path, columns, rows_written) = write_columnar_table(
+                    write_columnar_table(
                         parquet_root,
                         table,
                         accumulator,
                         options.batch_idx,
                         &options.index_key,
-                    )?;
-                    Ok(TableMeta {
-                        table: (*table).clone(),
-                        path: path.to_string_lossy().to_string(),
-                        columns,
-                        rows: rows_written,
-                    })
+                    )
                 })
                 .collect()
         });
-        for result in results {
-            let meta = result?;
+        for (idx, result) in results.into_iter().enumerate() {
+            let written = result?;
             file_count += 1;
-            row_count += meta.rows;
-            table_meta.push(meta);
+            row_count += written.rows;
+            arrow_build_ns += written.arrow_build_ns;
+            parquet_write_ns += written.parquet_write_ns;
+            table_meta.push(TableMeta {
+                table: table_entries[idx].0.clone(),
+                path: written.path.to_string_lossy().to_string(),
+                columns: written.columns,
+                rows: written.rows,
+            });
         }
     } else {
         for (table, accumulator) in table_entries {
-            let (path, columns, rows_written) = write_columnar_table(
+            let written = write_columnar_table(
                 parquet_root,
                 table,
                 accumulator,
@@ -2159,12 +2210,14 @@ fn write_columnar_tables(
                 &options.index_key,
             )?;
             file_count += 1;
-            row_count += rows_written;
+            row_count += written.rows;
+            arrow_build_ns += written.arrow_build_ns;
+            parquet_write_ns += written.parquet_write_ns;
             table_meta.push(TableMeta {
                 table: table.clone(),
-                path: path.to_string_lossy().to_string(),
-                columns,
-                rows: rows_written,
+                path: written.path.to_string_lossy().to_string(),
+                columns: written.columns,
+                rows: written.rows,
             });
         }
     }
@@ -2173,6 +2226,8 @@ fn write_columnar_tables(
         table_meta,
         file_count,
         row_count,
+        arrow_build_ns,
+        parquet_write_ns,
     })
 }
 
@@ -2715,15 +2770,24 @@ struct ColumnarChunkOut {
     records_ok: usize,
 }
 
-fn flatten_columnar_chunk(chunk: &[(usize, Value)], options: &Options) -> ColumnarChunkOut {
-    let mut tables = ColumnarTables::new();
+fn flatten_columnar_chunk_into(
+    chunk: &[(usize, Value)],
+    options: &Options,
+    tables: &mut ColumnarTables,
+) -> usize {
     let mut records_ok = 0usize;
     for (local_i, record) in chunk {
         let global_i = options.index_offset + *local_i;
         let ctx = options.record_contexts.get(*local_i);
-        flatten_record_columnar(record, global_i, ctx, options, &mut tables);
+        flatten_record_columnar(record, global_i, ctx, options, tables);
         records_ok += 1;
     }
+    records_ok
+}
+
+fn flatten_columnar_chunk(chunk: &[(usize, Value)], options: &Options) -> ColumnarChunkOut {
+    let mut tables = ColumnarTables::new();
+    let records_ok = flatten_columnar_chunk_into(chunk, options, &mut tables);
     ColumnarChunkOut { tables, records_ok }
 }
 
@@ -2741,39 +2805,56 @@ fn persist_indexed_json_values_columnar_inner(
         mut timings_ms,
     } = extras;
 
-    let flatten_start = Instant::now();
     let mut tables = ColumnarTables::new();
+    let mut flatten_ns = 0u128;
+    let mut columnar_merge_ns = 0u128;
     let records_ok = if options.parallel_workers >= 2 && indexed_values.len() >= 2 {
         let pool = rayon_pool(options.parallel_workers)?;
         let chunk_len = indexed_values
             .len()
             .div_ceil(options.parallel_workers)
             .max(1);
+        let flatten_start = Instant::now();
         let chunks: Vec<ColumnarChunkOut> = pool.install(|| {
             indexed_values
                 .par_chunks(chunk_len)
                 .map(|chunk| flatten_columnar_chunk(chunk, &options))
                 .collect()
         });
+        flatten_ns += flatten_start.elapsed().as_nanos();
+        let merge_start = Instant::now();
         let mut count = 0usize;
         for chunk in chunks {
             count += chunk.records_ok;
             tables.merge_from(chunk.tables);
         }
+        columnar_merge_ns += merge_start.elapsed().as_nanos();
         count
     } else {
-        let chunk = flatten_columnar_chunk(&indexed_values, &options);
-        let count = chunk.records_ok;
-        tables.merge_from(chunk.tables);
+        let flatten_start = Instant::now();
+        let count = flatten_columnar_chunk_into(&indexed_values, &options, &mut tables);
+        flatten_ns += flatten_start.elapsed().as_nanos();
         count
     };
-    let flatten_ms = flatten_start.elapsed().as_millis() as u64;
+    let flatten_ms = (flatten_ns / 1_000_000) as u64;
 
     let parquet_start = Instant::now();
     let write_output = write_columnar_tables(&options, &parquet_root, &tables)?;
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
     timings_ms.push(("json.flatten", flatten_ms));
+    timings_ms.push((
+        "rust_arrow.columnar_merge",
+        (columnar_merge_ns / 1_000_000) as u64,
+    ));
     timings_ms.push(("json.parquet.persist", parquet_ms));
+    timings_ms.push((
+        "rust_arrow.arrow_build",
+        (write_output.arrow_build_ns / 1_000_000) as u64,
+    ));
+    timings_ms.push((
+        "rust_arrow.parquet_write",
+        (write_output.parquet_write_ns / 1_000_000) as u64,
+    ));
     timings_ms.push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
     let records_failed = initial_records_failed;
     let records_read = records_ok + records_failed;
@@ -2873,6 +2954,8 @@ fn persist_indexed_json_values_inner(
     let mut table_meta = Vec::<TableMeta>::new();
     let mut file_count = 0usize;
     let mut row_count = 0usize;
+    let mut arrow_build_ns = 0u128;
+    let mut parquet_write_ns = 0u128;
     let table_entries: Vec<(&String, &Vec<Row>)> =
         tables.iter().filter(|(_, rows)| !rows.is_empty()).collect();
     if options.id_compaction.enabled {
@@ -2881,7 +2964,7 @@ fn persist_indexed_json_values_inner(
                 .iter()
                 .map(|row| id_compaction_state.compact_row(&options, table, row))
                 .collect::<PyResult<Vec<Row>>>()?;
-            let (path, columns, rows_written) = write_table(
+            let written = write_table(
                 &parquet_root,
                 table,
                 &compacted_rows,
@@ -2889,12 +2972,14 @@ fn persist_indexed_json_values_inner(
                 &options.index_key,
             )?;
             file_count += 1;
-            row_count += rows_written;
+            row_count += written.rows;
+            arrow_build_ns += written.arrow_build_ns;
+            parquet_write_ns += written.parquet_write_ns;
             table_meta.push(TableMeta {
                 table: table.clone(),
-                path: path.to_string_lossy().to_string(),
-                columns,
-                rows: rows_written,
+                path: written.path.to_string_lossy().to_string(),
+                columns: written.columns,
+                rows: written.rows,
             });
         }
     } else if options.parallel_table_writes
@@ -2902,35 +2987,36 @@ fn persist_indexed_json_values_inner(
         && table_entries.len() >= 2
     {
         let pool = rayon_pool(options.parallel_workers)?;
-        let results: Vec<PyResult<TableMeta>> = pool.install(|| {
+        let results: Vec<PyResult<TableWriteOutput>> = pool.install(|| {
             table_entries
                 .par_iter()
                 .map(|(table, rows)| {
-                    let (path, columns, rows_written) = write_table(
+                    write_table(
                         &parquet_root,
                         table,
                         rows,
                         options.batch_idx,
                         &options.index_key,
-                    )?;
-                    Ok(TableMeta {
-                        table: (*table).clone(),
-                        path: path.to_string_lossy().to_string(),
-                        columns,
-                        rows: rows_written,
-                    })
+                    )
                 })
                 .collect()
         });
-        for result in results {
-            let meta = result?;
+        for (idx, result) in results.into_iter().enumerate() {
+            let written = result?;
             file_count += 1;
-            row_count += meta.rows;
-            table_meta.push(meta);
+            row_count += written.rows;
+            arrow_build_ns += written.arrow_build_ns;
+            parquet_write_ns += written.parquet_write_ns;
+            table_meta.push(TableMeta {
+                table: table_entries[idx].0.clone(),
+                path: written.path.to_string_lossy().to_string(),
+                columns: written.columns,
+                rows: written.rows,
+            });
         }
     } else {
         for (table, rows) in table_entries {
-            let (path, columns, rows_written) = write_table(
+            let written = write_table(
                 &parquet_root,
                 table,
                 rows,
@@ -2938,18 +3024,28 @@ fn persist_indexed_json_values_inner(
                 &options.index_key,
             )?;
             file_count += 1;
-            row_count += rows_written;
+            row_count += written.rows;
+            arrow_build_ns += written.arrow_build_ns;
+            parquet_write_ns += written.parquet_write_ns;
             table_meta.push(TableMeta {
                 table: table.clone(),
-                path: path.to_string_lossy().to_string(),
-                columns,
-                rows: rows_written,
+                path: written.path.to_string_lossy().to_string(),
+                columns: written.columns,
+                rows: written.rows,
             });
         }
     }
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
     timings_ms.push(("json.flatten", flatten_ms));
     timings_ms.push(("json.parquet.persist", parquet_ms));
+    timings_ms.push((
+        "rust_arrow.arrow_build",
+        (arrow_build_ns / 1_000_000) as u64,
+    ));
+    timings_ms.push((
+        "rust_arrow.parquet_write",
+        (parquet_write_ns / 1_000_000) as u64,
+    ));
     timings_ms.push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
     let records_read = records_ok + records_failed;
 
@@ -2979,6 +3075,7 @@ fn persist_output_to_py(
     output: PersistOutput,
     id_compaction_options: &IdCompactionOptions,
 ) -> PyResult<PyObject> {
+    let py_result_convert_start = Instant::now();
     let result = PyDict::new_bound(py);
     result.set_item("ok", true)?;
     result.set_item("effective_backend", "rust-arrow")?;
@@ -3017,10 +3114,14 @@ fn persist_output_to_py(
     for (key, value) in output.timings_ms {
         timings.set_item(key, value)?;
     }
-    result.set_item("timings_ms", timings)?;
     if let Some(state) = output.id_compaction_state {
         result.set_item("id_compaction", state.to_py(py, id_compaction_options)?)?;
     }
+    timings.set_item(
+        "rust_arrow.py_result_convert",
+        py_result_convert_start.elapsed().as_millis() as u64,
+    )?;
+    result.set_item("timings_ms", timings)?;
     Ok(result.into())
 }
 
@@ -3093,7 +3194,14 @@ fn merge_persist_outputs(target: &mut PersistOutput, output: PersistOutput) {
     target.error_indices.extend(output.error_indices);
     target.error_records.extend(output.error_records);
     for (key, value) in output.timings_ms {
-        if matches!(key, "json.flatten" | "json.parquet.persist") {
+        if matches!(
+            key,
+            "json.flatten"
+                | "json.parquet.persist"
+                | "rust_arrow.columnar_merge"
+                | "rust_arrow.arrow_build"
+                | "rust_arrow.parquet_write"
+        ) {
             if let Some((_, existing)) = target.timings_ms.iter_mut().find(|(name, _)| *name == key)
             {
                 *existing += value;
@@ -3199,12 +3307,13 @@ fn flush_columnar_jsonl_micro_chunk(
     };
     let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
     let flatten_start = Instant::now();
-    let chunk = flatten_columnar_chunk(&chunk_values, &chunk_options);
+    let records_ok =
+        flatten_columnar_chunk_into(&chunk_values, &chunk_options, &mut pending.tables);
     *flatten_ns += flatten_start.elapsed().as_nanos();
-    pending.records_ok += chunk.records_ok;
-    pending.tables.merge_from(chunk.tables);
+    pending.records_ok += records_ok;
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flush_pending_columnar_jsonl(
     pending: &mut PendingColumnarJsonl,
     batch_idx: &mut usize,
@@ -3212,6 +3321,8 @@ fn flush_pending_columnar_jsonl(
     options: &Options,
     parquet_root: &Path,
     parquet_ns: &mut u128,
+    arrow_build_ns: &mut u128,
+    parquet_write_ns: &mut u128,
 ) -> PyResult<()> {
     if pending.is_empty() {
         return Ok(());
@@ -3221,6 +3332,8 @@ fn flush_pending_columnar_jsonl(
     let parquet_start = Instant::now();
     let output = write_columnar_tables(&write_options, parquet_root, &pending.tables)?;
     *parquet_ns += parquet_start.elapsed().as_nanos();
+    *arrow_build_ns += output.arrow_build_ns;
+    *parquet_write_ns += output.parquet_write_ns;
 
     aggregate.records_ok += pending.records_ok;
     aggregate.parquet_files_persisted += output.file_count;
@@ -3261,9 +3374,14 @@ fn persist_jsonl_sources_inner(
         error_indices: Vec::new(),
         error_records: Vec::new(),
         timings_ms: vec![
+            ("rust_arrow.read_line", 0),
             ("rust_arrow.json_parse", 0),
+            ("rust_arrow.number_validate", 0),
             ("json.flatten", 0),
+            ("rust_arrow.columnar_merge", 0),
             ("json.parquet.persist", 0),
+            ("rust_arrow.arrow_build", 0),
+            ("rust_arrow.parquet_write", 0),
         ],
         id_compaction_state: None,
     };
@@ -3278,11 +3396,15 @@ fn persist_jsonl_sources_inner(
     let mut chunk_start_index = options.index_offset;
     let mut next_record_index = options.index_offset;
     let mut batch_idx = options.batch_idx;
+    let mut read_line_ns = 0u128;
     let mut parse_ns = 0u128;
     let stream_columnar = options.columnar_accumulator && parquet_flush_records > chunk_size;
     let mut pending_columnar = PendingColumnarJsonl::new();
     let mut flatten_ns = 0u128;
     let mut parquet_ns = 0u128;
+    let mut arrow_build_ns = 0u128;
+    let mut parquet_write_ns = 0u128;
+    let mut number_validate_ns = 0u128;
 
     'sources: for source in sources.iter() {
         let path = PathBuf::from(source);
@@ -3297,12 +3419,14 @@ fn persist_jsonl_sources_inner(
         let mut line_no = 0usize;
         loop {
             raw_line.clear();
+            let read_line_start = Instant::now();
             let bytes = reader.read_until(b'\n', &mut raw_line).map_err(|e| {
                 PyRuntimeError::new_err(format!(
                     "failed to read Rust JSONL source {}: {e}",
                     path.display()
                 ))
             })?;
+            read_line_ns += read_line_start.elapsed().as_nanos();
             if bytes == 0 {
                 break;
             }
@@ -3323,34 +3447,39 @@ fn persist_jsonl_sources_inner(
             parse_ns += parse_start.elapsed().as_nanos();
 
             match parsed {
-                Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value) {
-                    Ok(()) => {
-                        if values.is_empty() {
-                            chunk_start_index = record_index;
-                        }
-                        let local_index = record_index - chunk_start_index;
-                        values.push((local_index, value));
-                        if collect_contexts {
-                            while contexts.len() < local_index {
-                                contexts.push(Value::Null);
+                Ok(Some(value @ Value::Object(_))) => {
+                    let number_validate_start = Instant::now();
+                    let number_validation = validate_json_numbers(&value);
+                    number_validate_ns += number_validate_start.elapsed().as_nanos();
+                    match number_validation {
+                        Ok(()) => {
+                            if values.is_empty() {
+                                chunk_start_index = record_index;
                             }
-                            contexts.push(jsonl_context(source, line_no, record_index));
+                            let local_index = record_index - chunk_start_index;
+                            values.push((local_index, value));
+                            if collect_contexts {
+                                while contexts.len() < local_index {
+                                    contexts.push(Value::Null);
+                                }
+                                contexts.push(jsonl_context(source, line_no, record_index));
+                            }
+                        }
+                        Err(e) => {
+                            aggregate.records_failed += 1;
+                            push_jsonl_error(
+                                &mut aggregate.errors,
+                                &mut aggregate.error_indices,
+                                &mut aggregate.error_records,
+                                source,
+                                line_no,
+                                record_index,
+                                &raw_line,
+                                format!("{e}; use the Python backend"),
+                            );
                         }
                     }
-                    Err(e) => {
-                        aggregate.records_failed += 1;
-                        push_jsonl_error(
-                            &mut aggregate.errors,
-                            &mut aggregate.error_indices,
-                            &mut aggregate.error_records,
-                            source,
-                            line_no,
-                            record_index,
-                            &raw_line,
-                            format!("{e}; use the Python backend"),
-                        );
-                    }
-                },
+                }
                 Ok(Some(value)) => {
                     aggregate.records_failed += 1;
                     push_jsonl_error(
@@ -3403,6 +3532,8 @@ fn persist_jsonl_sources_inner(
                             &options,
                             &parquet_root,
                             &mut parquet_ns,
+                            &mut arrow_build_ns,
+                            &mut parquet_write_ns,
                         )?;
                     }
                 } else {
@@ -3440,6 +3571,8 @@ fn persist_jsonl_sources_inner(
             &options,
             &parquet_root,
             &mut parquet_ns,
+            &mut arrow_build_ns,
+            &mut parquet_write_ns,
         )?;
         set_timing_ms(
             &mut aggregate.timings_ms,
@@ -3471,9 +3604,32 @@ fn persist_jsonl_sources_inner(
     );
     set_timing_ms(
         &mut aggregate.timings_ms,
+        "rust_arrow.read_line",
+        (read_line_ns / 1_000_000) as u64,
+    );
+    set_timing_ms(
+        &mut aggregate.timings_ms,
         "rust_arrow.json_parse",
         (parse_ns / 1_000_000) as u64,
     );
+    set_timing_ms(
+        &mut aggregate.timings_ms,
+        "rust_arrow.number_validate",
+        (number_validate_ns / 1_000_000) as u64,
+    );
+    if stream_columnar {
+        set_timing_ms(&mut aggregate.timings_ms, "rust_arrow.columnar_merge", 0);
+        set_timing_ms(
+            &mut aggregate.timings_ms,
+            "rust_arrow.arrow_build",
+            (arrow_build_ns / 1_000_000) as u64,
+        );
+        set_timing_ms(
+            &mut aggregate.timings_ms,
+            "rust_arrow.parquet_write",
+            (parquet_write_ns / 1_000_000) as u64,
+        );
+    }
     Ok(aggregate)
 }
 
@@ -3520,22 +3676,31 @@ fn persist_json_lines_batch(
     let total_start = Instant::now();
     let options = parse_options(options)?;
     let parquet_root = prepare_parquet_root(&options.parquet_dir)?;
-    let parse_start = Instant::now();
     let list = lines.downcast::<PyList>()?;
     let mut values = Vec::with_capacity(list.len());
     let mut records_failed = 0usize;
     let mut errors = Vec::<String>::new();
     let mut error_indices = Vec::<usize>::new();
+    let mut parse_ns = 0u128;
+    let mut number_validate_ns = 0u128;
     for (i, item) in list.iter().enumerate() {
-        match parse_json_line_value(&item)? {
-            Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value) {
-                Ok(()) => values.push((i, value)),
-                Err(e) => {
-                    records_failed += 1;
-                    error_indices.push(i);
-                    errors.push(format!("record {i}: {e}; use the Python backend"));
+        let parse_start = Instant::now();
+        let parsed = parse_json_line_value(&item)?;
+        parse_ns += parse_start.elapsed().as_nanos();
+        match parsed {
+            Ok(Some(value @ Value::Object(_))) => {
+                let number_validate_start = Instant::now();
+                let number_validation = validate_json_numbers(&value);
+                number_validate_ns += number_validate_start.elapsed().as_nanos();
+                match number_validation {
+                    Ok(()) => values.push((i, value)),
+                    Err(e) => {
+                        records_failed += 1;
+                        error_indices.push(i);
+                        errors.push(format!("record {i}: {e}; use the Python backend"));
+                    }
                 }
-            },
+            }
             Ok(Some(value)) => {
                 records_failed += 1;
                 error_indices.push(i);
@@ -3552,7 +3717,8 @@ fn persist_json_lines_batch(
             }
         }
     }
-    let parse_ms = parse_start.elapsed().as_millis() as u64;
+    let parse_ms = (parse_ns / 1_000_000) as u64;
+    let number_validate_ms = (number_validate_ns / 1_000_000) as u64;
 
     persist_indexed_json_values(
         py,
@@ -3563,7 +3729,10 @@ fn persist_json_lines_batch(
             initial_records_failed: records_failed,
             errors,
             error_indices,
-            timings_ms: vec![("rust_arrow.json_parse", parse_ms)],
+            timings_ms: vec![
+                ("rust_arrow.json_parse", parse_ms),
+                ("rust_arrow.number_validate", number_validate_ms),
+            ],
         },
         total_start,
     )

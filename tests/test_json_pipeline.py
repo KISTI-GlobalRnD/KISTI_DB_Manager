@@ -2302,9 +2302,15 @@ class TestJsonPipeline(unittest.TestCase):
                     "parquet_tables_written": 1,
                     "tables": [{"table": "base", "columns": ["id", "x"], "rows": len(records)}],
                     "timings_ms": {
+                        "rust_arrow.read_line": 1,
                         "rust_arrow.py_to_json": 2,
+                        "rust_arrow.number_validate": 3,
                         "json.flatten": 3,
+                        "rust_arrow.columnar_merge": 4,
                         "json.parquet.persist": 4,
+                        "rust_arrow.arrow_build": 5,
+                        "rust_arrow.parquet_write": 6,
+                        "rust_arrow.py_result_convert": 7,
                         "rust_arrow.total": 9,
                     },
                 }
@@ -2324,9 +2330,15 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
             self.assertEqual(res.report.stats.get("records_ok"), 2)
             self.assertEqual(res.report.stats.get("parquet_files_persisted"), 1)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.read_line"), 1)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.py_to_json"), 2)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.number_validate"), 3)
             self.assertEqual(res.report.timings_ms.get("json.flatten"), 3)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.columnar_merge"), 4)
             self.assertEqual(res.report.timings_ms.get("json.parquet.persist"), 4)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.arrow_build"), 5)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.parquet_write"), 6)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.py_result_convert"), 7)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.total"), 9)
             self.assertIn("base", res.name_maps)
 
