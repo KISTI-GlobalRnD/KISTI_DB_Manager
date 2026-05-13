@@ -53,6 +53,7 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("flatten_backend", "auto")  # auto|python|rust-arrow for parse/parquet path
     cfg.setdefault("rust_raw_jsonl_parse", False)  # opt-in Rust JSONL parser for parse/parquet-only runs
     cfg.setdefault("rust_raw_jsonl_file_parse", False)  # opt-in Rust direct JSONL file reader for supported runs
+    cfg.setdefault("rust_parallel_table_writes", False)  # opt-in table-level parallel parquet writes in Rust
     cfg.setdefault("json_streaming_load", False)  # parquet-first/DataFrame path by default
     # Schema drift strategy (JSON-oriented)
     # - "evolve": add new columns (ALTER TABLE) when needed
@@ -188,6 +189,7 @@ class DataConfig:
     flatten_backend: str = "auto"
     rust_raw_jsonl_parse: bool = False
     rust_raw_jsonl_file_parse: bool = False
+    rust_parallel_table_writes: bool = False
     json_streaming_load: bool = False
     schema_mode: str = "evolve"
     extra_column_name: str = "__extra__"
@@ -235,6 +237,7 @@ class DataConfig:
             flatten_backend=str(cfg.get("flatten_backend", "auto")),
             rust_raw_jsonl_parse=bool(cfg.get("rust_raw_jsonl_parse", False)),
             rust_raw_jsonl_file_parse=bool(cfg.get("rust_raw_jsonl_file_parse", False)),
+            rust_parallel_table_writes=bool(cfg.get("rust_parallel_table_writes", False)),
             json_streaming_load=bool(cfg.get("json_streaming_load", False)),
             schema_mode=str(cfg.get("schema_mode", "evolve")),
             extra_column_name=str(cfg.get("extra_column_name", "__extra__")),
@@ -281,6 +284,7 @@ class DataConfig:
             "flatten_backend": str(self.flatten_backend),
             "rust_raw_jsonl_parse": bool(self.rust_raw_jsonl_parse),
             "rust_raw_jsonl_file_parse": bool(self.rust_raw_jsonl_file_parse),
+            "rust_parallel_table_writes": bool(self.rust_parallel_table_writes),
             "json_streaming_load": bool(self.json_streaming_load),
             "schema_mode": str(self.schema_mode),
             "extra_column_name": str(self.extra_column_name),

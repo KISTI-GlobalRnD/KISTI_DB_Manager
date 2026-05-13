@@ -89,6 +89,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
         self.assertEqual(options["batch_idx"], 3)
         self.assertEqual(options["index_offset"], 10)
         self.assertEqual(options["parallel_workers"], 2)
+        self.assertEqual(options["parallel_table_writes"], False)
 
     def test_direct_jsonl_source_wrapper_passes_sources_and_options(self):
         ext = FakeRustExtension()
@@ -105,6 +106,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
                 index_offset=11,
                 parallel_workers=3,
                 chunk_size=99,
+                parallel_table_writes=True,
                 max_records=123,
             )
 
@@ -114,6 +116,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
         self.assertEqual(options["batch_idx"], 4)
         self.assertEqual(options["index_offset"], 11)
         self.assertEqual(options["parallel_workers"], 3)
+        self.assertEqual(options["parallel_table_writes"], True)
         self.assertEqual(options["chunk_size"], 99)
         self.assertEqual(options["max_records"], 123)
 

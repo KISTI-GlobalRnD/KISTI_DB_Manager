@@ -129,6 +129,7 @@ def _persist_options(
     index_offset: int,
     record_contexts: Sequence[Mapping[str, Any]] | None,
     parallel_workers: int,
+    parallel_table_writes: bool = False,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     id_compaction_payload = _normalize_id_compaction_payload(id_compaction)
@@ -143,6 +144,7 @@ def _persist_options(
         "index_offset": int(index_offset),
         "record_contexts": list(record_contexts or []),
         "parallel_workers": int(parallel_workers or 0),
+        "parallel_table_writes": bool(parallel_table_writes),
     }
     if id_compaction_payload:
         options["id_compaction"] = id_compaction_payload
@@ -162,6 +164,7 @@ def persist_json_batch_to_parquet(
     index_offset: int,
     record_contexts: Sequence[Mapping[str, Any]] | None,
     parallel_workers: int,
+    parallel_table_writes: bool = False,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ext = _load_extension()
@@ -176,6 +179,7 @@ def persist_json_batch_to_parquet(
         index_offset=index_offset,
         record_contexts=record_contexts,
         parallel_workers=parallel_workers,
+        parallel_table_writes=parallel_table_writes,
         id_compaction=id_compaction,
     )
     result = ext.persist_json_batch(records, options)
@@ -197,6 +201,7 @@ def persist_json_lines_batch_to_parquet(
     index_offset: int,
     record_contexts: Sequence[Mapping[str, Any]] | None,
     parallel_workers: int,
+    parallel_table_writes: bool = False,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ext = _load_extension()
@@ -214,6 +219,7 @@ def persist_json_lines_batch_to_parquet(
         index_offset=index_offset,
         record_contexts=record_contexts,
         parallel_workers=parallel_workers,
+        parallel_table_writes=parallel_table_writes,
         id_compaction=id_compaction,
     )
     payload = lines if isinstance(lines, list) else list(lines)
@@ -236,6 +242,7 @@ def persist_jsonl_sources_to_parquet(
     index_offset: int,
     parallel_workers: int,
     chunk_size: int,
+    parallel_table_writes: bool = False,
     max_records: int | None = None,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -254,6 +261,7 @@ def persist_jsonl_sources_to_parquet(
         index_offset=index_offset,
         record_contexts=None,
         parallel_workers=parallel_workers,
+        parallel_table_writes=parallel_table_writes,
         id_compaction=id_compaction,
     )
     options["chunk_size"] = int(chunk_size or 1000)

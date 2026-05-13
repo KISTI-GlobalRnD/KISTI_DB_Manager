@@ -10,6 +10,7 @@ The Rust extension is intentionally scoped.
 - JSON record flattening for supported parquet artifact runs
 - Optional raw JSONL parsing inside Rust for parse/parquet-only runs
 - Optional direct JSONL/NDJSON source-file reading inside Rust for supported parse/parquet-only runs
+- Optional per-table parallel parquet writes inside Rust
 - Parquet writing through Arrow
 - OpenAlex `semantic_column_strip` ID compaction in the Rust path
 - Optional parquet-to-MySQL batch insert when `--rust-db-load` is enabled
@@ -62,6 +63,8 @@ This path is opt-in and intentionally narrow. It requires `flatten_backend=rust-
 
 For the narrowest fast path, add `--rust-raw-jsonl-file-parse` as well. That keeps the same parse/parquet-only constraints and bypasses Python's line-reading loop. It currently falls back to the batch raw parser when ID compaction is enabled.
 
+`--rust-parallel-table-writes` is also available for profiling table-level parquet write parallelism. Keep it opt-in: on some inputs it lowers `json.parquet.persist` but can still reduce total throughput due to I/O contention.
+
 For backend comparison:
 
 ```bash
@@ -77,6 +80,7 @@ kisti-db-manager json profile-parallel \
 
 `json profile-parallel` keeps per-run reports and parquet artifacts by default.
 Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser and direct file reader fast paths.
+Add `--rust-parallel-table-writes` only when you want to test table-level parquet write parallelism explicitly.
 It also writes:
 
 - `parallel_profile.json`

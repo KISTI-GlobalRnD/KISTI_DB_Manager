@@ -91,6 +91,7 @@ struct Options {
     batch_idx: usize,
     index_offset: usize,
     parallel_workers: usize,
+    parallel_table_writes: bool,
     record_contexts: Vec<Value>,
     id_compaction: IdCompactionOptions,
 }
@@ -369,6 +370,7 @@ fn parse_options(options: &Bound<'_, PyDict>) -> PyResult<Options> {
         batch_idx: get_usize_option(options, "batch_idx", 0)?,
         index_offset: get_usize_option(options, "index_offset", 0)?,
         parallel_workers: get_usize_option(options, "parallel_workers", 0)?,
+        parallel_table_writes: get_bool_option(options, "parallel_table_writes", false)?,
         record_contexts,
         id_compaction: parse_id_compaction_options(options)?,
     })
@@ -2183,35 +2185,79 @@ fn persist_indexed_json_values_inner(
     let mut table_meta = Vec::<TableMeta>::new();
     let mut file_count = 0usize;
     let mut row_count = 0usize;
-    for (table, rows) in tables.iter() {
-        if rows.is_empty() {
-            continue;
-        }
-        let compacted_rows;
-        let rows_to_write: &[Row] = if options.id_compaction.enabled {
-            compacted_rows = rows
+    let table_entries: Vec<(&String, &Vec<Row>)> =
+        tables.iter().filter(|(_, rows)| !rows.is_empty()).collect();
+    if options.id_compaction.enabled {
+        for (table, rows) in table_entries {
+            let compacted_rows = rows
                 .iter()
                 .map(|row| id_compaction_state.compact_row(&options, table, row))
                 .collect::<PyResult<Vec<Row>>>()?;
-            &compacted_rows
-        } else {
-            rows
-        };
-        let (path, columns, rows_written) = write_table(
-            &parquet_root,
-            table,
-            rows_to_write,
-            options.batch_idx,
-            &options.index_key,
-        )?;
-        file_count += 1;
-        row_count += rows_written;
-        table_meta.push(TableMeta {
-            table: table.clone(),
-            path: path.to_string_lossy().to_string(),
-            columns,
-            rows: rows_written,
+            let (path, columns, rows_written) = write_table(
+                &parquet_root,
+                table,
+                &compacted_rows,
+                options.batch_idx,
+                &options.index_key,
+            )?;
+            file_count += 1;
+            row_count += rows_written;
+            table_meta.push(TableMeta {
+                table: table.clone(),
+                path: path.to_string_lossy().to_string(),
+                columns,
+                rows: rows_written,
+            });
+        }
+    } else if options.parallel_table_writes
+        && options.parallel_workers >= 2
+        && table_entries.len() >= 2
+    {
+        let pool = rayon_pool(options.parallel_workers)?;
+        let results: Vec<PyResult<TableMeta>> = pool.install(|| {
+            table_entries
+                .par_iter()
+                .map(|(table, rows)| {
+                    let (path, columns, rows_written) = write_table(
+                        &parquet_root,
+                        table,
+                        rows,
+                        options.batch_idx,
+                        &options.index_key,
+                    )?;
+                    Ok(TableMeta {
+                        table: (*table).clone(),
+                        path: path.to_string_lossy().to_string(),
+                        columns,
+                        rows: rows_written,
+                    })
+                })
+                .collect()
         });
+        for result in results {
+            let meta = result?;
+            file_count += 1;
+            row_count += meta.rows;
+            table_meta.push(meta);
+        }
+    } else {
+        for (table, rows) in table_entries {
+            let (path, columns, rows_written) = write_table(
+                &parquet_root,
+                table,
+                rows,
+                options.batch_idx,
+                &options.index_key,
+            )?;
+            file_count += 1;
+            row_count += rows_written;
+            table_meta.push(TableMeta {
+                table: table.clone(),
+                path: path.to_string_lossy().to_string(),
+                columns,
+                rows: rows_written,
+            });
+        }
     }
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
     timings_ms.push(("json.flatten", flatten_ms));

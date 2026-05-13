@@ -132,6 +132,8 @@ kisti-db-manager json run \
 
 Add `--rust-raw-jsonl-file-parse` to also let Rust read plain JSONL/NDJSON source files directly. This removes the Python line-reading loop for supported parse/parquet-only runs.
 
+Use `--rust-parallel-table-writes` only as a profiled opt-in; it can lower parquet write time but may increase total runtime on I/O-bound runs.
+
 For an experimental Rust-driven DB load after Rust parquet creation:
 
 ```bash

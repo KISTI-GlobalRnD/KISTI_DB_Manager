@@ -287,6 +287,7 @@ class TestCLIJson(unittest.TestCase):
                         "--flatten-backend",
                         "rust-arrow",
                         "--rust-raw-jsonl-file-parse",
+                        "--rust-parallel-table-writes",
                     ]
                 )
 
@@ -294,6 +295,7 @@ class TestCLIJson(unittest.TestCase):
             data_cfg = p_run.call_args.args[0]
             self.assertEqual(data_cfg["flatten_backend"], "rust-arrow")
             self.assertEqual(data_cfg["rust_raw_jsonl_file_parse"], True)
+            self.assertEqual(data_cfg["rust_parallel_table_writes"], True)
 
     def test_json_run_accepts_rust_arrow_with_id_compaction(self):
         with tempfile.TemporaryDirectory() as td:

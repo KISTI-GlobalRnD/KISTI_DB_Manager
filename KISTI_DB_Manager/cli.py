@@ -581,6 +581,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["rust_raw_jsonl_parse"] = bool(args.rust_raw_jsonl_parse)
     if getattr(args, "rust_raw_jsonl_file_parse", None) is not None:
         data_config["rust_raw_jsonl_file_parse"] = bool(args.rust_raw_jsonl_file_parse)
+    if getattr(args, "rust_parallel_table_writes", None) is not None:
+        data_config["rust_parallel_table_writes"] = bool(args.rust_parallel_table_writes)
     if getattr(args, "db_load_parallel_tables", None) is not None:
         data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
     if getattr(args, "load_data_commit_strategy", None):
@@ -751,6 +753,7 @@ def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
         except_keys=args.except_key or None,
         rust_raw_jsonl_parse=args.rust_raw_jsonl_parse,
         rust_raw_jsonl_file_parse=args.rust_raw_jsonl_file_parse,
+        rust_parallel_table_writes=args.rust_parallel_table_writes,
         id_compaction=args.id_compaction,
         id_compaction_preset=args.id_compaction_preset,
         id_compaction_mode=args.id_compaction_mode,
@@ -1265,6 +1268,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Use Rust to read and parse JSONL/NDJSON files directly in supported rust-arrow runs (default: config or false).",
     )
     p_json_run.add_argument(
+        "--rust-parallel-table-writes",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Allow Rust to write per-table parquet artifacts in parallel when supported (default: config or false).",
+    )
+    p_json_run.add_argument(
         "--db-load-parallel-tables",
         type=int,
         help="Parallelize LOAD DATA across tables (default: config or 0/off)",
@@ -1478,6 +1487,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="For rust-arrow profile runs, let Rust read JSONL/NDJSON source files directly when supported.",
+    )
+    p_json_profile_parallel.add_argument(
+        "--rust-parallel-table-writes",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="For rust-arrow profile runs, allow parallel per-table parquet writes when supported.",
     )
     p_json_profile_parallel.add_argument(
         "--mode",
