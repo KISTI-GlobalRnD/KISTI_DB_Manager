@@ -136,6 +136,8 @@ impl NameCache {
 
 #[derive(Clone)]
 struct RecordOut {
+    input_index: usize,
+    record_index: usize,
     ok: bool,
     main: Row,
     subs: TableRows,
@@ -143,10 +145,17 @@ struct RecordOut {
     error: Option<String>,
 }
 
+struct FlattenRecordError {
+    input_index: usize,
+    record_index: usize,
+    error: String,
+}
+
 struct PersistExtras {
     initial_records_failed: usize,
     errors: Vec<String>,
     error_indices: Vec<usize>,
+    error_records: Vec<JsonlErrorRecord>,
     timings_ms: Vec<(&'static str, u64)>,
 }
 
@@ -495,65 +504,46 @@ fn number_is_integer_literal(number: &Number) -> bool {
     !text.contains('.') && !text.contains('e') && !text.contains('E')
 }
 
-enum JsonPathPart<'a> {
-    Key(&'a str),
-    Index(usize),
-}
-
-fn json_number_path(parts: &[JsonPathPart<'_>]) -> String {
-    let mut out = String::from("$");
-    for part in parts {
-        match part {
-            JsonPathPart::Key(key) => {
-                out.push('.');
-                out.push_str(key);
-            }
-            JsonPathPart::Index(index) => out.push_str(&format!("[{index}]")),
-        }
+fn json_path_child_key(parent: &str, key: &str) -> String {
+    if parent == "$" {
+        format!("$.{key}")
+    } else {
+        format!("{parent}.{key}")
     }
-    out
 }
 
-fn validate_json_numbers(value: &Value) -> Result<(), String> {
-    let mut path = Vec::<JsonPathPart<'_>>::new();
-    validate_json_numbers_inner(value, &mut path)
+fn json_path_child_index(parent: &str, index: usize) -> String {
+    format!("{parent}[{index}]")
 }
 
-fn validate_json_numbers_inner<'a>(
-    value: &'a Value,
-    path: &mut Vec<JsonPathPart<'a>>,
-) -> Result<(), String> {
-    match value {
-        Value::Number(number) => {
-            let is_integer = number_is_integer_literal(number);
-            if is_integer {
-                if number.as_i64().is_none() && number.as_u64().is_none() {
-                    return Err(format!(
-                        "integer outside supported i64/u64 range at {}: {number}",
-                        json_number_path(path)
-                    ));
-                }
-            } else if number.as_f64().is_none() {
-                return Err(format!(
-                    "number is not representable as f64 at {}: {number}",
-                    json_number_path(path)
-                ));
-            }
-            Ok(())
+fn validate_json_number_at(number: &Number, path: &str) -> Result<(), String> {
+    let is_integer = number_is_integer_literal(number);
+    if is_integer {
+        if number.as_i64().is_none() && number.as_u64().is_none() {
+            return Err(format!(
+                "integer outside supported i64/u64 range at {path}: {number}",
+            ));
         }
+    } else if number.as_f64().is_none() {
+        return Err(format!(
+            "number is not representable as f64 at {path}: {number}",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_json_value_for_flatten(value: &Value, path: &str) -> Result<(), String> {
+    match value {
+        Value::Number(number) => validate_json_number_at(number, path),
         Value::Array(items) => {
             for (i, item) in items.iter().enumerate() {
-                path.push(JsonPathPart::Index(i));
-                validate_json_numbers_inner(item, path)?;
-                path.pop();
+                validate_json_value_for_flatten(item, &json_path_child_index(path, i))?;
             }
             Ok(())
         }
         Value::Object(map) => {
             for (key, item) in map.iter() {
-                path.push(JsonPathPart::Key(key));
-                validate_json_numbers_inner(item, path)?;
-                path.pop();
+                validate_json_value_for_flatten(item, &json_path_child_key(path, key))?;
             }
             Ok(())
         }
@@ -572,10 +562,16 @@ fn value_to_index(value: Option<&Value>, fallback: usize) -> Value {
     }
 }
 
-fn flatten_dict_keep_lists(obj: &Value, except_keys: &BTreeSet<String>, sep: &str) -> Row {
+fn flatten_dict_keep_lists(
+    obj: &Value,
+    except_keys: &BTreeSet<String>,
+    sep: &str,
+    json_path: &str,
+) -> Result<Row, String> {
     let mut out = Row::new();
-    let mut stack: Vec<(&Value, String)> = vec![(obj, String::new())];
-    while let Some((cur, prefix)) = stack.pop() {
+    let mut stack: Vec<(&Value, String, String)> =
+        vec![(obj, String::new(), json_path.to_string())];
+    while let Some((cur, prefix, path)) = stack.pop() {
         if let Value::Object(map) = cur {
             for (k, v) in map.iter() {
                 let full_key = if prefix.is_empty() {
@@ -583,22 +579,31 @@ fn flatten_dict_keep_lists(obj: &Value, except_keys: &BTreeSet<String>, sep: &st
                 } else {
                     format!("{prefix}{k}")
                 };
+                let child_path = json_path_child_key(&path, k);
                 if except_keys.contains(k) || except_keys.contains(&full_key) {
+                    validate_json_value_for_flatten(v, &child_path)?;
                     continue;
                 }
                 match v {
-                    Value::Object(_) => stack.push((v, format!("{full_key}{sep}"))),
+                    Value::Object(_) => stack.push((v, format!("{full_key}{sep}"), child_path)),
                     Value::Array(items) => {
                         if matches!(items.first(), Some(Value::Object(_))) {
                             let mut flattened_items = Vec::new();
-                            for item in items {
+                            for (i, item) in items.iter().enumerate() {
+                                let item_path = json_path_child_index(&child_path, i);
                                 if let Value::Object(_) = item {
                                     flattened_items.push(Value::Object(
-                                        flatten_dict_keep_lists(item, except_keys, sep)
-                                            .into_iter()
-                                            .collect(),
+                                        flatten_dict_keep_lists(
+                                            item,
+                                            except_keys,
+                                            sep,
+                                            &item_path,
+                                        )?
+                                        .into_iter()
+                                        .collect(),
                                     ));
                                 } else {
+                                    validate_json_value_for_flatten(item, &item_path)?;
                                     let mut scalar_map = serde_json::Map::new();
                                     scalar_map.insert(full_key.clone(), item.clone());
                                     flattened_items.push(Value::Object(scalar_map));
@@ -606,20 +611,26 @@ fn flatten_dict_keep_lists(obj: &Value, except_keys: &BTreeSet<String>, sep: &st
                             }
                             out.insert(full_key, Value::Array(flattened_items));
                         } else {
+                            validate_json_value_for_flatten(v, &child_path)?;
                             out.insert(full_key, v.clone());
                         }
                     }
-                    _ => {
+                    Value::Number(number) => {
+                        validate_json_number_at(number, &child_path)?;
+                        out.insert(full_key, v.clone());
+                    }
+                    Value::Null | Value::Bool(_) | Value::String(_) => {
                         out.insert(full_key, v.clone());
                     }
                 }
             }
         } else if !prefix.is_empty() {
+            validate_json_value_for_flatten(cur, &path)?;
             let key = prefix.strip_suffix(sep).unwrap_or(&prefix).to_string();
             out.insert(key, cur.clone());
         }
     }
-    out
+    Ok(out)
 }
 
 fn prefixed_col(list_key: &str, col: &str, sep: &str) -> String {
@@ -632,19 +643,22 @@ fn prefixed_col(list_key: &str, col: &str, sep: &str) -> String {
 
 fn process_value_list(
     list_key: &str,
+    list_path: &str,
     values: &[Value],
     id_value: &Value,
     options: &Options,
     name_cache: &mut NameCache,
     sub_rows: &mut TableRows,
-) {
+) -> Result<(), String> {
     if values.is_empty() {
-        return;
+        return Ok(());
     }
     let mut rows = Vec::new();
     if matches!(values.first(), Some(Value::Object(_))) {
-        for item in values {
+        for (i, item) in values.iter().enumerate() {
+            let item_path = json_path_child_index(list_path, i);
             let Value::Object(map) = item else {
+                validate_json_value_for_flatten(item, &item_path)?;
                 let mut row = Row::new();
                 row.insert(options.index_key.clone(), id_value.clone());
                 row.insert(list_key.to_string(), item.clone());
@@ -660,15 +674,18 @@ fn process_value_list(
             row.insert(options.index_key.clone(), id_value.clone());
             if needs_deep {
                 for (col, value) in
-                    flatten_dict_keep_lists(item, &options.except_keys, &options.sep)
+                    flatten_dict_keep_lists(item, &options.except_keys, &options.sep, &item_path)?
                 {
                     row.insert(name_cache.prefixed_col(list_key, &col, &options.sep), value);
                 }
             } else {
                 for (col, value) in map.iter() {
+                    let child_path = json_path_child_key(&item_path, col);
                     if options.except_keys.contains(col) {
+                        validate_json_value_for_flatten(value, &child_path)?;
                         continue;
                     }
+                    validate_json_value_for_flatten(value, &child_path)?;
                     row.insert(
                         name_cache.prefixed_col(list_key, col, &options.sep),
                         value.clone(),
@@ -678,7 +695,8 @@ fn process_value_list(
             rows.push(row);
         }
     } else {
-        for value in values {
+        for (i, value) in values.iter().enumerate() {
+            validate_json_value_for_flatten(value, &json_path_child_index(list_path, i))?;
             let mut row = Row::new();
             row.insert(options.index_key.clone(), id_value.clone());
             row.insert(list_key.to_string(), value.clone());
@@ -688,6 +706,7 @@ fn process_value_list(
     if !rows.is_empty() {
         sub_rows.insert(list_key.to_string(), rows);
     }
+    Ok(())
 }
 
 fn table_for_sub(options: &Options, sub_key: &str) -> String {
@@ -812,23 +831,26 @@ fn build_excepted_cell_row(
 
 fn process_value_list_columnar(
     list_key: &str,
+    list_path: &str,
     values: &[Value],
     id_value: &Value,
     options: &Options,
     name_cache: &mut NameCache,
-    tables: &mut ColumnarTables,
-) {
+    rows: &mut Vec<(String, CellRow)>,
+) -> Result<(), String> {
     if values.is_empty() {
-        return;
+        return Ok(());
     }
     let table = name_cache.table_for_sub(options, list_key);
     if matches!(values.first(), Some(Value::Object(_))) {
-        for item in values {
+        for (i, item) in values.iter().enumerate() {
+            let item_path = json_path_child_index(list_path, i);
             let Value::Object(map) = item else {
+                validate_json_value_for_flatten(item, &item_path)?;
                 let mut row = CellRow::new();
                 row.insert(options.index_key.clone(), cell_from_value(id_value));
                 row.insert(list_key.to_string(), cell_from_value(item));
-                tables.push_row(table.clone(), row);
+                rows.push((table.clone(), row));
                 continue;
             };
             let needs_deep = map.values().any(|v| match v {
@@ -840,7 +862,7 @@ fn process_value_list_columnar(
             row.insert(options.index_key.clone(), cell_from_value(id_value));
             if needs_deep {
                 for (col, value) in
-                    flatten_dict_keep_lists(item, &options.except_keys, &options.sep)
+                    flatten_dict_keep_lists(item, &options.except_keys, &options.sep, &item_path)?
                 {
                     row.insert(
                         name_cache.prefixed_col(list_key, &col, &options.sep),
@@ -849,25 +871,30 @@ fn process_value_list_columnar(
                 }
             } else {
                 for (col, value) in map.iter() {
+                    let child_path = json_path_child_key(&item_path, col);
                     if options.except_keys.contains(col) {
+                        validate_json_value_for_flatten(value, &child_path)?;
                         continue;
                     }
+                    validate_json_value_for_flatten(value, &child_path)?;
                     row.insert(
                         name_cache.prefixed_col(list_key, col, &options.sep),
                         cell_from_value(value),
                     );
                 }
             }
-            tables.push_row(table.clone(), row);
+            rows.push((table.clone(), row));
         }
     } else {
-        for value in values {
+        for (i, value) in values.iter().enumerate() {
+            validate_json_value_for_flatten(value, &json_path_child_index(list_path, i))?;
             let mut row = CellRow::new();
             row.insert(options.index_key.clone(), cell_from_value(id_value));
             row.insert(list_key.to_string(), cell_from_value(value));
-            tables.push_row(table.clone(), row);
+            rows.push((table.clone(), row));
         }
     }
+    Ok(())
 }
 
 fn flatten_record_columnar(
@@ -877,7 +904,7 @@ fn flatten_record_columnar(
     options: &Options,
     name_cache: &mut NameCache,
     tables: &mut ColumnarTables,
-) {
+) -> Result<(), String> {
     let id_value = match record {
         Value::Object(map) if !options.except_keys.contains(&options.index_key) => {
             value_to_index(map.get(&options.index_key), record_index)
@@ -887,9 +914,10 @@ fn flatten_record_columnar(
 
     let mut single = CellRow::new();
     let mut excepted_values = BTreeMap::<String, &Value>::new();
-    let mut stack: Vec<(&Value, String)> = vec![(record, String::new())];
+    let mut pending_rows = Vec::<(String, CellRow)>::new();
+    let mut stack: Vec<(&Value, String, String)> = vec![(record, String::new(), "$".to_string())];
 
-    while let Some((cur, prefix)) = stack.pop() {
+    while let Some((cur, prefix, path)) = stack.pop() {
         if let Value::Object(map) = cur {
             for (k, v) in map.iter() {
                 let full_key = if prefix.is_empty() {
@@ -897,23 +925,39 @@ fn flatten_record_columnar(
                 } else {
                     format!("{prefix}{k}")
                 };
+                let child_path = json_path_child_key(&path, k);
                 if options.except_keys.contains(k) || options.except_keys.contains(&full_key) {
+                    validate_json_value_for_flatten(v, &child_path)?;
                     excepted_values.insert(full_key, v);
                     continue;
                 }
                 match v {
-                    Value::Object(_) => stack.push((v, format!("{full_key}{}", options.sep))),
+                    Value::Object(_) => {
+                        stack.push((v, format!("{full_key}{}", options.sep), child_path))
+                    }
                     Value::Array(items) => process_value_list_columnar(
-                        &full_key, items, &id_value, options, name_cache, tables,
-                    ),
-                    _ => {
+                        &full_key,
+                        &child_path,
+                        items,
+                        &id_value,
+                        options,
+                        name_cache,
+                        &mut pending_rows,
+                    )?,
+                    Value::Number(number) => {
+                        validate_json_number_at(number, &child_path)?;
+                        single.insert(full_key, cell_from_value(v));
+                    }
+                    Value::Null | Value::Bool(_) | Value::String(_) => {
                         single.insert(full_key, cell_from_value(v));
                     }
                 }
             }
         } else if prefix.is_empty() {
+            validate_json_value_for_flatten(cur, &path)?;
             single.insert("root".to_string(), cell_from_value(cur));
         } else {
+            validate_json_value_for_flatten(cur, &path)?;
             let key = prefix
                 .strip_suffix(&options.sep)
                 .unwrap_or(&prefix)
@@ -929,23 +973,58 @@ fn flatten_record_columnar(
         single.insert(options.index_key.clone(), cell_from_value(&id_value));
     }
 
-    tables.push_row(options.base_table.clone(), single);
+    pending_rows.push((options.base_table.clone(), single));
     for (key, value) in excepted_values {
         let table = name_cache.table_for_excepted(options, &key);
-        tables.push_row(
+        pending_rows.push((
             table,
             build_excepted_cell_row(&key, value, &id_value, context, options),
-        );
+        ));
     }
+    for (table, row) in pending_rows {
+        tables.push_row(table, row);
+    }
+    Ok(())
 }
 
 fn flatten_record(
     record: &Value,
+    input_index: usize,
     record_index: usize,
     context: Option<&Value>,
     options: &Options,
     name_cache: &mut NameCache,
 ) -> RecordOut {
+    let result = flatten_record_inner(record, record_index, context, options, name_cache);
+    match result {
+        Ok((main, subs, excepted)) => RecordOut {
+            input_index,
+            record_index,
+            ok: true,
+            main,
+            subs,
+            excepted,
+            error: None,
+        },
+        Err(error) => RecordOut {
+            input_index,
+            record_index,
+            ok: false,
+            main: Row::new(),
+            subs: TableRows::new(),
+            excepted: TableRows::new(),
+            error: Some(error),
+        },
+    }
+}
+
+fn flatten_record_inner(
+    record: &Value,
+    record_index: usize,
+    context: Option<&Value>,
+    options: &Options,
+    name_cache: &mut NameCache,
+) -> Result<(Row, TableRows, TableRows), String> {
     let id_value = match record {
         Value::Object(map) if !options.except_keys.contains(&options.index_key) => {
             value_to_index(map.get(&options.index_key), record_index)
@@ -956,9 +1035,9 @@ fn flatten_record(
     let mut single = Row::new();
     let mut sub_rows = TableRows::new();
     let mut excepted_values = BTreeMap::<String, Value>::new();
-    let mut stack: Vec<(&Value, String)> = vec![(record, String::new())];
+    let mut stack: Vec<(&Value, String, String)> = vec![(record, String::new(), "$".to_string())];
 
-    while let Some((cur, prefix)) = stack.pop() {
+    while let Some((cur, prefix, path)) = stack.pop() {
         if let Value::Object(map) = cur {
             for (k, v) in map.iter() {
                 let full_key = if prefix.is_empty() {
@@ -966,28 +1045,39 @@ fn flatten_record(
                 } else {
                     format!("{prefix}{k}")
                 };
+                let child_path = json_path_child_key(&path, k);
                 if options.except_keys.contains(k) || options.except_keys.contains(&full_key) {
+                    validate_json_value_for_flatten(v, &child_path)?;
                     excepted_values.insert(full_key, v.clone());
                     continue;
                 }
                 match v {
-                    Value::Object(_) => stack.push((v, format!("{full_key}{}", options.sep))),
+                    Value::Object(_) => {
+                        stack.push((v, format!("{full_key}{}", options.sep), child_path))
+                    }
                     Value::Array(items) => process_value_list(
                         &full_key,
+                        &child_path,
                         items,
                         &id_value,
                         options,
                         name_cache,
                         &mut sub_rows,
-                    ),
-                    _ => {
+                    )?,
+                    Value::Number(number) => {
+                        validate_json_number_at(number, &child_path)?;
+                        single.insert(full_key, v.clone());
+                    }
+                    Value::Null | Value::Bool(_) | Value::String(_) => {
                         single.insert(full_key, v.clone());
                     }
                 }
             }
         } else if prefix.is_empty() {
+            validate_json_value_for_flatten(cur, &path)?;
             single.insert("root".to_string(), cur.clone());
         } else {
+            validate_json_value_for_flatten(cur, &path)?;
             let key = prefix
                 .strip_suffix(&options.sep)
                 .unwrap_or(&prefix)
@@ -1012,13 +1102,7 @@ fn flatten_record(
             .push(build_excepted_row(key, value, &id_value, context, options));
     }
 
-    RecordOut {
-        ok: true,
-        main: single,
-        subs: sub_rows,
-        excepted,
-        error: None,
-    }
+    Ok((single, sub_rows, excepted))
 }
 
 fn slug(value: &str, max_len: usize) -> String {
@@ -2817,6 +2901,7 @@ fn load_parquet_files_to_mysql(
 struct ColumnarChunkOut {
     tables: ColumnarTables,
     records_ok: usize,
+    errors: Vec<FlattenRecordError>,
 }
 
 fn flatten_columnar_chunk_into(
@@ -2824,22 +2909,34 @@ fn flatten_columnar_chunk_into(
     options: &Options,
     name_cache: &mut NameCache,
     tables: &mut ColumnarTables,
-) -> usize {
+) -> (usize, Vec<FlattenRecordError>) {
     let mut records_ok = 0usize;
+    let mut errors = Vec::<FlattenRecordError>::new();
     for (local_i, record) in chunk {
         let global_i = options.index_offset + *local_i;
         let ctx = options.record_contexts.get(*local_i);
-        flatten_record_columnar(record, global_i, ctx, options, name_cache, tables);
-        records_ok += 1;
+        match flatten_record_columnar(record, global_i, ctx, options, name_cache, tables) {
+            Ok(()) => records_ok += 1,
+            Err(error) => errors.push(FlattenRecordError {
+                input_index: *local_i,
+                record_index: global_i,
+                error,
+            }),
+        }
     }
-    records_ok
+    (records_ok, errors)
 }
 
 fn flatten_columnar_chunk(chunk: &[(usize, Value)], options: &Options) -> ColumnarChunkOut {
     let mut tables = ColumnarTables::new();
     let mut name_cache = NameCache::new();
-    let records_ok = flatten_columnar_chunk_into(chunk, options, &mut name_cache, &mut tables);
-    ColumnarChunkOut { tables, records_ok }
+    let (records_ok, errors) =
+        flatten_columnar_chunk_into(chunk, options, &mut name_cache, &mut tables);
+    ColumnarChunkOut {
+        tables,
+        records_ok,
+        errors,
+    }
 }
 
 fn persist_indexed_json_values_columnar_inner(
@@ -2851,14 +2948,16 @@ fn persist_indexed_json_values_columnar_inner(
 ) -> PyResult<PersistOutput> {
     let PersistExtras {
         initial_records_failed,
-        errors,
-        error_indices,
+        mut errors,
+        mut error_indices,
+        mut error_records,
         mut timings_ms,
     } = extras;
 
     let mut tables = ColumnarTables::new();
     let mut flatten_ns = 0u128;
     let mut columnar_merge_ns = 0u128;
+    let mut records_failed = initial_records_failed;
     let records_ok = if options.parallel_workers >= 2 && indexed_values.len() >= 2 {
         let pool = rayon_pool(options.parallel_workers)?;
         let chunk_len = indexed_values
@@ -2878,14 +2977,38 @@ fn persist_indexed_json_values_columnar_inner(
         for chunk in chunks {
             count += chunk.records_ok;
             tables.merge_from(chunk.tables);
+            for error in chunk.errors {
+                records_failed += 1;
+                record_flatten_error(
+                    &mut errors,
+                    &mut error_indices,
+                    &mut error_records,
+                    &options,
+                    error.input_index,
+                    error.record_index,
+                    error.error,
+                );
+            }
         }
         columnar_merge_ns += merge_start.elapsed().as_nanos();
         count
     } else {
         let flatten_start = Instant::now();
         let mut name_cache = NameCache::new();
-        let count =
+        let (count, flatten_errors) =
             flatten_columnar_chunk_into(&indexed_values, &options, &mut name_cache, &mut tables);
+        for error in flatten_errors {
+            records_failed += 1;
+            record_flatten_error(
+                &mut errors,
+                &mut error_indices,
+                &mut error_records,
+                &options,
+                error.input_index,
+                error.record_index,
+                error.error,
+            );
+        }
         flatten_ns += flatten_start.elapsed().as_nanos();
         count
     };
@@ -2909,7 +3032,6 @@ fn persist_indexed_json_values_columnar_inner(
         (write_output.parquet_write_ns / 1_000_000) as u64,
     ));
     timings_ms.push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
-    let records_failed = initial_records_failed;
     let records_read = records_ok + records_failed;
 
     Ok(PersistOutput {
@@ -2923,7 +3045,7 @@ fn persist_indexed_json_values_columnar_inner(
         tables: write_output.table_meta,
         errors,
         error_indices,
-        error_records: Vec::new(),
+        error_records,
         timings_ms,
         id_compaction_state: None,
     })
@@ -2949,7 +3071,8 @@ fn persist_indexed_json_values_inner(
     let PersistExtras {
         initial_records_failed,
         mut errors,
-        error_indices,
+        mut error_indices,
+        mut error_records,
         mut timings_ms,
     } = extras;
     let flatten_start = Instant::now();
@@ -2962,7 +3085,7 @@ fn persist_indexed_json_values_inner(
                     let global_i = options.index_offset + *local_i;
                     let ctx = options.record_contexts.get(*local_i);
                     let mut name_cache = NameCache::new();
-                    flatten_record(record, global_i, ctx, &options, &mut name_cache)
+                    flatten_record(record, *local_i, global_i, ctx, &options, &mut name_cache)
                 })
                 .collect()
         })
@@ -2973,7 +3096,7 @@ fn persist_indexed_json_values_inner(
             .map(|(local_i, record)| {
                 let global_i = options.index_offset + *local_i;
                 let ctx = options.record_contexts.get(*local_i);
-                flatten_record(record, global_i, ctx, &options, &mut name_cache)
+                flatten_record(record, *local_i, global_i, ctx, &options, &mut name_cache)
             })
             .collect()
     };
@@ -3000,7 +3123,15 @@ fn persist_indexed_json_values_inner(
         } else {
             records_failed += 1;
             if let Some(err) = out.error {
-                errors.push(err);
+                record_flatten_error(
+                    &mut errors,
+                    &mut error_indices,
+                    &mut error_records,
+                    &options,
+                    out.input_index,
+                    out.record_index,
+                    err,
+                );
             }
         }
     }
@@ -3116,7 +3247,7 @@ fn persist_indexed_json_values_inner(
         tables: table_meta,
         errors,
         error_indices,
-        error_records: Vec::new(),
+        error_records,
         timings_ms,
         id_compaction_state: if options.id_compaction.enabled {
             Some(id_compaction_state)
@@ -3215,6 +3346,72 @@ fn jsonl_context(source_path: &str, line_no: usize, record_index: usize) -> Valu
         Value::Number(Number::from(record_index)),
     );
     Value::Object(ctx)
+}
+
+fn jsonl_context_with_raw_line(
+    source_path: &str,
+    line_no: usize,
+    record_index: usize,
+    raw_line: &[u8],
+) -> Value {
+    let mut ctx = match jsonl_context(source_path, line_no, record_index) {
+        Value::Object(ctx) => ctx,
+        _ => serde_json::Map::new(),
+    };
+    ctx.insert(
+        "raw_line".to_string(),
+        Value::String(String::from_utf8_lossy(trim_ascii_whitespace(raw_line)).to_string()),
+    );
+    Value::Object(ctx)
+}
+
+fn context_string(context: Option<&Value>, key: &str) -> Option<String> {
+    let Some(Value::Object(map)) = context else {
+        return None;
+    };
+    map.get(key).and_then(|value| match value {
+        Value::String(text) => Some(text.clone()),
+        _ => None,
+    })
+}
+
+fn context_usize(context: Option<&Value>, key: &str) -> Option<usize> {
+    let Some(Value::Object(map)) = context else {
+        return None;
+    };
+    map.get(key)
+        .and_then(Value::as_u64)
+        .and_then(|value| usize::try_from(value).ok())
+}
+
+fn record_flatten_error(
+    errors: &mut Vec<String>,
+    error_indices: &mut Vec<usize>,
+    error_records: &mut Vec<JsonlErrorRecord>,
+    options: &Options,
+    input_index: usize,
+    record_index: usize,
+    error: String,
+) {
+    let context = options.record_contexts.get(input_index);
+    let error = format!("{error}; use the Python backend");
+    if let Some(raw_line) = context_string(context, "raw_line") {
+        let source_path = context_string(context, "source_path").unwrap_or_default();
+        let line_no = context_usize(context, "line_no").unwrap_or(record_index);
+        let context_record_index = context_usize(context, "record_index").unwrap_or(record_index);
+        errors.push(format!("record {context_record_index}: {error}"));
+        error_indices.push(context_record_index);
+        error_records.push(JsonlErrorRecord {
+            source_path,
+            line_no,
+            record_index: context_record_index,
+            raw_line,
+            error,
+        });
+    } else {
+        errors.push(format!("record {input_index}: {error}"));
+        error_indices.push(input_index);
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3333,6 +3530,7 @@ fn flush_indexed_jsonl_chunk(
             initial_records_failed: 0,
             errors: Vec::new(),
             error_indices: Vec::new(),
+            error_records: Vec::new(),
             timings_ms: Vec::new(),
         },
         Instant::now(),
@@ -3348,6 +3546,7 @@ fn flush_columnar_jsonl_micro_chunk(
     contexts: &mut Vec<Value>,
     chunk_start_index: usize,
     pending: &mut PendingColumnarJsonl,
+    aggregate: &mut PersistOutput,
     flatten_ns: &mut u128,
     options: &Options,
     chunk_size: usize,
@@ -3365,12 +3564,24 @@ fn flush_columnar_jsonl_micro_chunk(
     };
     let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
     let flatten_start = Instant::now();
-    let records_ok = flatten_columnar_chunk_into(
+    let (records_ok, flatten_errors) = flatten_columnar_chunk_into(
         &chunk_values,
         &chunk_options,
         &mut pending.name_cache,
         &mut pending.tables,
     );
+    for error in flatten_errors {
+        aggregate.records_failed += 1;
+        record_flatten_error(
+            &mut aggregate.errors,
+            &mut aggregate.error_indices,
+            &mut aggregate.error_records,
+            &chunk_options,
+            error.input_index,
+            error.record_index,
+            error.error,
+        );
+    }
     *flatten_ns += flatten_start.elapsed().as_nanos();
     pending.records_ok += records_ok;
 }
@@ -3448,7 +3659,8 @@ fn persist_jsonl_sources_inner(
         id_compaction_state: None,
     };
 
-    let collect_contexts = !options.except_keys.is_empty();
+    let stream_columnar = options.columnar_accumulator && parquet_flush_records > chunk_size;
+    let collect_contexts = !stream_columnar;
     let mut values = IndexedJsonValues::with_capacity(chunk_size);
     let mut contexts = if collect_contexts {
         Vec::<Value>::with_capacity(chunk_size)
@@ -3460,13 +3672,11 @@ fn persist_jsonl_sources_inner(
     let mut batch_idx = options.batch_idx;
     let mut read_line_ns = 0u128;
     let mut parse_ns = 0u128;
-    let stream_columnar = options.columnar_accumulator && parquet_flush_records > chunk_size;
     let mut pending_columnar = PendingColumnarJsonl::new();
     let mut flatten_ns = 0u128;
     let mut parquet_ns = 0u128;
     let mut arrow_build_ns = 0u128;
     let mut parquet_write_ns = 0u128;
-    let mut number_validate_ns = 0u128;
 
     'sources: for source in sources.iter() {
         let path = PathBuf::from(source);
@@ -3510,35 +3720,63 @@ fn persist_jsonl_sources_inner(
 
             match parsed {
                 Ok(Some(value @ Value::Object(_))) => {
-                    let number_validate_start = Instant::now();
-                    let number_validation = validate_json_numbers(&value);
-                    number_validate_ns += number_validate_start.elapsed().as_nanos();
-                    match number_validation {
-                        Ok(()) => {
-                            if values.is_empty() {
-                                chunk_start_index = record_index;
-                            }
-                            let local_index = record_index - chunk_start_index;
-                            values.push((local_index, value));
-                            if collect_contexts {
-                                while contexts.len() < local_index {
-                                    contexts.push(Value::Null);
+                    if stream_columnar {
+                        let context = jsonl_context(source, line_no, record_index);
+                        let flatten_start = Instant::now();
+                        match flatten_record_columnar(
+                            &value,
+                            record_index,
+                            Some(&context),
+                            &options,
+                            &mut pending_columnar.name_cache,
+                            &mut pending_columnar.tables,
+                        ) {
+                            Ok(()) => {
+                                pending_columnar.records_ok += 1;
+                                if pending_columnar.records_ok >= parquet_flush_records {
+                                    flush_pending_columnar_jsonl(
+                                        &mut pending_columnar,
+                                        &mut batch_idx,
+                                        &mut aggregate,
+                                        &options,
+                                        &parquet_root,
+                                        &mut parquet_ns,
+                                        &mut arrow_build_ns,
+                                        &mut parquet_write_ns,
+                                    )?;
                                 }
-                                contexts.push(jsonl_context(source, line_no, record_index));
+                            }
+                            Err(e) => {
+                                aggregate.records_failed += 1;
+                                push_jsonl_error(
+                                    &mut aggregate.errors,
+                                    &mut aggregate.error_indices,
+                                    &mut aggregate.error_records,
+                                    source,
+                                    line_no,
+                                    record_index,
+                                    &raw_line,
+                                    format!("{e}; use the Python backend"),
+                                );
                             }
                         }
-                        Err(e) => {
-                            aggregate.records_failed += 1;
-                            push_jsonl_error(
-                                &mut aggregate.errors,
-                                &mut aggregate.error_indices,
-                                &mut aggregate.error_records,
+                        flatten_ns += flatten_start.elapsed().as_nanos();
+                    } else {
+                        if values.is_empty() {
+                            chunk_start_index = record_index;
+                        }
+                        let local_index = record_index - chunk_start_index;
+                        values.push((local_index, value));
+                        if collect_contexts {
+                            while contexts.len() < local_index {
+                                contexts.push(Value::Null);
+                            }
+                            contexts.push(jsonl_context_with_raw_line(
                                 source,
                                 line_no,
                                 record_index,
                                 &raw_line,
-                                format!("{e}; use the Python backend"),
-                            );
+                            ));
                         }
                     }
                 }
@@ -3581,6 +3819,7 @@ fn persist_jsonl_sources_inner(
                         &mut contexts,
                         chunk_start_index,
                         &mut pending_columnar,
+                        &mut aggregate,
                         &mut flatten_ns,
                         &options,
                         chunk_size,
@@ -3621,6 +3860,7 @@ fn persist_jsonl_sources_inner(
             &mut contexts,
             chunk_start_index,
             &mut pending_columnar,
+            &mut aggregate,
             &mut flatten_ns,
             &options,
             chunk_size,
@@ -3674,11 +3914,7 @@ fn persist_jsonl_sources_inner(
         "rust_arrow.json_parse",
         (parse_ns / 1_000_000) as u64,
     );
-    set_timing_ms(
-        &mut aggregate.timings_ms,
-        "rust_arrow.number_validate",
-        (number_validate_ns / 1_000_000) as u64,
-    );
+    set_timing_ms(&mut aggregate.timings_ms, "rust_arrow.number_validate", 0);
     if stream_columnar {
         set_timing_ms(&mut aggregate.timings_ms, "rust_arrow.columnar_merge", 0);
         set_timing_ms(
@@ -3722,6 +3958,7 @@ fn persist_json_batch(
             initial_records_failed: 0,
             errors: Vec::new(),
             error_indices: Vec::new(),
+            error_records: Vec::new(),
             timings_ms: vec![("rust_arrow.py_to_json", py_to_json_ms)],
         },
         total_start,
@@ -3744,25 +3981,12 @@ fn persist_json_lines_batch(
     let mut errors = Vec::<String>::new();
     let mut error_indices = Vec::<usize>::new();
     let mut parse_ns = 0u128;
-    let mut number_validate_ns = 0u128;
     for (i, item) in list.iter().enumerate() {
         let parse_start = Instant::now();
         let parsed = parse_json_line_value(&item)?;
         parse_ns += parse_start.elapsed().as_nanos();
         match parsed {
-            Ok(Some(value @ Value::Object(_))) => {
-                let number_validate_start = Instant::now();
-                let number_validation = validate_json_numbers(&value);
-                number_validate_ns += number_validate_start.elapsed().as_nanos();
-                match number_validation {
-                    Ok(()) => values.push((i, value)),
-                    Err(e) => {
-                        records_failed += 1;
-                        error_indices.push(i);
-                        errors.push(format!("record {i}: {e}; use the Python backend"));
-                    }
-                }
-            }
+            Ok(Some(value @ Value::Object(_))) => values.push((i, value)),
             Ok(Some(value)) => {
                 records_failed += 1;
                 error_indices.push(i);
@@ -3780,7 +4004,6 @@ fn persist_json_lines_batch(
         }
     }
     let parse_ms = (parse_ns / 1_000_000) as u64;
-    let number_validate_ms = (number_validate_ns / 1_000_000) as u64;
 
     persist_indexed_json_values(
         py,
@@ -3791,9 +4014,10 @@ fn persist_json_lines_batch(
             initial_records_failed: records_failed,
             errors,
             error_indices,
+            error_records: Vec::new(),
             timings_ms: vec![
                 ("rust_arrow.json_parse", parse_ms),
-                ("rust_arrow.number_validate", number_validate_ms),
+                ("rust_arrow.number_validate", 0),
             ],
         },
         total_start,

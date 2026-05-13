@@ -1726,6 +1726,92 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertIn("outside supported i64/u64 range", result["errors"][0])
             self.assertFalse(list(out_dir.rglob("*.parquet")))
 
+    def test_rust_arrow_raw_jsonl_rejects_nested_integer_with_path(self):
+        self._require_rust_arrow_with_pyarrow()
+
+        from KISTI_DB_Manager.rust_arrow_backend import persist_json_lines_batch_to_parquet
+
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "parquet_out"
+            result = persist_json_lines_batch_to_parquet(
+                ['{"id": 1, "outer": {"items": [{"bad": 18446744073709551616}]}}'],
+                base_table="base",
+                index_key="id",
+                except_keys=[],
+                excepted_expand_dict=False,
+                sep="__",
+                parquet_dir=out_dir,
+                batch_idx=0,
+                index_offset=0,
+                record_contexts=[{"line_no": 1}],
+                parallel_workers=0,
+            )
+
+            self.assertEqual(result["records_ok"], 0)
+            self.assertEqual(result["records_failed"], 1)
+            self.assertIn("$.outer.items[0].bad", result["errors"][0])
+            self.assertIn("outside supported i64/u64 range", result["errors"][0])
+            self.assertFalse(list(out_dir.rglob("*.parquet")))
+
+    def test_rust_arrow_direct_jsonl_rejects_excepted_nested_integer_during_flatten(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "x.jsonl"
+            source.write_text(
+                "\n".join(
+                    [
+                        '{"id": 1, "payload": {"nested": 18446744073709551616}}',
+                        "",
+                        '{"id": 2, "payload": {"nested": 7}}',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+            for columnar in (False, True):
+                out_dir = root / ("parquet_columnar" if columnar else "parquet_rows")
+                quarantine_path = root / ("quarantine_columnar.jsonl" if columnar else "quarantine_rows.jsonl")
+                from KISTI_DB_Manager.quarantine import QuarantineWriter
+
+                res = run_json_pipeline(
+                    {
+                        "PATH": str(root),
+                        "file_name": "x.jsonl",
+                        "file_type": "jsonl",
+                        "table_name": "base",
+                        "KEY_SEP": "__",
+                        "except_keys": ["payload"],
+                        "persist_parquet_files": True,
+                        "persist_parquet_dir": str(out_dir),
+                        "flatten_backend": "rust-arrow",
+                        "rust_raw_jsonl_parse": True,
+                        "rust_raw_jsonl_file_parse": True,
+                        "rust_columnar_accumulator": columnar,
+                    },
+                    db_config,
+                    chunk_size=1,
+                    create=False,
+                    load=False,
+                    index=False,
+                    optimize=False,
+                    continue_on_error=True,
+                    quarantine=QuarantineWriter(quarantine_path),
+                )
+
+                self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+                self.assertEqual(res.report.stats.get("records_read"), 2)
+                self.assertEqual(res.report.stats.get("records_ok"), 1)
+                self.assertEqual(res.report.stats.get("records_failed"), 1)
+                quarantine_text = quarantine_path.read_text(encoding="utf-8")
+                self.assertIn("$.payload.nested", quarantine_text)
+                self.assertIn("outside supported i64/u64 range", quarantine_text)
+                excepted = self._read_single_parquet_table(pq, out_dir, "base__excepted__payload").to_pydict()
+                self.assertEqual(excepted["id"], [2])
+
     def test_run_json_pipeline_rust_arrow_cleans_partial_artifacts_on_id_compaction_failure(self):
         self._require_rust_arrow_with_pyarrow()
 
