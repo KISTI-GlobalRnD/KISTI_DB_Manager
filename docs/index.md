@@ -28,7 +28,8 @@ The priority is operational guidance for large, messy datasets rather than auto-
 ### Design Notes
 
 - [Design Notes Overview](design/index.md)
-- performance and benchmark notes under `docs/performance/`
+- [Scenario-Based Parquet Jobs](design/parquet_job_scenarios.md)
+- historical performance and benchmark notes under `docs/performance/`
 
 ## Recommended reading order
 

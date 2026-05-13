@@ -1,4 +1,10 @@
-# OpenAlex Parquet Materializer Plan (2026-03-31)
+# Historical Design Note: OpenAlex Parquet Materializer Plan (2026-03-31)
+
+!!! note "Historical status"
+    This document records the March 2026 design plan. The current operational flow is documented in
+    [OpenAlex Example Workflow](../manual/openalex-workflow.md) and the current Rust/backend guidance is in
+    [Rust Backend and Profiling](../manual/json-rust-backend.md).
+    Treat this page as background, not as the primary runbook.
 
 - Goal: keep `parse-parquet*` parquet artifacts as the canonical raw layer, and run `MariaDB/MySQL` load as a separate materialization stage afterward.
 - Background: the package is strong at `raw JSON -> flatten -> DB`, but it did not have an independent `parquet -> DB` module. That made it difficult to satisfy both local-first work and full raw DB loading.

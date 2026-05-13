@@ -4,11 +4,10 @@
 
 MariaDB/MySQL handling utilities for preprocessing, import/export, and management.
 
-## Versioning note (0.7.0)
+## Versioning note (0.7.0+)
 
-Starting from **0.7.0**, this repository keeps a single implementation:
-- **`KISTI_DB_Manager` is the “v2” codebase** (refactor + robustness + performance).
-- The old v1-only implementation has been removed from the working tree (available in git history).
+Starting from **0.7.0**, this repository keeps one maintained package implementation.
+The pre-refactor implementation is no longer present in the working tree and is only available from git history.
 
 ## Goals
 
@@ -235,7 +234,7 @@ kisti-db-manager json run \
   --no-persist-parquet-files
 ```
 
-Materialize persisted parquet artifacts into DB later (MVP helper script):
+Materialize persisted parquet artifacts into DB later:
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
@@ -359,9 +358,9 @@ For ZIP sources, multiple members can be selected with `json_file_names`:
 }
 ```
 
-## Python API (v1-style usage)
+## Python API (compatibility usage)
 
-Most v1-style notebooks can keep the same import:
+Existing notebooks that import package modules directly can keep the same import style:
 
 ```python
 from KISTI_DB_Manager import manage, preview

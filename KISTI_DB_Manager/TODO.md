@@ -1,151 +1,35 @@
-# KISTI_DB_Manager Todo (Prioritized)
+# KISTI_DB_Manager Roadmap
 
-## P0 (Core robustness)
-- Finish `openalex_20260330_raw_yjk` serving rebuild
-  - check whether a physical backup/snapshot exists for the pre-reset `works` table
-  - fresh `works` reload from Parquet completed; previous validation snapshot matched `492,293,207` Parquet rows to `492,293,207` DB rows
-  - `works` finalize completed on `2026-04-30`: strict `uk_works_id` unique index created on `id(64)`; analyze/validation intentionally skipped to avoid another full-table QC pass
-- Complete run-state rollout for long-running parquet jobs
-  - migrate `scripts/oa_reconstruct_works_abstract.py`
-- Add shared failure envelope for remaining orchestration scripts
-  - phase / counters / last successful step / subprocess exit metadata
+This file keeps only current engineering follow-ups. Historical incident notes and completed run logs should stay in git history or dated docs under `docs/performance/`.
 
-## Done
-- Type widening on insert failures (tabular/json): widen/add column and retry
-- `run_json_pipeline()` (json/jsonl/gz/zip) with per-record quarantine + RunReport stats
-- Multi-input JSON ingest: `file_names`/`file_glob` + ZIP multi-member (`json_file_names`) support
-- Excepted branch preservation: store raw JSON + path/type + source context in excepted tables
-- Integration smoke-run docs: real DB templates + `examples/smoke_real_db.sh`
-- Optional deps split (`tabular/json/db/viz`) + friendly CLI error on missing extras
-- Schema drift handling: `ALTER TABLE ADD COLUMN` best-effort during load
-- CLI parity: `json run --dry-run/--print-ddl` (+ NameMap artifacts)
-- Shared run-state primitive
-  - `KISTI_DB_Manager/runstate.py`
-  - atomic JSON writes
-  - common `generated_at` / `updated_at`
-- Scenario-based large parquet execution note
-  - `docs/design/parquet_job_scenarios.md`
-- Shared bucketed execution engine
-  - `KISTI_DB_Manager/bucketed_jobs.py`
-  - batch -> bucket spill -> bucket-local reduce
-- Run-state rollout completed for:
-  - `KISTI_DB_Manager/openalex_change_report.py`
-  - `KISTI_DB_Manager/openalex_change_tables.py`
-  - `KISTI_DB_Manager/parquet_delta_merge.py`
-  - `KISTI_DB_Manager/parquet_replay_repair.py`
-  - `scripts/oa_dedup_merged_main.py`
-  - `scripts/oa_rebuild_0330_serving_db.py`
-- `works_affiliation_agg` execution model replaced
-  - global single-query aggregate removed
-  - bucketed two-pass build validated against sample exact SQL result
-- `direct_materialize` progress semantics tightened
-  - stale `active` / `current` entries are cleared into bounded history at session start
-  - selected-table session counters added
-  - corrupt progress JSON is backed up before reset
-  - fresh DB rebuild archives stale `parquet_materialize/progress.json` before drop/create so old completed state cannot skip loads into an empty DB
-  - `--reset-selected-tables` drops explicitly selected target tables and clears their per-table resume state before reload
-  - destructive reset now requires exact `--confirm-drop-tables <target_table[,target_table...]>`
-  - selected missing parquet table directories and selected empty table directories now fail early
-  - zero-row parquet files and already-at-end partial files are marked completed in progress instead of remaining permanently incomplete
-  - DuckDB staging LOAD DATA path now fails if MariaDB inserted row count differs from expected chunk rows
-  - DuckDB CSV staging now uses matching MariaDB `LOAD DATA ... ESCAPED BY '"'`; old mismatch silently corrupted records
-  - DuckDB CSV staging NULL marker changed to `NULL`; `\N` is literal text when MariaDB uses `ESCAPED BY '"'`
-  - generated LOAD DATA files now force `LINES TERMINATED BY '\n'`; auto-detection can misread CRLF inside quoted field data
-  - `LOAD DATA LOCAL INFILE` now passes the file path as a DB-API parameter instead of string-concatenating the path into SQL
-  - direct parquet materialize now runs a target-DB DuckDB/LOAD DATA preflight before destructive reset or large loads
-  - direct parquet materialize now runs a cheap Parquet footer/schema preflight before destructive reset or large loads, and creates target tables from the selected files' union schema instead of the first file only
-  - LOAD DATA writer/reader settings are centralized in `KISTI_DB_Manager/load_data.py`
-  - expected-row checks now happen inside the common LOAD DATA helper before `commit()`
-  - direct DuckDB materialize path no longer imports pandas/creates SQLAlchemy engines unless the fallback path is actually needed
-  - optional MariaDB integration tests cover DuckDB quoted newline/CRLF/quote/backslash/NULL/literal-`NULL` round-trip, wrong escape rollback, and `LOAD DATA IGNORE`
-  - `LOAD DATA IGNORE` callers now use the common helper via `ignore_duplicates=True`
-  - GCC TSV materializer now reuses the common MySQL TSV escaping and LOAD DATA dialect
-- `bucketed_jobs.py` resume boundaries added
-  - source batch done markers
-  - reduce bucket done markers
-  - partial batch/bucket output cleanup before retry
-- `scripts/oa_finalize_openalex_serving_db.py` now writes incremental validation state
-  - index/analyze/validation progress is persisted before completion
-  - index failures are recorded instead of losing the whole report context
-- `scripts/oa_rebuild_0330_serving_db.py` failure envelope improved for future runs
-  - tracked subprocess phase
-  - failed phase/error persisted to progress JSON
-- `scripts/oa_validate_serving_reload.py` added for full serving reload validation
-  - compares every table's Parquet footer row count against DB `COUNT(*)`
-  - checks `works.id` health on both Parquet and DB: NULL, literal `NULL`, blank, malformed, duplicate, prefix-collision sample
-  - reports source Parquet duplicate key samples with file paths, so cross-file duplicate `works.id` can be distinguished from same-file duplicates
-  - compares `works.id` hash buckets between Parquet and DB by default; this catches many missing/duplicated range or bucket-level reload mistakes that total row counts can hide
-  - scans DB text columns for literal `\N` markers so NULL-as-string pollution is caught outside key columns too
-  - sample-checksums `works` by default across common key/value columns; extra tables/columns are available via CLI flags
-  - row-bucket checksum mode is available for child/deep-audit tables where `id` is not unique and ordered key samples are unsafe
-  - checks child-table `id` NULL/literal/blank counts and orphan rows against `works`
-  - writes incremental `reload_validation.json`, records the current phase/table, supports `--resume`, and is called by the 0330 rebuild orchestrator before finalize
-  - key-health summary results are now checkpointed before optional sample queries, so killing a slow sample no longer loses the completed summary
-  - optional key samples are skipped when the summary proves their row count is zero; old resume JSON sample errors are pruned in that case
-  - prefix-collision sampling is now opt-in via `--prefix-collision-sample`; the default skips it because it can become a full grouped scan/sort on `works`
-- Removed leftover ad hoc JSON/time helpers from `KISTI_DB_Manager/openalex_serving.py`
+## Current Status
 
-## P1 (Quality & maintainability)
-- Add structured logging (stdio JSON logs option) + deterministic run directory layout
-- Add integration tests (dockerized MariaDB) for create/load/index/optimize end-to-end
-- Define shared job profiles by scenario
-  - `direct_materialize`
-  - `dedup_by_key`
-  - `delta_merge`
-  - `bucketed_transform`
-  - `bucketed_compare`
-- Move more orchestration/report scripts onto shared run-state helpers
-  - `scripts/oa_validate_merged_parquet.py`
-  - `scripts/oa_finalize_from_report.py`
-  - `scripts/oa_build_openalex_table_bundle.py`
-- Split dataset adapters from execution strategy more cleanly
-  - keep OpenAlex-specific SQL/profile logic thin
-  - avoid new OpenAlex-only execution loops outside shared engines
+Completed in the current development batch:
 
-## P2 (Performance & UX)
-- Chunked/streaming ingest for large CSV/JSONL (avoid full pandas load)
-- Parallel flatten/ingest (process pool) with bounded memory
-- Schema visualization improvements (NameMap-aware, drift-aware)
-- Add spill/temp monitoring hooks
-  - temp dir growth
-  - bucket output growth
-  - soft threshold alerts
-- Add exact/approx validation helpers for resumed DB loads
-  - duplicate sampling
-  - report-based skip verification
-  - orphan/count smoke checks
+- output/path safety helpers and symlink-safe write/delete wrappers
+- backend-aware `json profile-parallel`
+- Rust Arrow JSON/parquet backend
+- OpenAlex ID compaction parity for the Rust path
+- experimental Rust MySQL parquet loader with transactional batch insert
+- Rust DB smoke and load benchmark scripts
+- consolidated Rust backend documentation
 
-## Current operational note
-- Critical LOAD DATA invariant:
-  - DuckDB `COPY ... (QUOTE '"', ESCAPE '"', NULLSTR 'NULL')` output must be loaded by MariaDB with `FIELDS ... OPTIONALLY ENCLOSED BY '"' ESCAPED BY '"'`
-  - Do not use `NULLSTR '\N'` for DuckDB-staged files with MariaDB `ESCAPED BY '"'`; MariaDB loads it as literal `\N`, not SQL NULL
-  - Do not change MariaDB back to `ESCAPED BY '\\'` for DuckDB-staged files
-  - Generated staging files must use explicit `LINES TERMINATED BY '\n'`; do not infer CRLF from quoted field contents
-  - Keep the runtime preflight enabled for DuckDB staging unless intentionally debugging; it must run before dropping selected target tables
-  - The broken pairing was reproduced on `works/part-0.parquet`: stage file `100,000` rows, MariaDB parsed `99,995` rows, `SHOW WARNINGS` returned `0`
-  - Always verify MariaDB `cursor.rowcount` against expected chunk rows before advancing progress
-- As of `2026-04-27`, `openalex_20260330_raw_yjk` rebuild reached finalize but failed:
-  - `core_load=done`
-  - `rest_load=done`
-  - `affiliation_agg_build=done`
-  - `affiliation_agg_load=done`
-  - `finalize=failed`
-  - failure: `CREATE UNIQUE INDEX uk_works_id ON works(id(64))` hit duplicate `NULL`
-  - bounded `works.id` key-health audit saved to `reports/works_id_key_health.json`
-  - audit found no existing `works` indexes; NULL/literal-NULL sample queries exceeded 30s without a sample
-  - source Parquet audit saved to `reports/works_id_parquet_key_health.json`
-  - source Parquet rows checked: `492,293,207`
-  - source Parquet `id` NULL/literal `NULL`/blank counts: `0`
-  - source Parquet malformed key count: `1` (`https://openalex.org/W-1`)
-  - source Parquet duplicate/prefix audit saved to `reports/works_id_parquet_duplicate_prefix_health.json`
-  - source Parquet duplicate `id` sample: none
-  - source Parquet `LEFT(id, 64)` prefix collision sample: none
-  - `idx_works_id_audit` helper index attempt was interrupted; no helper index exists
-  - current DB `works` is partially reloaded after an interrupted reset (`16/493` files in progress JSON)
-  - current partial `works` row count does not match progress (`15,997,519` DB rows vs `16,000,000` progress rows)
-  - root cause reproduced on `part-0` first chunk: DuckDB stage had `100,000` rows, MariaDB read `99,995` with `ESCAPED BY '\\'`
-  - parser fix verified with `ESCAPED BY '"'`: same stage loads `100,000/100,000` rows into a temporary table
-  - later MariaDB integration test found the fresh rebuild command still used the old DuckDB `NULLSTR '\N'`, so nullable columns in that in-flight reload likely contain literal `\N`
-  - fresh rebuild restarted after parser fix; early check matched progress and DB count at `2,100,000` rows
-  - fallback non-unique indexes are available diagnostically, but final acceptance should use strict unique indexes after DB repair
-  - strong validation note: never treat a `LEFT(id, 64)` prefix-collision sample as a default smoke check for `works`; it can group essentially every `works.id` and spend hours in `Creating sort index` while adding little value after `COUNT(DISTINCT id)` already reports zero duplicates
+## P0 Before Release
+
+- Push the current commit stack and confirm CI/build behavior on a clean checkout.
+- Build an sdist/wheel and verify the Rust crate files are included while `crates/kisti_json_rs/target` is excluded.
+- Run one representative real-data profile with `python,rust-arrow` backends and record the recommendation artifact.
+- Run one representative DB load benchmark comparing Python loader vs `--loader rust-mysql` from the same parquet root.
+
+## P1 Hardening
+
+- Add CI coverage for Rust extension build when the environment supports Rust and maturin.
+- Expand Rust MySQL loader type coverage only when a real parquet contract needs it.
+- Add a rollback/partial-insert integration test around a deliberately failing Rust DB load batch.
+- Promote common DB smoke env parsing into a shared helper if more live smoke scripts are added.
+
+## P2 Operations
+
+- Keep public docs manual-first and move dated design notes under explicit historical labels.
+- Add benchmark result templates for `parallel_profile.json` and Rust DB load-only reports.
+- Keep OpenAlex-specific orchestration thin and move reusable execution strategy into package modules.

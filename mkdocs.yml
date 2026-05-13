@@ -42,6 +42,7 @@ nav:
       - Overton Validation Queries: reference/overton-validation.md
   - Design Notes:
       - Design Notes Overview: design/index.md
-      - 2026-02-09 Ingest Tuning: performance/2026-02-09_ingest_tuning.md
-      - 2026-02-27 Schema Display Benchmark: performance/2026-02-27_schema-display-benchmark_from_02-goldset.md
-      - 2026-03-31 Parquet Materializer Plan: performance/2026-03-31_parquet_materializer_plan.md
+      - Scenario-Based Parquet Jobs: design/parquet_job_scenarios.md
+      - 2026-02-09 Historical Ingest Tuning: performance/2026-02-09_ingest_tuning.md
+      - 2026-02-27 Historical Schema Display Benchmark: performance/2026-02-27_schema-display-benchmark_from_02-goldset.md
+      - 2026-03-31 Historical Parquet Materializer Plan: performance/2026-03-31_parquet_materializer_plan.md

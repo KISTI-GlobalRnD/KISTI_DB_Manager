@@ -1,4 +1,9 @@
-# Performance Improvement Report (2026-02-09) — JSON Flatten + MariaDB LOAD DATA Tuning
+# Historical Benchmark: JSON Flatten + MariaDB LOAD DATA Tuning (2026-02-09)
+
+!!! note "Historical status"
+    This benchmark records the February 2026 streaming/LOAD DATA tuning pass.
+    Use [JSON Modes](../manual/json-modes.md) and [Rust Backend and Profiling](../manual/json-rust-backend.md)
+    for current backend and profiling guidance.
 
 - Focus: reducing end-to-end wall time for JSON flattening (= TSV generation) plus `LOAD DATA LOCAL INFILE`
 - Bench runner: `examples/bench_ingest_chunk_sweep.py` (the DB is `DROP/CREATE`d on every run to keep conditions fixed)
