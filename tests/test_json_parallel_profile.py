@@ -341,8 +341,10 @@ class TestJsonParallelProfile(unittest.TestCase):
                 report.bump("parquet_files_persisted", 1)
                 report.bump("parquet_rows_emitted", 1000)
                 report.add_time_ms("io.json_parse", 100)
+                report.add_time_ms("rust_arrow.py_to_json", 25)
                 report.add_time_ms("json.flatten", int(duration * 800))
                 report.add_time_ms("json.parquet.persist", 50)
+                report.add_time_ms("rust_arrow.total", int(duration * 850))
                 report.add_time_ms("pipeline.json.total", int(duration * 1000))
                 report.duration_s = duration
                 report.finished_at = "2026-01-01T00:00:00+00:00"
@@ -379,6 +381,8 @@ class TestJsonParallelProfile(unittest.TestCase):
                 self.assertTrue(Path(out_dir, f"w{worker}", "artifact_contract.json").exists())
             saved = json.loads(Path(out_dir, "parallel_profile.json").read_text(encoding="utf-8"))
             self.assertEqual(saved["runs"][0]["timings_ms"]["json.parquet.persist"], 50)
+            self.assertEqual(saved["runs"][0]["timings_ms"]["rust_arrow.py_to_json"], 25)
+            self.assertIn("rust_arrow.py_to_json_ms", Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8"))
 
     def test_profile_parallel_compares_flatten_backends(self):
         with tempfile.TemporaryDirectory() as td:
@@ -778,8 +782,10 @@ class TestJsonParallelProfile(unittest.TestCase):
                 report.bump("records_read", 100)
                 report.bump("records_ok", 100)
                 report.add_time_ms("io.json_parse", 10)
+                report.add_time_ms("rust_arrow.py_to_json", 5)
                 report.add_time_ms("json.flatten", 20)
                 report.add_time_ms("json.parquet.persist", 30)
+                report.add_time_ms("rust_arrow.total", 60)
                 report.add_time_ms("pipeline.json.total", 1000)
                 report.duration_s = 1.0
                 report.finished_at = "2026-01-01T00:00:00+00:00"
@@ -845,8 +851,10 @@ class TestJsonParallelProfile(unittest.TestCase):
                 report.bump("records_read", 100)
                 report.bump("records_ok", 100)
                 report.add_time_ms("io.json_parse", 10)
+                report.add_time_ms("rust_arrow.py_to_json", 5)
                 report.add_time_ms("json.flatten", 20)
                 report.add_time_ms("json.parquet.persist", 30)
+                report.add_time_ms("rust_arrow.total", 60)
                 report.add_time_ms("pipeline.json.total", 1000)
                 report.duration_s = 1.0
                 report.finished_at = "2026-01-01T00:00:00+00:00"
@@ -883,8 +891,10 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertEqual(row["failed_attempt_count"], 0)
             self.assertEqual(row["recommendation_ineligible_attempt_count"], 2)
             self.assertEqual(row["timings_ms"]["io.json_parse"], 10)
+            self.assertEqual(row["timings_ms"]["rust_arrow.py_to_json"], 5)
             self.assertEqual(row["timings_ms"]["json.flatten"], 20)
             self.assertEqual(row["timings_ms"]["json.parquet.persist"], 30)
+            self.assertEqual(row["timings_ms"]["rust_arrow.total"], 60)
 
     def test_profile_parallel_id_compaction_requires_contract_flags_and_cleanup(self):
         with tempfile.TemporaryDirectory() as td:

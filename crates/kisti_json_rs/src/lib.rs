@@ -1,3 +1,5 @@
+#![allow(clippy::useless_conversion)]
+
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
@@ -111,16 +113,15 @@ fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if let Ok(v) = obj.extract::<u64>() {
         return Ok(Value::Number(Number::from(v)));
     }
-    if !obj.is_instance_of::<PyFloat>() {
-        if obj.extract::<String>().is_err()
-            && obj.downcast::<PyDict>().is_err()
-            && obj.downcast::<PyList>().is_err()
-            && obj.downcast::<PyTuple>().is_err()
-        {
-            return Err(PyRuntimeError::new_err(
-                "rust-arrow unsupported Python value or integer outside u64 range; use the Python backend",
-            ));
-        }
+    if !obj.is_instance_of::<PyFloat>()
+        && obj.extract::<String>().is_err()
+        && obj.downcast::<PyDict>().is_err()
+        && obj.downcast::<PyList>().is_err()
+        && obj.downcast::<PyTuple>().is_err()
+    {
+        return Err(PyRuntimeError::new_err(
+            "rust-arrow unsupported Python value or integer outside u64 range; use the Python backend",
+        ));
     }
     if let Ok(v) = obj.extract::<f64>() {
         if let Some(n) = Number::from_f64(v) {
@@ -1424,129 +1425,258 @@ fn get_required_string_option(options: &Bound<'_, PyDict>, key: &str) -> PyResul
     }
 }
 
-fn mysql_value_from_array(array: &ArrayRef, row: usize, column: &str) -> PyResult<mysql::Value> {
-    if array.is_null(row) {
-        return Ok(mysql::Value::NULL);
-    }
-    match array.data_type() {
-        DataType::Boolean => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<BooleanArray>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast boolean array"))?;
-            Ok(mysql::Value::Int(if arr.value(row) { 1 } else { 0 }))
-        }
-        DataType::Int8 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<Int8Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int8 array"))?;
-            Ok(mysql::Value::Int(arr.value(row) as i64))
-        }
-        DataType::Int16 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<Int16Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int16 array"))?;
-            Ok(mysql::Value::Int(arr.value(row) as i64))
-        }
-        DataType::Int32 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<Int32Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int32 array"))?;
-            Ok(mysql::Value::Int(arr.value(row) as i64))
-        }
-        DataType::Int64 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<Int64Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int64 array"))?;
-            Ok(mysql::Value::Int(arr.value(row)))
-        }
-        DataType::UInt8 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<UInt8Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint8 array"))?;
-            Ok(mysql::Value::UInt(arr.value(row) as u64))
-        }
-        DataType::UInt16 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<UInt16Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint16 array"))?;
-            Ok(mysql::Value::UInt(arr.value(row) as u64))
-        }
-        DataType::UInt32 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<UInt32Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint32 array"))?;
-            Ok(mysql::Value::UInt(arr.value(row) as u64))
-        }
-        DataType::UInt64 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<UInt64Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint64 array"))?;
-            Ok(mysql::Value::UInt(arr.value(row)))
-        }
-        DataType::Float32 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<Float32Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast float32 array"))?;
-            let value = arr.value(row);
-            if value.is_nan() {
-                Ok(mysql::Value::NULL)
-            } else {
-                Ok(mysql::Value::Double(value as f64))
+enum MysqlArrayView<'a> {
+    Boolean(&'a BooleanArray),
+    Int8(&'a Int8Array),
+    Int16(&'a Int16Array),
+    Int32(&'a Int32Array),
+    Int64(&'a Int64Array),
+    UInt8(&'a UInt8Array),
+    UInt16(&'a UInt16Array),
+    UInt32(&'a UInt32Array),
+    UInt64(&'a UInt64Array),
+    Float32(&'a Float32Array),
+    Float64(&'a Float64Array),
+    Utf8(&'a StringArray),
+    LargeUtf8(&'a LargeStringArray),
+    Binary(&'a BinaryArray),
+    LargeBinary(&'a LargeBinaryArray),
+}
+
+impl<'a> MysqlArrayView<'a> {
+    fn from_array(array: &'a ArrayRef, column: &str) -> PyResult<Self> {
+        match array.data_type() {
+            DataType::Boolean => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<BooleanArray>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast boolean array"))?;
+                Ok(Self::Boolean(arr))
             }
-        }
-        DataType::Float64 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<Float64Array>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast float64 array"))?;
-            let value = arr.value(row);
-            if value.is_nan() {
-                Ok(mysql::Value::NULL)
-            } else {
-                Ok(mysql::Value::Double(value))
+            DataType::Int8 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<Int8Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int8 array"))?;
+                Ok(Self::Int8(arr))
             }
-        }
-        DataType::Utf8 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast utf8 array"))?;
-            Ok(mysql::Value::Bytes(arr.value(row).as_bytes().to_vec()))
-        }
-        DataType::LargeUtf8 => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<LargeStringArray>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast large utf8 array"))?;
-            Ok(mysql::Value::Bytes(arr.value(row).as_bytes().to_vec()))
-        }
-        DataType::Binary => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<BinaryArray>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast binary array"))?;
-            Ok(mysql::Value::Bytes(arr.value(row).to_vec()))
-        }
-        DataType::LargeBinary => {
-            let arr = array
-                .as_any()
-                .downcast_ref::<LargeBinaryArray>()
-                .ok_or_else(|| PyRuntimeError::new_err("failed to downcast large binary array"))?;
-            Ok(mysql::Value::Bytes(arr.value(row).to_vec()))
-        }
-        dtype => Err(PyRuntimeError::new_err(format!(
+            DataType::Int16 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<Int16Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int16 array"))?;
+                Ok(Self::Int16(arr))
+            }
+            DataType::Int32 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<Int32Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int32 array"))?;
+                Ok(Self::Int32(arr))
+            }
+            DataType::Int64 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<Int64Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast int64 array"))?;
+                Ok(Self::Int64(arr))
+            }
+            DataType::UInt8 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<UInt8Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint8 array"))?;
+                Ok(Self::UInt8(arr))
+            }
+            DataType::UInt16 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<UInt16Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint16 array"))?;
+                Ok(Self::UInt16(arr))
+            }
+            DataType::UInt32 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<UInt32Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint32 array"))?;
+                Ok(Self::UInt32(arr))
+            }
+            DataType::UInt64 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<UInt64Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast uint64 array"))?;
+                Ok(Self::UInt64(arr))
+            }
+            DataType::Float32 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<Float32Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast float32 array"))?;
+                Ok(Self::Float32(arr))
+            }
+            DataType::Float64 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<Float64Array>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast float64 array"))?;
+                Ok(Self::Float64(arr))
+            }
+            DataType::Utf8 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<StringArray>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast utf8 array"))?;
+                Ok(Self::Utf8(arr))
+            }
+            DataType::LargeUtf8 => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<LargeStringArray>()
+                    .ok_or_else(|| {
+                        PyRuntimeError::new_err("failed to downcast large utf8 array")
+                    })?;
+                Ok(Self::LargeUtf8(arr))
+            }
+            DataType::Binary => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<BinaryArray>()
+                    .ok_or_else(|| PyRuntimeError::new_err("failed to downcast binary array"))?;
+                Ok(Self::Binary(arr))
+            }
+            DataType::LargeBinary => {
+                let arr = array
+                    .as_any()
+                    .downcast_ref::<LargeBinaryArray>()
+                    .ok_or_else(|| {
+                        PyRuntimeError::new_err("failed to downcast large binary array")
+                    })?;
+                Ok(Self::LargeBinary(arr))
+            }
+            dtype => Err(PyRuntimeError::new_err(format!(
             "rust mysql loader does not support parquet column {column} with Arrow type {dtype:?}"
         ))),
+        }
+    }
+
+    fn mysql_value(&self, row: usize) -> mysql::Value {
+        match self {
+            Self::Boolean(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Int(if arr.value(row) { 1 } else { 0 })
+                }
+            }
+            Self::Int8(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Int(arr.value(row) as i64)
+                }
+            }
+            Self::Int16(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Int(arr.value(row) as i64)
+                }
+            }
+            Self::Int32(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Int(arr.value(row) as i64)
+                }
+            }
+            Self::Int64(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Int(arr.value(row))
+                }
+            }
+            Self::UInt8(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::UInt(arr.value(row) as u64)
+                }
+            }
+            Self::UInt16(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::UInt(arr.value(row) as u64)
+                }
+            }
+            Self::UInt32(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::UInt(arr.value(row) as u64)
+                }
+            }
+            Self::UInt64(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::UInt(arr.value(row))
+                }
+            }
+            Self::Float32(arr) => {
+                if arr.is_null(row) {
+                    return mysql::Value::NULL;
+                }
+                let value = arr.value(row);
+                if value.is_nan() {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Double(value as f64)
+                }
+            }
+            Self::Float64(arr) => {
+                if arr.is_null(row) {
+                    return mysql::Value::NULL;
+                }
+                let value = arr.value(row);
+                if value.is_nan() {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Double(value)
+                }
+            }
+            Self::Utf8(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Bytes(arr.value(row).as_bytes().to_vec())
+                }
+            }
+            Self::LargeUtf8(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Bytes(arr.value(row).as_bytes().to_vec())
+                }
+            }
+            Self::Binary(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Bytes(arr.value(row).to_vec())
+                }
+            }
+            Self::LargeBinary(arr) => {
+                if arr.is_null(row) {
+                    mysql::Value::NULL
+                } else {
+                    mysql::Value::Bytes(arr.value(row).to_vec())
+                }
+            }
+        }
     }
 }
 
@@ -1642,9 +1772,10 @@ fn load_parquet_tables_with_queryable<Q: Queryable>(
             let batch = batch_result.map_err(|e| {
                 rust_mysql_context_error(&table_sql, &path, "reading parquet batch", e)
             })?;
-            let mut arrays = Vec::<ArrayRef>::with_capacity(columns_original.len());
+            let mut arrays = Vec::<MysqlArrayView<'_>>::with_capacity(columns_original.len());
+            let schema = batch.schema();
             for col in columns_original.iter() {
-                let idx = batch.schema().index_of(col).map_err(|e| {
+                let idx = schema.index_of(col).map_err(|e| {
                     rust_mysql_context_error(
                         &table_sql,
                         &path,
@@ -1652,21 +1783,23 @@ fn load_parquet_tables_with_queryable<Q: Queryable>(
                         e,
                     )
                 })?;
-                arrays.push(batch.column(idx).clone());
+                arrays.push(
+                    MysqlArrayView::from_array(batch.column(idx), col).map_err(|e| {
+                        rust_mysql_context_error(
+                            &table_sql,
+                            &path,
+                            &format!("preparing parquet column {col}"),
+                            e,
+                        )
+                    })?,
+                );
             }
 
             let mut params_batch = Vec::<mysql::Params>::with_capacity(batch.num_rows());
             for row in 0..batch.num_rows() {
                 let mut values = Vec::<mysql::Value>::with_capacity(arrays.len());
-                for (array, col) in arrays.iter().zip(columns_original.iter()) {
-                    values.push(mysql_value_from_array(array, row, col).map_err(|e| {
-                        rust_mysql_context_error(
-                            &table_sql,
-                            &path,
-                            &format!("converting column {col} at row {row}"),
-                            e,
-                        )
-                    })?);
+                for array in arrays.iter() {
+                    values.push(array.mysql_value(row));
                 }
                 params_batch.push(mysql::Params::Positional(values));
             }
@@ -1700,6 +1833,7 @@ fn load_parquet_tables_with_queryable<Q: Queryable>(
     Ok(stats)
 }
 
+#[allow(clippy::useless_conversion)]
 #[pyfunction]
 fn load_parquet_files_to_mysql(
     py: Python<'_>,
@@ -1778,19 +1912,23 @@ fn load_parquet_files_to_mysql(
     Ok(result.into())
 }
 
+#[allow(clippy::useless_conversion)]
 #[pyfunction]
 fn persist_json_batch(
     py: Python<'_>,
     records: &Bound<'_, PyAny>,
     options: &Bound<'_, PyDict>,
 ) -> PyResult<PyObject> {
+    let total_start = Instant::now();
     let options = parse_options(options)?;
     let parquet_root = prepare_parquet_root(&options.parquet_dir)?;
+    let py_to_json_start = Instant::now();
     let list = records.downcast::<PyList>()?;
     let mut values = Vec::with_capacity(list.len());
     for item in list.iter() {
         values.push(py_to_json(&item)?);
     }
+    let py_to_json_ms = py_to_json_start.elapsed().as_millis() as u64;
 
     let flatten_start = Instant::now();
     let outs: Vec<RecordOut> = if options.parallel_workers >= 2 && values.len() >= 2 {
@@ -1899,8 +2037,10 @@ fn persist_json_batch(
     result.set_item("tables", table_meta)?;
     result.set_item("errors", errors)?;
     let timings = PyDict::new_bound(py);
+    timings.set_item("rust_arrow.py_to_json", py_to_json_ms)?;
     timings.set_item("json.flatten", flatten_ms)?;
     timings.set_item("json.parquet.persist", parquet_ms)?;
+    timings.set_item("rust_arrow.total", total_start.elapsed().as_millis() as u64)?;
     result.set_item("timings_ms", timings)?;
     if options.id_compaction.enabled {
         result.set_item(

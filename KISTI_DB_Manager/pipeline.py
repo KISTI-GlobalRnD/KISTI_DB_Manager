@@ -3792,7 +3792,7 @@ def run_json_pipeline(
                         except Exception as e:
                             raise RuntimeError(f"failed to resolve rust-arrow parquet root for DB bridge: {root}") from e
 
-                        tables: dict[str, Any] = {}
+                        table_frames: dict[str, list[Any]] = {}
                         for table_info in tables_meta:
                             if not isinstance(table_info, Mapping):
                                 continue
@@ -3813,10 +3813,15 @@ def run_json_pipeline(
                             if path_canon.is_symlink() or not path_canon.is_file():
                                 raise RuntimeError(f"rust-arrow parquet DB bridge path is not a safe file: {path}")
                             df = pd.read_parquet(str(path_canon))
-                            if table_original in tables:
-                                tables[table_original] = pd.concat([tables[table_original], df], ignore_index=True)
+                            table_frames.setdefault(table_original, []).append(df)
+                        tables: dict[str, Any] = {}
+                        for table_original, frames in table_frames.items():
+                            if not frames:
+                                continue
+                            if len(frames) == 1:
+                                tables[table_original] = frames[0]
                             else:
-                                tables[table_original] = df
+                                tables[table_original] = pd.concat(frames, ignore_index=True)
                         return tables
 
                     try:
@@ -3871,12 +3876,18 @@ def run_json_pipeline(
                             else {}
                         )
                         total_ms = int(round((time.perf_counter() - rust_t0) * 1000.0))
+                        py_to_json_ms = int(timings.get("rust_arrow.py_to_json", timings.get("py_to_json_ms", 0)) or 0)
                         flatten_ms = int(timings.get("json.flatten", timings.get("flatten_ms", total_ms)) or 0)
                         parquet_ms = int(timings.get("json.parquet.persist", timings.get("parquet_persist_ms", 0)) or 0)
+                        rust_total_ms = int(timings.get("rust_arrow.total", timings.get("total_ms", total_ms)) or 0)
+                        if py_to_json_ms > 0:
+                            report.add_time_ms("rust_arrow.py_to_json", py_to_json_ms)
                         if flatten_ms > 0:
                             report.add_time_ms("json.flatten", flatten_ms)
                         if parquet_ms > 0:
                             report.add_time_ms("json.parquet.persist", parquet_ms)
+                        if rust_total_ms > 0:
+                            report.add_time_ms("rust_arrow.total", rust_total_ms)
                         if id_compactor.enabled:
                             id_compactor.merge_summary(rust_result.get("id_compaction"))
                             report.set_artifact("id_compaction", id_compactor.summary())
@@ -4450,6 +4461,14 @@ def run_json_pipeline(
                 tp["json.parquet.persist.files_per_s"] = per_s(parquet_files_persisted, parquet_persist_ms)
                 tp["json.parquet.persist.rows_per_s"] = per_s(parquet_rows_emitted, parquet_persist_ms)
                 tp["json.parquet.persist.batches_per_s"] = per_s(parquet_batches_total, parquet_persist_ms)
+
+            rust_py_to_json_ms = int(report.timings_ms.get("rust_arrow.py_to_json", 0) or 0)
+            if rust_py_to_json_ms > 0:
+                tp["rust_arrow.py_to_json.records_per_s"] = per_s(records_read, rust_py_to_json_ms)
+
+            rust_total_ms = int(report.timings_ms.get("rust_arrow.total", 0) or 0)
+            if rust_total_ms > 0:
+                tp["rust_arrow.total.records_per_s"] = per_s(records_ok or records_read, rust_total_ms)
 
             load_ms = int(report.timings_ms.get("json.db.load", 0) or 0)
             if load_ms > 0:

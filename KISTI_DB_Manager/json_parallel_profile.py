@@ -523,8 +523,10 @@ def _summarize_worker_run(
         "parquet_rows_emitted": _as_int(stats.get("parquet_rows_emitted"), 0),
         "timings_ms": {
             "io.json_parse": _as_int(timings.get("io.json_parse"), 0),
+            "rust_arrow.py_to_json": _as_int(timings.get("rust_arrow.py_to_json"), 0),
             "json.flatten": _as_int(timings.get("json.flatten"), 0),
             "json.parquet.persist": _as_int(timings.get("json.parquet.persist"), 0),
+            "rust_arrow.total": _as_int(timings.get("rust_arrow.total"), 0),
         },
         "issue_count": int(counts["issue_count"]),
         "error_count": int(counts["error_count"]),
@@ -796,7 +798,13 @@ def _aggregate_worker_attempts(
         if len(issue_samples) >= max(0, int(issue_sample_limit)):
             break
 
-    timing_keys = ("io.json_parse", "json.flatten", "json.parquet.persist")
+    timing_keys = (
+        "io.json_parse",
+        "rust_arrow.py_to_json",
+        "json.flatten",
+        "json.parquet.persist",
+        "rust_arrow.total",
+    )
     timings: dict[str, int] = {}
     for key in timing_keys:
         values = []
@@ -915,10 +923,11 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append("")
     lines.append(
         "| backend | effective | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
-        "io.json_parse_ms | json.flatten_ms | json.parquet.persist_ms | issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
+        "io.json_parse_ms | rust_arrow.py_to_json_ms | json.flatten_ms | json.parquet.persist_ms | rust_arrow.total_ms | "
+        "issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
     lines.append(
-        "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+        "|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
     )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
@@ -937,8 +946,10 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
             f"{_as_int(row.get('attempt_count'), 1)} | {_as_int(row.get('eligible_attempt_count'), 0)} | "
             f"{duration_s} | {rps_s} | {rps_min_s} | {rps_max_s} | "
             f"{_as_int(timings.get('io.json_parse'), 0)} | "
+            f"{_as_int(timings.get('rust_arrow.py_to_json'), 0)} | "
             f"{_as_int(timings.get('json.flatten'), 0)} | "
             f"{_as_int(timings.get('json.parquet.persist'), 0)} | "
+            f"{_as_int(timings.get('rust_arrow.total'), 0)} | "
             f"{_as_int(row.get('issue_count'), 0)} | "
             f"{_as_int(row.get('error_count'), 0)} | "
             f"{_as_int(row.get('warning_count'), 0)} | "

@@ -2104,7 +2104,12 @@ class TestJsonPipeline(unittest.TestCase):
                     "parquet_rows_emitted": len(records),
                     "parquet_tables_written": 1,
                     "tables": [{"table": "base", "columns": ["id", "x"], "rows": len(records)}],
-                    "timings_ms": {"json.flatten": 3, "json.parquet.persist": 4},
+                    "timings_ms": {
+                        "rust_arrow.py_to_json": 2,
+                        "json.flatten": 3,
+                        "json.parquet.persist": 4,
+                        "rust_arrow.total": 9,
+                    },
                 }
 
             with patch("KISTI_DB_Manager.rust_arrow_backend.persist_json_batch_to_parquet", side_effect=fake_persist):
@@ -2122,6 +2127,10 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
             self.assertEqual(res.report.stats.get("records_ok"), 2)
             self.assertEqual(res.report.stats.get("parquet_files_persisted"), 1)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.py_to_json"), 2)
+            self.assertEqual(res.report.timings_ms.get("json.flatten"), 3)
+            self.assertEqual(res.report.timings_ms.get("json.parquet.persist"), 4)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.total"), 9)
             self.assertIn("base", res.name_maps)
 
     def test_run_json_pipeline_rust_arrow_feeds_existing_db_path_from_parquet(self):
@@ -2218,7 +2227,12 @@ class TestJsonPipeline(unittest.TestCase):
                             "rows": len(records),
                         }
                     ],
-                    "timings_ms": {"json.flatten": 3, "json.parquet.persist": 4},
+                    "timings_ms": {
+                        "rust_arrow.py_to_json": 2,
+                        "json.flatten": 3,
+                        "json.parquet.persist": 4,
+                        "rust_arrow.total": 9,
+                    },
                 }
 
             def fake_create(*_args, **kwargs):
@@ -2253,6 +2267,8 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(res.report.stats.get("rows_loaded"), 1)
             self.assertEqual(res.report.stats.get("tables_loaded"), 1)
             self.assertEqual(res.report.stats.get("rust_db_load_ok"), 1)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.py_to_json"), 2)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.total"), 9)
             self.assertEqual(res.report.timings_ms.get("db.rust_mysql.load"), 7)
             p_python_load.assert_not_called()
             args, kwargs = p_rust_load.call_args
