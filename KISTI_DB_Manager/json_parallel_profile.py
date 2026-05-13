@@ -594,6 +594,7 @@ def _summarize_worker_run(
         "rust_parquet_flush_records": _as_int(artifacts.get("rust_parquet_flush_records"), 0),
         "rust_parser_backend": artifacts.get("rust_parser_backend"),
         "rust_parser_backend_effective": artifacts.get("rust_parser_backend_effective"),
+        "rust_parser_fallbacks": _as_int(artifacts.get("rust_parser_fallbacks"), 0),
         "rust_arrow_failed_batches": _as_int(
             artifacts.get("rust_arrow_failed_batches"),
             _as_int(artifacts.get("flatten_backend_fallback_batches"), 0),
@@ -643,6 +644,18 @@ def _aggregate_artifact_contract_status(attempts: Sequence[Mapping[str, Any]]) -
     if len(unique) == 1:
         return unique[0]
     return "mixed"
+
+
+def _aggregate_bool_state(attempts: Sequence[Mapping[str, Any]], key: str) -> tuple[bool, str]:
+    values = [bool(item.get(key)) for item in attempts]
+    if not values:
+        return False, "none"
+    true_count = sum(1 for value in values if value)
+    if true_count == len(values):
+        return True, "all"
+    if true_count == 0:
+        return False, "none"
+    return False, "partial"
 
 
 def recommend_parallel_workers(rows: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
@@ -799,14 +812,20 @@ def _aggregate_worker_attempts(
             "artifact_contract_warning_count": 0,
             "python_fallback_active": False,
             "rust_raw_jsonl_parse_requested": False,
+            "rust_raw_jsonl_parse_requested_state": "none",
             "rust_raw_jsonl_parse_effective": False,
+            "rust_raw_jsonl_parse_effective_state": "none",
             "rust_raw_jsonl_parse_disabled_reason": None,
             "rust_raw_jsonl_file_parse_requested": False,
+            "rust_raw_jsonl_file_parse_requested_state": "none",
             "rust_raw_jsonl_file_parse_effective": False,
+            "rust_raw_jsonl_file_parse_effective_state": "none",
             "rust_raw_jsonl_file_parse_disabled_reason": None,
             "rust_parallel_table_writes": False,
             "rust_columnar_accumulator": False,
+            "rust_columnar_accumulator_state": "none",
             "rust_parquet_flush_records": 0,
+            "rust_parser_fallbacks": 0,
             "rust_arrow_failed_batches": 0,
             "flatten_backend_fallback_reason": None,
             "flatten_backend_auto_disabled_reason": None,
@@ -830,6 +849,15 @@ def _aggregate_worker_attempts(
         row["records_per_s_max"] = row.get("records_per_s")
         row["records_per_s_mean"] = row.get("records_per_s")
         row["records_per_s_stdev"] = None
+        for bool_key in (
+            "rust_raw_jsonl_parse_requested",
+            "rust_raw_jsonl_parse_effective",
+            "rust_raw_jsonl_file_parse_requested",
+            "rust_raw_jsonl_file_parse_effective",
+            "rust_columnar_accumulator",
+        ):
+            row.setdefault(f"{bool_key}_state", "all" if bool(row.get(bool_key)) else "none")
+        row.setdefault("rust_parser_fallbacks", 0)
         row["attempts"] = [dict(attempts[0])]
         return row
 
@@ -920,6 +948,11 @@ def _aggregate_worker_attempts(
             if item.get("rust_parser_backend_effective")
         }
     )
+    raw_requested, raw_requested_state = _aggregate_bool_state(attempt_rows, "rust_raw_jsonl_parse_requested")
+    raw_effective, raw_effective_state = _aggregate_bool_state(attempt_rows, "rust_raw_jsonl_parse_effective")
+    file_requested, file_requested_state = _aggregate_bool_state(attempt_rows, "rust_raw_jsonl_file_parse_requested")
+    file_effective, file_effective_state = _aggregate_bool_state(attempt_rows, "rust_raw_jsonl_file_parse_effective")
+    columnar_enabled, columnar_state = _aggregate_bool_state(attempt_rows, "rust_columnar_accumulator")
     rust_arrow_failed_batches = sum(
         _as_int(item.get("rust_arrow_failed_batches"), _as_int(item.get("flatten_backend_fallback_batches"), 0))
         for item in attempt_rows
@@ -959,27 +992,29 @@ def _aggregate_worker_attempts(
         "artifact_contract_issue_count": sum(_as_int(item.get("artifact_contract_issue_count"), 0) for item in attempt_rows),
         "artifact_contract_warning_count": sum(_as_int(item.get("artifact_contract_warning_count"), 0) for item in attempt_rows),
         "python_fallback_active": any(bool(item.get("python_fallback_active")) for item in attempt_rows),
-        "rust_raw_jsonl_parse_requested": any(bool(item.get("rust_raw_jsonl_parse_requested")) for item in attempt_rows),
-        "rust_raw_jsonl_parse_effective": any(bool(item.get("rust_raw_jsonl_parse_effective")) for item in attempt_rows),
+        "rust_raw_jsonl_parse_requested": raw_requested,
+        "rust_raw_jsonl_parse_requested_state": raw_requested_state,
+        "rust_raw_jsonl_parse_effective": raw_effective,
+        "rust_raw_jsonl_parse_effective_state": raw_effective_state,
         "rust_raw_jsonl_parse_disabled_reason": (
             "; ".join(sorted(set(raw_jsonl_disabled_reasons))) if raw_jsonl_disabled_reasons else None
         ),
-        "rust_raw_jsonl_file_parse_requested": any(
-            bool(item.get("rust_raw_jsonl_file_parse_requested")) for item in attempt_rows
-        ),
-        "rust_raw_jsonl_file_parse_effective": any(
-            bool(item.get("rust_raw_jsonl_file_parse_effective")) for item in attempt_rows
-        ),
+        "rust_raw_jsonl_file_parse_requested": file_requested,
+        "rust_raw_jsonl_file_parse_requested_state": file_requested_state,
+        "rust_raw_jsonl_file_parse_effective": file_effective,
+        "rust_raw_jsonl_file_parse_effective_state": file_effective_state,
         "rust_raw_jsonl_file_parse_disabled_reason": (
             "; ".join(sorted(set(raw_jsonl_file_disabled_reasons))) if raw_jsonl_file_disabled_reasons else None
         ),
         "rust_parallel_table_writes": any(bool(item.get("rust_parallel_table_writes")) for item in attempt_rows),
-        "rust_columnar_accumulator": any(bool(item.get("rust_columnar_accumulator")) for item in attempt_rows),
+        "rust_columnar_accumulator": columnar_enabled,
+        "rust_columnar_accumulator_state": columnar_state,
         "rust_parquet_flush_records": max(_as_int(item.get("rust_parquet_flush_records"), 0) for item in attempt_rows),
         "rust_parser_backend": parser_backends[0] if len(parser_backends) == 1 else ("mixed" if parser_backends else None),
         "rust_parser_backend_effective": (
             parser_effective[0] if len(parser_effective) == 1 else ("mixed" if parser_effective else None)
         ),
+        "rust_parser_fallbacks": sum(_as_int(item.get("rust_parser_fallbacks"), 0) for item in attempt_rows),
         "rust_arrow_failed_batches": rust_arrow_failed_batches,
         "flatten_backend_fallback_reason": "; ".join(sorted(set(fallback_reasons))) if fallback_reasons else None,
         "flatten_backend_auto_disabled_reason": "; ".join(sorted(set(auto_disabled_reasons))) if auto_disabled_reasons else None,
@@ -1015,6 +1050,17 @@ def _markdown_table_cell(value: Any) -> str:
     return str(value or "").replace("\n", " ").replace("|", r"\|")
 
 
+def _markdown_bool_state(row: Mapping[str, Any], key: str) -> str:
+    state = str(row.get(f"{key}_state") or "").strip().lower()
+    if state == "partial":
+        return "partial"
+    if state == "all":
+        return "yes"
+    if state == "none":
+        return "no"
+    return "yes" if row.get(key) else "no"
+
+
 def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines: list[str] = []
     lines.append("# JSON Parallel Profile")
@@ -1043,7 +1089,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append("## Worker Runs")
     lines.append("")
     lines.append(
-        "| backend | effective | parser | raw_jsonl | file_jsonl | table_write_parallel | columnar | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
+        "| backend | effective | parser | parser_fallbacks | raw_jsonl | file_jsonl | table_write_parallel | columnar | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
         "io.json_parse_ms | rust_arrow.read_line_ms | rust_arrow.json_parse_ms | rust_arrow.number_validate_ms | "
         "rust_arrow.py_to_json_ms | json.flatten_ms | rust_arrow.columnar_merge_ms | "
         "json.parquet.persist_ms | rust_arrow.arrow_build_ms | rust_arrow.parquet_write_ms | "
@@ -1051,7 +1097,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
         "issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
     lines.append(
-        "|---|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+        "|---|---|---|---:|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
     )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
@@ -1067,10 +1113,11 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
             "| "
             f"{row.get('flatten_backend')} | {row.get('effective_backend')} | "
             f"{_markdown_table_cell(row.get('rust_parser_backend_effective') or row.get('rust_parser_backend'))} | "
-            f"{'yes' if row.get('rust_raw_jsonl_parse_effective') else 'no'} | "
-            f"{'yes' if row.get('rust_raw_jsonl_file_parse_effective') else 'no'} | "
+            f"{_as_int(row.get('rust_parser_fallbacks'), 0)} | "
+            f"{_markdown_bool_state(row, 'rust_raw_jsonl_parse_effective')} | "
+            f"{_markdown_bool_state(row, 'rust_raw_jsonl_file_parse_effective')} | "
             f"{'yes' if row.get('rust_parallel_table_writes') else 'no'} | "
-            f"{'yes' if row.get('rust_columnar_accumulator') else 'no'} | "
+            f"{_markdown_bool_state(row, 'rust_columnar_accumulator')} | "
             f"{row.get('workers')} | {row.get('status')} | "
             f"{_as_int(row.get('attempt_count'), 1)} | {_as_int(row.get('eligible_attempt_count'), 0)} | "
             f"{duration_s} | {rps_s} | {rps_min_s} | {rps_max_s} | "

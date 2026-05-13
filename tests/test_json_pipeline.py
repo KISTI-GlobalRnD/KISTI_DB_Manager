@@ -46,6 +46,32 @@ class TestJsonPipeline(unittest.TestCase):
             self.skipTest("rust-arrow backend extension unavailable")
         return pa, pq
 
+    def _require_simd_json_parser(self):
+        self._require_rust_arrow_with_pyarrow()
+
+        from KISTI_DB_Manager.rust_arrow_backend import persist_json_lines_batch_to_parquet
+
+        with tempfile.TemporaryDirectory() as td:
+            try:
+                persist_json_lines_batch_to_parquet(
+                    ['{"id": 1}'],
+                    base_table="base",
+                    index_key="id",
+                    except_keys=[],
+                    excepted_expand_dict=False,
+                    sep="__",
+                    parquet_dir=Path(td),
+                    batch_idx=0,
+                    index_offset=0,
+                    record_contexts=[{"line_no": 1}],
+                    parallel_workers=0,
+                    parser_backend="simd-json",
+                )
+            except Exception as exc:
+                if "simd-json Cargo feature" in str(exc):
+                    self.skipTest("simd-json parser feature unavailable")
+                raise
+
     def test_json_loads_factory_preserves_large_integer_literals(self):
         loads = _json_loads_factory()
         huge_positive = 18446744073709551616
@@ -1754,6 +1780,7 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertFalse(list(out_dir.rglob("*.parquet")))
 
     def test_rust_arrow_raw_jsonl_simd_parser_matches_serde_contract(self):
+        self._require_simd_json_parser()
         _pa, pq = self._require_rust_arrow_with_pyarrow()
 
         from KISTI_DB_Manager.rust_arrow_backend import persist_json_lines_batch_to_parquet
@@ -1782,6 +1809,7 @@ class TestJsonPipeline(unittest.TestCase):
                 )
                 self.assertEqual(result["records_ok"], 2)
                 self.assertEqual(result["parser_backend"], parser_backend)
+                self.assertEqual(result["parser_fallbacks"], 0)
                 results[parser_backend] = {
                     table_dir.name: self._read_single_parquet_table(pq, out_dir, table_dir.name).to_pydict()
                     for table_dir in sorted(out_dir.iterdir())
@@ -1791,6 +1819,7 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(results["simd-json"], results["serde-json"])
 
     def test_rust_arrow_raw_jsonl_simd_parser_preserves_large_integer_validation(self):
+        self._require_simd_json_parser()
         self._require_rust_arrow_with_pyarrow()
 
         from KISTI_DB_Manager.rust_arrow_backend import persist_json_lines_batch_to_parquet
@@ -1815,6 +1844,7 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(result["records_ok"], 0)
             self.assertEqual(result["records_failed"], 1)
             self.assertEqual(result["parser_backend"], "simd-json")
+            self.assertGreaterEqual(result["parser_fallbacks"], 1)
             self.assertIn("$.outer.items[0].bad", result["errors"][0])
             self.assertIn("outside supported i64/u64 range", result["errors"][0])
             self.assertFalse(list(out_dir.rglob("*.parquet")))

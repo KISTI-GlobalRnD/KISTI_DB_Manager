@@ -10,6 +10,7 @@ from unittest.mock import patch
 from KISTI_DB_Manager.cli import build_parser, main
 from KISTI_DB_Manager.json_parallel_profile import (
     _ProfileQuarantineWriter,
+    _aggregate_worker_attempts,
     _assert_profile_child_path,
     _safe_remove_profile_parquet_dir,
     _safe_write_text,
@@ -335,6 +336,65 @@ class TestJsonParallelProfile(unittest.TestCase):
         )
         self.assertEqual(all_failed["status"], "failed")
         self.assertIsNone(all_failed["recommended_parallel_workers"])
+
+    def test_aggregate_worker_attempts_exposes_partial_effective_state_and_parser_fallbacks(self):
+        attempts = [
+            {
+                "workers": 8,
+                "flatten_backend": "rust-arrow",
+                "effective_backend": "rust-arrow",
+                "status": "done",
+                "run_dir": "/tmp/profile/w8/r1",
+                "duration_s": 1.0,
+                "records_per_s": 100.0,
+                "records_read": 100,
+                "records_ok": 100,
+                "artifact_contract_status": "done",
+                "timings_ms": {"rust_arrow.total": 10},
+                "rust_raw_jsonl_parse_requested": True,
+                "rust_raw_jsonl_parse_effective": True,
+                "rust_raw_jsonl_file_parse_requested": True,
+                "rust_raw_jsonl_file_parse_effective": True,
+                "rust_columnar_accumulator": True,
+                "rust_parser_backend": "simd-json",
+                "rust_parser_backend_effective": "simd-json",
+                "rust_parser_fallbacks": 2,
+            },
+            {
+                "workers": 8,
+                "flatten_backend": "rust-arrow",
+                "effective_backend": "rust-arrow",
+                "status": "done",
+                "run_dir": "/tmp/profile/w8/r2",
+                "duration_s": 2.0,
+                "records_per_s": 50.0,
+                "records_read": 100,
+                "records_ok": 100,
+                "artifact_contract_status": "done",
+                "timings_ms": {"rust_arrow.total": 20},
+                "rust_raw_jsonl_parse_requested": True,
+                "rust_raw_jsonl_parse_effective": True,
+                "rust_raw_jsonl_file_parse_requested": True,
+                "rust_raw_jsonl_file_parse_effective": False,
+                "rust_columnar_accumulator": True,
+                "rust_parser_backend": "simd-json",
+                "rust_parser_backend_effective": "simd-json",
+                "rust_parser_fallbacks": 1,
+            },
+        ]
+
+        row = _aggregate_worker_attempts(
+            worker=8,
+            flatten_backend="rust-arrow",
+            attempts=attempts,
+            issue_sample_limit=5,
+        )
+
+        self.assertEqual(row["rust_raw_jsonl_parse_effective_state"], "all")
+        self.assertEqual(row["rust_raw_jsonl_file_parse_effective_state"], "partial")
+        self.assertEqual(row["rust_raw_jsonl_file_parse_effective"], False)
+        self.assertEqual(row["rust_columnar_accumulator_state"], "all")
+        self.assertEqual(row["rust_parser_fallbacks"], 3)
 
     def test_profile_parallel_writes_worker_artifacts_and_summary(self):
         with tempfile.TemporaryDirectory() as td:

@@ -3936,6 +3936,12 @@ def run_json_pipeline(
                         report.set_artifact("flatten_backend_effective", BACKEND_RUST_ARROW)
                         if raw_json_lines is not None and rust_result.get("parser_backend"):
                             report.set_artifact("rust_parser_backend_effective", str(rust_result.get("parser_backend")))
+                        if "parser_fallbacks" in rust_result:
+                            report.set_artifact(
+                                "rust_parser_fallbacks",
+                                int(report.artifacts.get("rust_parser_fallbacks", 0) or 0)
+                                + int(rust_result.get("parser_fallbacks") or 0),
+                            )
                         timings = (
                             rust_result.get("timings_ms")
                             if isinstance(rust_result.get("timings_ms"), Mapping)
@@ -4564,6 +4570,12 @@ def run_json_pipeline(
                     report.set_artifact("flatten_backend_effective", BACKEND_RUST_ARROW)
                     if rust_result.get("parser_backend"):
                         report.set_artifact("rust_parser_backend_effective", str(rust_result.get("parser_backend")))
+                    if "parser_fallbacks" in rust_result:
+                        report.set_artifact(
+                            "rust_parser_fallbacks",
+                            int(report.artifacts.get("rust_parser_fallbacks", 0) or 0)
+                            + int(rust_result.get("parser_fallbacks") or 0),
+                        )
                     timings = rust_result.get("timings_ms") if isinstance(rust_result.get("timings_ms"), Mapping) else {}
                     total_ms = int(round((time.perf_counter() - rust_t0) * 1000.0))
                     rust_json_parse_ms = int(timings.get("rust_arrow.json_parse", 0) or 0)

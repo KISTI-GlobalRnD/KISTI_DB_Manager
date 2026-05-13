@@ -33,6 +33,7 @@ static RAYON_POOLS: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> = On
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum ParserBackend {
     SerdeJson,
+    #[cfg(feature = "simd-json")]
     SimdJson,
 }
 
@@ -40,7 +41,18 @@ impl ParserBackend {
     fn parse(value: &str) -> PyResult<Self> {
         match value.trim().to_ascii_lowercase().replace('_', "-").as_str() {
             "" | "serde" | "serde-json" | "serdejson" => Ok(Self::SerdeJson),
-            "simd" | "simd-json" | "simdjson" => Ok(Self::SimdJson),
+            "simd" | "simd-json" | "simdjson" => {
+                #[cfg(feature = "simd-json")]
+                {
+                    Ok(Self::SimdJson)
+                }
+                #[cfg(not(feature = "simd-json"))]
+                {
+                    Err(PyRuntimeError::new_err(
+                        "rust_parser_backend='simd-json' requires building kisti_json_rs with the simd-json Cargo feature",
+                    ))
+                }
+            }
             other => Err(PyRuntimeError::new_err(format!(
                 "invalid rust_parser_backend {other:?}; expected serde-json or simd-json"
             ))),
@@ -50,6 +62,7 @@ impl ParserBackend {
     fn as_str(self) -> &'static str {
         match self {
             Self::SerdeJson => "serde-json",
+            #[cfg(feature = "simd-json")]
             Self::SimdJson => "simd-json",
         }
     }
@@ -179,6 +192,7 @@ struct FlattenRecordError {
 
 struct PersistExtras {
     initial_records_failed: usize,
+    parser_fallbacks: usize,
     errors: Vec<String>,
     error_indices: Vec<usize>,
     error_records: Vec<JsonlErrorRecord>,
@@ -210,6 +224,7 @@ struct TableWriteOutput {
 
 struct PersistOutput {
     parser_backend: ParserBackend,
+    parser_fallbacks: usize,
     records_read: usize,
     bytes_read: usize,
     records_ok: usize,
@@ -306,38 +321,53 @@ fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 fn parse_json_line_value(
     obj: &Bound<'_, PyAny>,
     backend: ParserBackend,
+    parser_fallbacks: &mut usize,
 ) -> PyResult<Result<Option<Value>, String>> {
     if let Ok(v) = obj.downcast::<PyBytes>() {
         let bytes = v.as_bytes();
-        return Ok(parse_json_bytes_value(bytes, backend));
+        return Ok(parse_json_bytes_value(bytes, backend, parser_fallbacks));
     }
     if let Ok(v) = obj.extract::<String>() {
-        return Ok(parse_json_bytes_value(v.as_bytes(), backend));
+        return Ok(parse_json_bytes_value(
+            v.as_bytes(),
+            backend,
+            parser_fallbacks,
+        ));
     }
     if let Ok(v) = obj.extract::<Vec<u8>>() {
-        return Ok(parse_json_bytes_value(&v, backend));
+        return Ok(parse_json_bytes_value(&v, backend, parser_fallbacks));
     }
     Err(PyRuntimeError::new_err(
         "rust-arrow JSONL input records must be str or bytes",
     ))
 }
 
-fn parse_json_bytes_value(bytes: &[u8], backend: ParserBackend) -> Result<Option<Value>, String> {
+fn parse_json_bytes_value(
+    bytes: &[u8],
+    backend: ParserBackend,
+    parser_fallbacks: &mut usize,
+) -> Result<Option<Value>, String> {
     let trimmed = trim_ascii_whitespace(bytes);
     if trimmed.is_empty() {
         return Ok(None);
     }
+    #[cfg(not(feature = "simd-json"))]
+    let _ = parser_fallbacks;
     match backend {
         ParserBackend::SerdeJson => serde_json::from_slice::<Value>(trimmed)
             .map(Some)
             .map_err(|e| format!("failed to parse JSONL line: {e}")),
+        #[cfg(feature = "simd-json")]
         ParserBackend::SimdJson => {
             let mut mutable = trimmed.to_vec();
             match simd_json::serde::from_slice::<Value>(&mut mutable) {
                 Ok(value) => Ok(Some(value)),
-                Err(_) => serde_json::from_slice::<Value>(trimmed)
-                    .map(Some)
-                    .map_err(|e| format!("failed to parse JSONL line: {e}")),
+                Err(_) => {
+                    *parser_fallbacks += 1;
+                    serde_json::from_slice::<Value>(trimmed)
+                        .map(Some)
+                        .map_err(|e| format!("failed to parse JSONL line: {e}"))
+                }
             }
         }
     }
@@ -2994,6 +3024,7 @@ fn persist_indexed_json_values_columnar_inner(
 ) -> PyResult<PersistOutput> {
     let PersistExtras {
         initial_records_failed,
+        parser_fallbacks,
         mut errors,
         mut error_indices,
         mut error_records,
@@ -3082,6 +3113,7 @@ fn persist_indexed_json_values_columnar_inner(
 
     Ok(PersistOutput {
         parser_backend: options.parser_backend,
+        parser_fallbacks,
         records_read,
         bytes_read: 0,
         records_ok,
@@ -3117,6 +3149,7 @@ fn persist_indexed_json_values_inner(
 
     let PersistExtras {
         initial_records_failed,
+        parser_fallbacks,
         mut errors,
         mut error_indices,
         mut error_records,
@@ -3285,6 +3318,7 @@ fn persist_indexed_json_values_inner(
 
     Ok(PersistOutput {
         parser_backend: options.parser_backend,
+        parser_fallbacks,
         records_read,
         bytes_read: 0,
         records_ok,
@@ -3315,6 +3349,7 @@ fn persist_output_to_py(
     result.set_item("ok", true)?;
     result.set_item("effective_backend", "rust-arrow")?;
     result.set_item("parser_backend", output.parser_backend.as_str())?;
+    result.set_item("parser_fallbacks", output.parser_fallbacks)?;
     result.set_item("records_read", output.records_read)?;
     result.set_item("bytes_read", output.bytes_read)?;
     result.set_item("records_ok", output.records_ok)?;
@@ -3488,6 +3523,7 @@ fn push_jsonl_error(
 fn merge_persist_outputs(target: &mut PersistOutput, output: PersistOutput) {
     target.records_ok += output.records_ok;
     target.records_failed += output.records_failed;
+    target.parser_fallbacks += output.parser_fallbacks;
     target.parquet_files_persisted += output.parquet_files_persisted;
     target.parquet_rows_emitted += output.parquet_rows_emitted;
     target.parquet_batches_total += output.parquet_batches_total;
@@ -3577,6 +3613,7 @@ fn flush_indexed_jsonl_chunk(
         chunk_values,
         PersistExtras {
             initial_records_failed: 0,
+            parser_fallbacks: 0,
             errors: Vec::new(),
             error_indices: Vec::new(),
             error_records: Vec::new(),
@@ -3685,6 +3722,7 @@ fn persist_jsonl_sources_inner(
 
     let mut aggregate = PersistOutput {
         parser_backend: options.parser_backend,
+        parser_fallbacks: 0,
         records_read: 0,
         bytes_read: 0,
         records_ok: 0,
@@ -3765,7 +3803,11 @@ fn persist_jsonl_sources_inner(
             next_record_index += 1;
 
             let parse_start = Instant::now();
-            let parsed = parse_json_bytes_value(&raw_line, options.parser_backend);
+            let parsed = parse_json_bytes_value(
+                &raw_line,
+                options.parser_backend,
+                &mut aggregate.parser_fallbacks,
+            );
             parse_ns += parse_start.elapsed().as_nanos();
 
             match parsed {
@@ -4006,6 +4048,7 @@ fn persist_json_batch(
         values,
         PersistExtras {
             initial_records_failed: 0,
+            parser_fallbacks: 0,
             errors: Vec::new(),
             error_indices: Vec::new(),
             error_records: Vec::new(),
@@ -4028,12 +4071,13 @@ fn persist_json_lines_batch(
     let list = lines.downcast::<PyList>()?;
     let mut values = Vec::with_capacity(list.len());
     let mut records_failed = 0usize;
+    let mut parser_fallbacks = 0usize;
     let mut errors = Vec::<String>::new();
     let mut error_indices = Vec::<usize>::new();
     let mut parse_ns = 0u128;
     for (i, item) in list.iter().enumerate() {
         let parse_start = Instant::now();
-        let parsed = parse_json_line_value(&item, options.parser_backend)?;
+        let parsed = parse_json_line_value(&item, options.parser_backend, &mut parser_fallbacks)?;
         parse_ns += parse_start.elapsed().as_nanos();
         match parsed {
             Ok(Some(value @ Value::Object(_))) => values.push((i, value)),
@@ -4062,6 +4106,7 @@ fn persist_json_lines_batch(
         values,
         PersistExtras {
             initial_records_failed: records_failed,
+            parser_fallbacks,
             errors,
             error_indices,
             error_records: Vec::new(),
