@@ -120,6 +120,16 @@ kisti-db-manager json run \
   --flatten-backend rust-arrow
 ```
 
+For explicit Rust parquet runs over plain JSONL/NDJSON, `--rust-raw-jsonl-parse` also moves JSON line decoding into Rust:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/openalex_config.json \
+  --mode parse-parquet-safe \
+  --flatten-backend rust-arrow \
+  --rust-raw-jsonl-parse
+```
+
 For an experimental Rust-driven DB load after Rust parquet creation:
 
 ```bash
@@ -166,6 +176,8 @@ kisti-db-manager json profile-parallel \
   --repeat 3 \
   --out runs/profile_parallel_test
 ```
+
+Add `--rust-raw-jsonl-parse` to include Rust-side JSONL decoding in the `rust-arrow` profile runs.
 
 Detailed Rust backend, profile, smoke-test, benchmark, and limitation notes are in [docs/manual/json-rust-backend.md](docs/manual/json-rust-backend.md).
 

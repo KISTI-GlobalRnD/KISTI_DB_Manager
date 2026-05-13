@@ -103,6 +103,16 @@ kisti-db-manager json run \
   --flatten-backend rust-arrow
 ```
 
+plain JSONL/NDJSON의 parse/parquet-only 실행에서는 JSON line decoding도 Rust로 넘길 수 있습니다.
+
+```bash
+kisti-db-manager json run \
+  --config path/to/config.json \
+  --mode parse-parquet-safe \
+  --flatten-backend rust-arrow \
+  --rust-raw-jsonl-parse
+```
+
 Rust MySQL loader는 아직 명시 opt-in입니다. 테이블 생성/스키마 매핑은 Python이 유지하고, Rust가 parquet를 읽어 batch insert합니다.
 
 ```bash

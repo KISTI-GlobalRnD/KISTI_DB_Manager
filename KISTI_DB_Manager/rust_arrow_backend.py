@@ -117,6 +117,38 @@ def _normalize_id_compaction_payload(value: Mapping[str, Any] | None) -> dict[st
     return cfg
 
 
+def _persist_options(
+    *,
+    base_table: str,
+    index_key: str,
+    except_keys: Sequence[str] | None,
+    excepted_expand_dict: bool,
+    sep: str,
+    parquet_dir: str | Path,
+    batch_idx: int,
+    index_offset: int,
+    record_contexts: Sequence[Mapping[str, Any]] | None,
+    parallel_workers: int,
+    id_compaction: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    id_compaction_payload = _normalize_id_compaction_payload(id_compaction)
+    options = {
+        "base_table": str(base_table),
+        "index_key": str(index_key),
+        "except_keys": [str(k) for k in list(except_keys or []) if str(k)],
+        "excepted_expand_dict": bool(excepted_expand_dict),
+        "sep": str(sep or "__"),
+        "parquet_dir": str(Path(parquet_dir)),
+        "batch_idx": int(batch_idx),
+        "index_offset": int(index_offset),
+        "record_contexts": list(record_contexts or []),
+        "parallel_workers": int(parallel_workers or 0),
+    }
+    if id_compaction_payload:
+        options["id_compaction"] = id_compaction_payload
+    return options
+
+
 def persist_json_batch_to_parquet(
     records: Sequence[Mapping[str, Any]],
     *,
@@ -133,24 +165,60 @@ def persist_json_batch_to_parquet(
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ext = _load_extension()
-    id_compaction_payload = _normalize_id_compaction_payload(id_compaction)
-    options = {
-        "base_table": str(base_table),
-        "index_key": str(index_key),
-        "except_keys": [str(k) for k in list(except_keys or []) if str(k)],
-        "excepted_expand_dict": bool(excepted_expand_dict),
-        "sep": str(sep or "__"),
-        "parquet_dir": str(Path(parquet_dir)),
-        "batch_idx": int(batch_idx),
-        "index_offset": int(index_offset),
-        "record_contexts": list(record_contexts or []),
-        "parallel_workers": int(parallel_workers or 0),
-    }
-    if id_compaction_payload:
-        options["id_compaction"] = id_compaction_payload
+    options = _persist_options(
+        base_table=base_table,
+        index_key=index_key,
+        except_keys=except_keys,
+        excepted_expand_dict=excepted_expand_dict,
+        sep=sep,
+        parquet_dir=parquet_dir,
+        batch_idx=batch_idx,
+        index_offset=index_offset,
+        record_contexts=record_contexts,
+        parallel_workers=parallel_workers,
+        id_compaction=id_compaction,
+    )
     result = ext.persist_json_batch(records, options)
     if not isinstance(result, Mapping):
         raise RustArrowBackendUnavailable("Rust Arrow backend returned an invalid result")
+    return dict(result)
+
+
+def persist_json_lines_batch_to_parquet(
+    lines: Sequence[str | bytes],
+    *,
+    base_table: str,
+    index_key: str,
+    except_keys: Sequence[str] | None,
+    excepted_expand_dict: bool,
+    sep: str,
+    parquet_dir: str | Path,
+    batch_idx: int,
+    index_offset: int,
+    record_contexts: Sequence[Mapping[str, Any]] | None,
+    parallel_workers: int,
+    id_compaction: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ext = _load_extension()
+    persist_fn = getattr(ext, "persist_json_lines_batch", None)
+    if not callable(persist_fn):
+        raise RustArrowBackendUnavailable("Rust Arrow backend does not support raw JSONL parsing")
+    options = _persist_options(
+        base_table=base_table,
+        index_key=index_key,
+        except_keys=except_keys,
+        excepted_expand_dict=excepted_expand_dict,
+        sep=sep,
+        parquet_dir=parquet_dir,
+        batch_idx=batch_idx,
+        index_offset=index_offset,
+        record_contexts=record_contexts,
+        parallel_workers=parallel_workers,
+        id_compaction=id_compaction,
+    )
+    result = persist_fn(list(lines), options)
+    if not isinstance(result, Mapping):
+        raise RustArrowBackendUnavailable("Rust Arrow raw JSONL backend returned an invalid result")
     return dict(result)
 
 

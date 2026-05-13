@@ -25,6 +25,7 @@ use serde_json::{Number, Value};
 
 type Row = BTreeMap<String, Value>;
 type TableRows = BTreeMap<String, Vec<Row>>;
+type IndexedJsonValues = Vec<(usize, Value)>;
 
 #[derive(Clone)]
 struct IdCompactionOptions {
@@ -100,6 +101,13 @@ struct RecordOut {
     error: Option<String>,
 }
 
+struct PersistExtras {
+    initial_records_failed: usize,
+    errors: Vec<String>,
+    error_indices: Vec<usize>,
+    timings_ms: Vec<(&'static str, u64)>,
+}
+
 fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     if obj.is_none() {
         return Ok(Value::Null);
@@ -155,6 +163,20 @@ fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
         return Ok(Value::Array(values));
     }
     Ok(Value::String(obj.str()?.to_string()))
+}
+
+fn py_line_to_string(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+    if let Ok(v) = obj.extract::<String>() {
+        return Ok(v);
+    }
+    if let Ok(v) = obj.extract::<Vec<u8>>() {
+        return String::from_utf8(v).map_err(|e| {
+            PyRuntimeError::new_err(format!("rust-arrow JSONL input is not valid UTF-8: {e}"))
+        });
+    }
+    Err(PyRuntimeError::new_err(
+        "rust-arrow JSONL input records must be str or bytes",
+    ))
 }
 
 fn get_string_option(options: &Bound<'_, PyDict>, key: &str, default: &str) -> PyResult<String> {
@@ -303,6 +325,57 @@ fn value_type_name(value: &Value) -> &'static str {
         Value::String(_) => "str",
         Value::Array(_) => "list",
         Value::Object(_) => "dict",
+    }
+}
+
+fn number_is_integer_literal(number: &Number) -> bool {
+    let text = number.to_string();
+    !text.contains('.') && !text.contains('e') && !text.contains('E')
+}
+
+fn validate_json_numbers(value: &Value, path: &str) -> Result<(), String> {
+    match value {
+        Value::Number(number) => {
+            if number_is_integer_literal(number)
+                && number.as_i64().is_none()
+                && number.as_u64().is_none()
+            {
+                let location = if path.is_empty() { "$" } else { path };
+                return Err(format!(
+                    "integer outside supported i64/u64 range at {location}: {number}"
+                ));
+            }
+            if !number_is_integer_literal(number) && number.as_f64().is_none() {
+                let location = if path.is_empty() { "$" } else { path };
+                return Err(format!(
+                    "number is not representable as f64 at {location}: {number}"
+                ));
+            }
+            Ok(())
+        }
+        Value::Array(items) => {
+            for (i, item) in items.iter().enumerate() {
+                let child_path = if path.is_empty() {
+                    format!("$[{i}]")
+                } else {
+                    format!("{path}[{i}]")
+                };
+                validate_json_numbers(item, &child_path)?;
+            }
+            Ok(())
+        }
+        Value::Object(map) => {
+            for (key, item) in map.iter() {
+                let child_path = if path.is_empty() {
+                    format!("$.{key}")
+                } else {
+                    format!("{path}.{key}")
+                };
+                validate_json_numbers(item, &child_path)?;
+            }
+            Ok(())
+        }
+        Value::Null | Value::Bool(_) | Value::String(_) => Ok(()),
     }
 }
 
@@ -757,6 +830,8 @@ fn value_kind(value: &Value) -> Option<ColumnKind> {
                 } else {
                     Some(ColumnKind::LargeUtf8)
                 }
+            } else if number_is_integer_literal(n) {
+                Some(ColumnKind::LargeUtf8)
             } else {
                 Some(ColumnKind::Float64)
             }
@@ -1913,47 +1988,42 @@ fn load_parquet_files_to_mysql(
 }
 
 #[allow(clippy::useless_conversion)]
-#[pyfunction]
-fn persist_json_batch(
+fn persist_indexed_json_values(
     py: Python<'_>,
-    records: &Bound<'_, PyAny>,
-    options: &Bound<'_, PyDict>,
+    options: Options,
+    parquet_root: PathBuf,
+    indexed_values: IndexedJsonValues,
+    extras: PersistExtras,
+    total_start: Instant,
 ) -> PyResult<PyObject> {
-    let total_start = Instant::now();
-    let options = parse_options(options)?;
-    let parquet_root = prepare_parquet_root(&options.parquet_dir)?;
-    let py_to_json_start = Instant::now();
-    let list = records.downcast::<PyList>()?;
-    let mut values = Vec::with_capacity(list.len());
-    for item in list.iter() {
-        values.push(py_to_json(&item)?);
-    }
-    let py_to_json_ms = py_to_json_start.elapsed().as_millis() as u64;
-
+    let PersistExtras {
+        initial_records_failed,
+        mut errors,
+        error_indices,
+        timings_ms,
+    } = extras;
     let flatten_start = Instant::now();
-    let outs: Vec<RecordOut> = if options.parallel_workers >= 2 && values.len() >= 2 {
+    let outs: Vec<RecordOut> = if options.parallel_workers >= 2 && indexed_values.len() >= 2 {
         let pool = rayon::ThreadPoolBuilder::new()
             .num_threads(options.parallel_workers)
             .build()
             .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
         pool.install(|| {
-            values
+            indexed_values
                 .par_iter()
-                .enumerate()
-                .map(|(i, record)| {
-                    let global_i = options.index_offset + i;
-                    let ctx = options.record_contexts.get(i);
+                .map(|(local_i, record)| {
+                    let global_i = options.index_offset + *local_i;
+                    let ctx = options.record_contexts.get(*local_i);
                     flatten_record(record, global_i, ctx, &options)
                 })
                 .collect()
         })
     } else {
-        values
+        indexed_values
             .iter()
-            .enumerate()
-            .map(|(i, record)| {
-                let global_i = options.index_offset + i;
-                let ctx = options.record_contexts.get(i);
+            .map(|(local_i, record)| {
+                let global_i = options.index_offset + *local_i;
+                let ctx = options.record_contexts.get(*local_i);
                 flatten_record(record, global_i, ctx, &options)
             })
             .collect()
@@ -1962,8 +2032,7 @@ fn persist_json_batch(
 
     let mut tables: TableRows = BTreeMap::new();
     let mut records_ok = 0usize;
-    let mut records_failed = 0usize;
-    let mut errors = Vec::<String>::new();
+    let mut records_failed = initial_records_failed;
     for out in outs {
         if out.ok {
             records_ok += 1;
@@ -2036,8 +2105,11 @@ fn persist_json_batch(
     result.set_item("parquet_tables_written", table_meta.len())?;
     result.set_item("tables", table_meta)?;
     result.set_item("errors", errors)?;
+    result.set_item("error_indices", error_indices)?;
     let timings = PyDict::new_bound(py);
-    timings.set_item("rust_arrow.py_to_json", py_to_json_ms)?;
+    for (key, value) in timings_ms {
+        timings.set_item(key, value)?;
+    }
     timings.set_item("json.flatten", flatten_ms)?;
     timings.set_item("json.parquet.persist", parquet_ms)?;
     timings.set_item("rust_arrow.total", total_start.elapsed().as_millis() as u64)?;
@@ -2051,9 +2123,106 @@ fn persist_json_batch(
     Ok(result.into())
 }
 
+#[allow(clippy::useless_conversion)]
+#[pyfunction]
+fn persist_json_batch(
+    py: Python<'_>,
+    records: &Bound<'_, PyAny>,
+    options: &Bound<'_, PyDict>,
+) -> PyResult<PyObject> {
+    let total_start = Instant::now();
+    let options = parse_options(options)?;
+    let parquet_root = prepare_parquet_root(&options.parquet_dir)?;
+    let py_to_json_start = Instant::now();
+    let list = records.downcast::<PyList>()?;
+    let mut values = Vec::with_capacity(list.len());
+    for (i, item) in list.iter().enumerate() {
+        values.push((i, py_to_json(&item)?));
+    }
+    let py_to_json_ms = py_to_json_start.elapsed().as_millis() as u64;
+
+    persist_indexed_json_values(
+        py,
+        options,
+        parquet_root,
+        values,
+        PersistExtras {
+            initial_records_failed: 0,
+            errors: Vec::new(),
+            error_indices: Vec::new(),
+            timings_ms: vec![("rust_arrow.py_to_json", py_to_json_ms)],
+        },
+        total_start,
+    )
+}
+
+#[allow(clippy::useless_conversion)]
+#[pyfunction]
+fn persist_json_lines_batch(
+    py: Python<'_>,
+    lines: &Bound<'_, PyAny>,
+    options: &Bound<'_, PyDict>,
+) -> PyResult<PyObject> {
+    let total_start = Instant::now();
+    let options = parse_options(options)?;
+    let parquet_root = prepare_parquet_root(&options.parquet_dir)?;
+    let parse_start = Instant::now();
+    let list = lines.downcast::<PyList>()?;
+    let mut values = Vec::with_capacity(list.len());
+    let mut records_failed = 0usize;
+    let mut errors = Vec::<String>::new();
+    let mut error_indices = Vec::<usize>::new();
+    for (i, item) in list.iter().enumerate() {
+        let line = py_line_to_string(&item)?;
+        let line_trimmed = line.trim();
+        if line_trimmed.is_empty() {
+            continue;
+        }
+        match serde_json::from_str::<Value>(line_trimmed) {
+            Ok(value @ Value::Object(_)) => match validate_json_numbers(&value, "") {
+                Ok(()) => values.push((i, value)),
+                Err(e) => {
+                    records_failed += 1;
+                    error_indices.push(i);
+                    errors.push(format!("record {i}: {e}; use the Python backend"));
+                }
+            },
+            Ok(value) => {
+                records_failed += 1;
+                error_indices.push(i);
+                errors.push(format!(
+                    "record {i}: non-dict JSON record encountered (type={})",
+                    value_type_name(&value)
+                ));
+            }
+            Err(e) => {
+                records_failed += 1;
+                error_indices.push(i);
+                errors.push(format!("record {i}: failed to parse JSONL line: {e}"));
+            }
+        }
+    }
+    let parse_ms = parse_start.elapsed().as_millis() as u64;
+
+    persist_indexed_json_values(
+        py,
+        options,
+        parquet_root,
+        values,
+        PersistExtras {
+            initial_records_failed: records_failed,
+            errors,
+            error_indices,
+            timings_ms: vec![("rust_arrow.json_parse", parse_ms)],
+        },
+        total_start,
+    )
+}
+
 #[pymodule]
 fn kisti_json_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(persist_json_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(persist_json_lines_batch, m)?)?;
     m.add_function(wrap_pyfunction!(load_parquet_files_to_mysql, m)?)?;
     Ok(())
 }

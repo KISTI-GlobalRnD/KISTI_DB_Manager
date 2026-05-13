@@ -13,4 +13,4 @@ mysql = { version = "25", default-features = false, features = ["minimal-rust"] 
 parquet = { version = "54", features = ["arrow"] }
 pyo3 = { version = "0.22", features = ["abi3-py310", "extension-module"] }
 rayon = "1.10"
-serde_json = "1.0"
+serde_json = { version = "1.0", features = ["arbitrary_precision"] }

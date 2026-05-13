@@ -65,6 +65,7 @@ class TestJsonParallelProfile(unittest.TestCase):
                 "7",
                 "--issue-sample-limit",
                 "2",
+                "--rust-raw-jsonl-parse",
                 "--id-compaction",
                 "--out",
                 "runs/profile",
@@ -79,6 +80,7 @@ class TestJsonParallelProfile(unittest.TestCase):
         self.assertEqual(args.shuffle_order, False)
         self.assertEqual(args.seed, 7)
         self.assertEqual(args.issue_sample_limit, 2)
+        self.assertEqual(args.rust_raw_jsonl_parse, True)
         self.assertEqual(args.id_compaction, True)
 
     def test_cli_profile_parallel_invokes_orchestrator(self):
@@ -118,6 +120,7 @@ class TestJsonParallelProfile(unittest.TestCase):
                             str(cfg_path),
                             "--workers",
                             "0,2",
+                            "--rust-raw-jsonl-parse",
                             "--out",
                             str(Path(td, "out")),
                         ]
@@ -127,6 +130,7 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertIn("recommended_parallel_workers: 2", buf.getvalue())
             self.assertEqual(p_profile.call_args.kwargs["workers"], [0, 2])
             self.assertEqual(p_profile.call_args.kwargs["flatten_backends"], ["auto"])
+            self.assertEqual(p_profile.call_args.kwargs["rust_raw_jsonl_parse"], True)
 
     def test_cli_profile_parallel_rejects_bad_workers(self):
         with tempfile.TemporaryDirectory() as td:
@@ -449,6 +453,83 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertTrue(Path(out_dir, "rust_arrow", "w0", "artifact_contract.json").exists())
             md = Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8")
             self.assertIn("recommended_flatten_backend", md)
+
+    def test_profile_parallel_applies_raw_jsonl_parse_only_to_rust_arrow(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = Path(td, "config.json")
+            out_dir = Path(td, "profile")
+            cfg_path.write_text(
+                json.dumps(
+                    {
+                        "data_config": {
+                            "PATH": "data/",
+                            "file_name": "x.jsonl",
+                            "file_type": "jsonl",
+                            "table_name": "tbl",
+                        },
+                        "db_config": {},
+                    }
+                ),
+                encoding="utf-8",
+            )
+            seen: dict[str, bool] = {}
+
+            def fake_run_json_pipeline(data_config, db_config, **kwargs):
+                backend = str(data_config["flatten_backend"])
+                seen[backend] = bool(data_config.get("rust_raw_jsonl_parse"))
+                parquet_dir = Path(data_config["persist_parquet_dir"])
+                parquet_dir.mkdir(parents=True, exist_ok=True)
+                Path(parquet_dir, "placeholder.txt").write_text("x", encoding="utf-8")
+                report = kwargs["report"]
+                report.set_artifact("flatten_backend", backend)
+                report.set_artifact("flatten_backend_effective", backend)
+                report.set_artifact("rust_raw_jsonl_parse_requested", bool(data_config.get("rust_raw_jsonl_parse")))
+                report.set_artifact(
+                    "rust_raw_jsonl_parse_effective",
+                    backend == "rust-arrow" and bool(data_config.get("rust_raw_jsonl_parse")),
+                )
+                report.bump("records_read", 100)
+                report.bump("records_ok", 100)
+                report.add_time_ms("pipeline.json.total", 1000)
+                if backend == "rust-arrow":
+                    report.add_time_ms("rust_arrow.json_parse", 20)
+                report.duration_s = 1.0 if backend == "rust-arrow" else 2.0
+                report.finished_at = "2026-01-01T00:00:00+00:00"
+                return JsonRunResult(name_maps={}, report=report)
+
+            def fake_inspect(parquet_root, **kwargs):
+                return {
+                    "status": "done",
+                    "parquet_root": str(parquet_root),
+                    "input": dict(kwargs),
+                    "summary": {},
+                    "tables": {},
+                    "issues": [],
+                    "warnings": [],
+                }
+
+            with patch("KISTI_DB_Manager.pipeline.run_json_pipeline", side_effect=fake_run_json_pipeline), patch(
+                "KISTI_DB_Manager.parquet_artifacts.inspect_parquet_artifact_contract",
+                side_effect=fake_inspect,
+            ):
+                summary = profile_parallel(
+                    config_path=cfg_path,
+                    workers=[0],
+                    flatten_backends=["python", "rust-arrow"],
+                    rust_raw_jsonl_parse=True,
+                    out_dir=out_dir,
+                    shuffle_order=False,
+                )
+
+            self.assertEqual(seen, {"python": False, "rust-arrow": True})
+            rows = {row["flatten_backend"]: row for row in summary["runs"]}
+            self.assertEqual(rows["python"]["rust_raw_jsonl_parse_requested"], False)
+            self.assertEqual(rows["python"]["rust_raw_jsonl_parse_effective"], False)
+            self.assertEqual(rows["rust-arrow"]["rust_raw_jsonl_parse_requested"], True)
+            self.assertEqual(rows["rust-arrow"]["rust_raw_jsonl_parse_effective"], True)
+            self.assertEqual(rows["rust-arrow"]["timings_ms"]["rust_arrow.json_parse"], 20)
+            md = Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8")
+            self.assertIn("raw_jsonl", md)
 
     def test_profile_parallel_repeats_and_recommends_by_median(self):
         with tempfile.TemporaryDirectory() as td:

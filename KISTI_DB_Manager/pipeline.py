@@ -1164,12 +1164,15 @@ def run_json_pipeline(
         load_parquet_files_to_mysql,
         normalize_flatten_backend,
         persist_json_batch_to_parquet,
+        persist_json_lines_batch_to_parquet,
         rust_arrow_unsupported_reason,
     )
 
     flatten_backend_requested = normalize_flatten_backend(dc.get("flatten_backend", BACKEND_AUTO))
     report.set_artifact("flatten_backend", flatten_backend_requested)
     report.set_artifact("flatten_backend_requested", flatten_backend_requested)
+    rust_raw_jsonl_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_parse", False), default=False)
+    report.set_artifact("rust_raw_jsonl_parse_requested", bool(rust_raw_jsonl_parse_requested))
 
     # Best-effort progress checkpointing (for crash recovery / quick shard detection).
     # This intentionally writes a tiny JSON snapshot periodically without waiting for the final report.
@@ -2010,8 +2013,10 @@ def run_json_pipeline(
                 *,
                 index_offset: int,
                 record_contexts: list[dict[str, Any]] | None = None,
+                raw_json_lines: list[bytes | str] | None = None,
             ) -> None:
-                if not batch_records:
+                batch_record_count = len(raw_json_lines) if raw_json_lines is not None else len(batch_records)
+                if batch_record_count <= 0:
                     return
 
                 import time
@@ -2029,7 +2034,12 @@ def run_json_pipeline(
                     _write_progress_snapshot(
                         stage="flush_batch",
                         ctx=record_contexts[-1],
-                        extra={"batch_idx": int(batch_idx), "index_offset": int(index_offset), "batch_records": int(len(batch_records))},
+                        extra={
+                            "batch_idx": int(batch_idx),
+                            "index_offset": int(index_offset),
+                            "batch_records": int(batch_record_count),
+                            "raw_jsonl": raw_json_lines is not None,
+                        },
                         force=True,
                     )
                 if flatten_backend_requested == BACKEND_RUST_ARROW and rust_explicit_failed:
@@ -2048,7 +2058,7 @@ def run_json_pipeline(
                     payload: dict[str, Any] = {
                         "batch_idx": int(batch_idx),
                         "index_offset": int(index_offset),
-                        "batch_records": int(len(batch_records)),
+                        "batch_records": int(batch_record_count),
                         "mode": str(mode),
                     }
                     if parquet:
@@ -3825,20 +3835,23 @@ def run_json_pipeline(
                         return tables
 
                     try:
-                        rust_result = persist_json_batch_to_parquet(
-                            batch_records,
-                            base_table=base_table,
-                            index_key=index_key,
-                            except_keys=except_keys,
-                            excepted_expand_dict=bool(excepted_expand_dict),
-                            sep=key_sep,
-                            parquet_dir=persist_parquet_dir,
-                            batch_idx=int(batch_idx),
-                            index_offset=int(index_offset),
-                            record_contexts=record_contexts,
-                            parallel_workers=int(parallel_workers or 0),
-                            id_compaction=dict(id_compactor.config) if id_compactor.enabled else None,
-                        )
+                        persist_kwargs = {
+                            "base_table": base_table,
+                            "index_key": index_key,
+                            "except_keys": except_keys,
+                            "excepted_expand_dict": bool(excepted_expand_dict),
+                            "sep": key_sep,
+                            "parquet_dir": persist_parquet_dir,
+                            "batch_idx": int(batch_idx),
+                            "index_offset": int(index_offset),
+                            "record_contexts": record_contexts,
+                            "parallel_workers": int(parallel_workers or 0),
+                            "id_compaction": dict(id_compactor.config) if id_compactor.enabled else None,
+                        }
+                        if raw_json_lines is not None:
+                            rust_result = persist_json_lines_batch_to_parquet(raw_json_lines, **persist_kwargs)
+                        else:
+                            rust_result = persist_json_batch_to_parquet(batch_records, **persist_kwargs)
                     except RustArrowBackendUnavailable as e:
                         if flatten_backend_requested == BACKEND_RUST_ARROW:
                             rust_explicit_failed = True
@@ -3876,10 +3889,13 @@ def run_json_pipeline(
                             else {}
                         )
                         total_ms = int(round((time.perf_counter() - rust_t0) * 1000.0))
+                        rust_json_parse_ms = int(timings.get("rust_arrow.json_parse", 0) or 0)
                         py_to_json_ms = int(timings.get("rust_arrow.py_to_json", timings.get("py_to_json_ms", 0)) or 0)
                         flatten_ms = int(timings.get("json.flatten", timings.get("flatten_ms", total_ms)) or 0)
                         parquet_ms = int(timings.get("json.parquet.persist", timings.get("parquet_persist_ms", 0)) or 0)
                         rust_total_ms = int(timings.get("rust_arrow.total", timings.get("total_ms", total_ms)) or 0)
+                        if "rust_arrow.json_parse" in timings:
+                            report.add_time_ms("rust_arrow.json_parse", rust_json_parse_ms)
                         if py_to_json_ms > 0:
                             report.add_time_ms("rust_arrow.py_to_json", py_to_json_ms)
                         if flatten_ms > 0:
@@ -3891,11 +3907,47 @@ def run_json_pipeline(
                         if id_compactor.enabled:
                             id_compactor.merge_summary(rust_result.get("id_compaction"))
                             report.set_artifact("id_compaction", id_compactor.summary())
-                        report.bump("records_total", int(len(batch_records)))
-                        report.bump("records_ok", int(rust_result.get("records_ok") or len(batch_records)))
+                        report.bump("records_total", int(batch_record_count))
+                        records_ok_value = rust_result.get("records_ok")
+                        records_ok = int(records_ok_value) if records_ok_value is not None else int(batch_record_count)
+                        report.bump("records_ok", int(records_ok))
                         failed = int(rust_result.get("records_failed") or 0)
                         if failed:
                             report.bump("records_failed", failed)
+                            errors = list(rust_result.get("errors") or [])
+                            error_indices = list(rust_result.get("error_indices") or [])
+                            if raw_json_lines is not None and error_indices:
+                                for local_i_raw, err_msg in zip(error_indices, errors):
+                                    try:
+                                        local_i = int(local_i_raw)
+                                    except Exception:
+                                        continue
+                                    if local_i < 0 or local_i >= len(raw_json_lines):
+                                        continue
+                                    ctx = dict(record_contexts[local_i]) if record_contexts and local_i < len(record_contexts) else {}
+                                    raw_line = raw_json_lines[local_i]
+                                    if isinstance(raw_line, (bytes, bytearray)):
+                                        raw_text = bytes(raw_line).decode("utf-8", errors="replace").rstrip("\r\n")
+                                    else:
+                                        raw_text = str(raw_line).rstrip("\r\n")
+                                    q_context = {"source": ctx.get("source_path")}
+                                    if ctx.get("line_no") is not None:
+                                        q_context["line_no"] = ctx.get("line_no")
+                                    if ctx.get("source_member") is not None:
+                                        q_context["source_member"] = ctx.get("source_member")
+                                    q.write(
+                                        stage="iter_json_records",
+                                        record=raw_text,
+                                        index=ctx.get("line_no", local_i),
+                                        exc=RuntimeError(str(err_msg)),
+                                        **{k: v for k, v in q_context.items() if v is not None},
+                                    )
+                            report.warn(
+                                stage="json_pipeline.rust_arrow",
+                                message="Rust Arrow backend reported failed records",
+                                failed=failed,
+                                errors=errors[:3],
+                            )
 
                         tables_meta = list(rust_result.get("tables") or [])
                         for table_info in tables_meta:
@@ -4356,50 +4408,147 @@ def run_json_pipeline(
                         force=True,
                     )
 
-            batch_index_offset = 0
-            try:
-                record_iter = _iter_json_records(
-                    dc,
-                    report=report,
-                    quarantine=q,
-                    max_records=max_records,
-                    with_context=True,
-                )
-            except TypeError as e:
-                if "quarantine" not in str(e):
-                    raise
-                record_iter = _iter_json_records(
-                    dc,
-                    report=report,
-                    max_records=max_records,
-                    with_context=True,
-                )
-            for rec_out in record_iter:
-                report.bump("records_read", 1)
-                rec_ctx: dict[str, Any] = {}
-                if isinstance(rec_out, tuple) and len(rec_out) == 2:
-                    record, ctx = rec_out
-                    if isinstance(ctx, Mapping):
-                        rec_ctx = dict(ctx)
-                else:
-                    record = rec_out
-                if not isinstance(record, dict):
-                    report.warn(stage="json_pipeline", message="Non-dict JSON record encountered; skipping", dtype=type(record).__name__)
-                    continue
-                rec_ctx.setdefault("record_index", int(global_index))
-                _write_progress_snapshot(stage="read", ctx=rec_ctx)
-                if not batch:
-                    batch_index_offset = global_index
-                batch.append(record)
-                batch_contexts.append(rec_ctx)
-                global_index += 1
-                if len(batch) >= chunk_size:
-                    flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
-                    batch = []
-                    batch_contexts = []
+            def _rust_raw_jsonl_disabled_reason() -> str | None:
+                if not rust_raw_jsonl_parse_requested:
+                    return "not requested"
+                if flatten_backend_requested != BACKEND_RUST_ARROW:
+                    return "requires flatten_backend=rust-arrow"
+                if custom_extract_fn:
+                    return "custom extract_fn supplied"
+                if not bool(persist_parquet_files):
+                    return "requires persist_parquet_files=true"
+                if bool(create) or bool(load) or bool(index) or bool(optimize) or bool(emit_ddl):
+                    return "requires parse/parquet-only run"
+                if bool(use_streaming_rows) or bool(persist_tsv_files):
+                    return "requires parquet artifact path"
+                if dc.get("_resume_cursor") or dc.get("resume_cursor"):
+                    return "resume cursor is not supported by raw JSONL parser"
+                if dc.get("records_key") or dc.get("json_records_key"):
+                    return "records_key is not supported by raw JSONL parser"
+                if bool(excepted_expand_dict):
+                    return "excepted_expand_dict=true is not supported by rust-arrow"
+                return None
 
-            if batch:
-                flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
+            def _rust_raw_jsonl_sources() -> tuple[list[Any] | None, str | None]:
+                from pathlib import Path
+
+                try:
+                    source_infos = _resolve_json_sources(dc, report=report, apply_sampling=True)
+                except Exception as e:
+                    return None, f"failed to resolve JSON sources: {type(e).__name__}: {e}"
+                sources: list[Any] = []
+                configured_file_type = str(dc.get("file_type") or "").strip().lower()
+                for _origin, path in source_infos:
+                    file_type = configured_file_type or Path(str(path)).suffix.lstrip(".").lower()
+                    if file_type not in {"jsonl", "ndjson", "jsonlines"}:
+                        return None, f"unsupported file_type for raw JSONL parser: {file_type or '<empty>'}"
+                    sources.append(path)
+                if not sources:
+                    return None, "no JSONL sources resolved"
+                return sources, None
+
+            raw_jsonl_disabled_reason = _rust_raw_jsonl_disabled_reason()
+            raw_jsonl_sources = None
+            if raw_jsonl_disabled_reason is None:
+                raw_jsonl_sources, raw_jsonl_disabled_reason = _rust_raw_jsonl_sources()
+            if raw_jsonl_disabled_reason and rust_raw_jsonl_parse_requested:
+                report.set_artifact("rust_raw_jsonl_parse_disabled_reason", raw_jsonl_disabled_reason)
+            report.set_artifact("rust_raw_jsonl_parse_effective", raw_jsonl_disabled_reason is None)
+
+            batch_index_offset = 0
+            if raw_jsonl_disabled_reason is None and raw_jsonl_sources is not None:
+                raw_batch: list[bytes | str] = []
+                reached_max_records = False
+                for raw_source in raw_jsonl_sources:
+                    if reached_max_records or rust_explicit_failed:
+                        break
+                    with open(raw_source, "rb") as raw_fp:
+                        for line_no, raw_line in enumerate(raw_fp, start=1):
+                            line = raw_line.strip()
+                            if not line:
+                                continue
+                            if max_records is not None and global_index >= max_records:
+                                reached_max_records = True
+                                break
+                            try:
+                                report.bump("io_bytes_read", int(len(raw_line)))
+                            except Exception:
+                                pass
+                            rec_ctx = {
+                                "source_path": str(raw_source),
+                                "line_no": int(line_no),
+                                "record_index": int(global_index),
+                            }
+                            report.bump("records_read", 1)
+                            _write_progress_snapshot(stage="read", ctx=rec_ctx)
+                            if not raw_batch:
+                                batch_index_offset = global_index
+                            raw_batch.append(bytes(line))
+                            batch_contexts.append(rec_ctx)
+                            global_index += 1
+                            if len(raw_batch) >= chunk_size:
+                                flush_batch(
+                                    [],
+                                    index_offset=batch_index_offset,
+                                    record_contexts=batch_contexts,
+                                    raw_json_lines=raw_batch,
+                                )
+                                raw_batch = []
+                                batch_contexts = []
+                                if rust_explicit_failed:
+                                    break
+
+                if raw_batch and not rust_explicit_failed:
+                    flush_batch(
+                        [],
+                        index_offset=batch_index_offset,
+                        record_contexts=batch_contexts,
+                        raw_json_lines=raw_batch,
+                    )
+            else:
+                try:
+                    record_iter = _iter_json_records(
+                        dc,
+                        report=report,
+                        quarantine=q,
+                        max_records=max_records,
+                        with_context=True,
+                    )
+                except TypeError as e:
+                    if "quarantine" not in str(e):
+                        raise
+                    record_iter = _iter_json_records(
+                        dc,
+                        report=report,
+                        max_records=max_records,
+                        with_context=True,
+                    )
+                for rec_out in record_iter:
+                    report.bump("records_read", 1)
+                    rec_ctx: dict[str, Any] = {}
+                    if isinstance(rec_out, tuple) and len(rec_out) == 2:
+                        record, ctx = rec_out
+                        if isinstance(ctx, Mapping):
+                            rec_ctx = dict(ctx)
+                    else:
+                        record = rec_out
+                    if not isinstance(record, dict):
+                        report.warn(stage="json_pipeline", message="Non-dict JSON record encountered; skipping", dtype=type(record).__name__)
+                        continue
+                    rec_ctx.setdefault("record_index", int(global_index))
+                    _write_progress_snapshot(stage="read", ctx=rec_ctx)
+                    if not batch:
+                        batch_index_offset = global_index
+                    batch.append(record)
+                    batch_contexts.append(rec_ctx)
+                    global_index += 1
+                    if len(batch) >= chunk_size:
+                        flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
+                        batch = []
+                        batch_contexts = []
+
+                if batch:
+                    flush_batch(batch, index_offset=batch_index_offset, record_contexts=batch_contexts)
 
             # Ensure any overlapped batch loads are finished before finalize steps.
             _drain_pending_loads()
@@ -4448,6 +4597,10 @@ def run_json_pipeline(
             if parse_ms > 0:
                 tp["io.json_parse.records_per_s"] = per_s(records_read, parse_ms)
                 tp["io.json_parse.mb_per_s"] = (float(bytes_read) / (1024.0 * 1024.0)) / (float(parse_ms) / 1000.0)
+
+            rust_json_parse_ms = int(report.timings_ms.get("rust_arrow.json_parse", 0) or 0)
+            if rust_json_parse_ms > 0:
+                tp["rust_arrow.json_parse.records_per_s"] = per_s(records_read, rust_json_parse_ms)
 
             flatten_ms = int(report.timings_ms.get("json.flatten", 0) or 0)
             if flatten_ms > 0:

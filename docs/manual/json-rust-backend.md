@@ -8,6 +8,7 @@ Use it when you need evidence-based backend selection or want to test the Rust l
 The Rust extension is intentionally scoped.
 
 - JSON record flattening for supported parquet artifact runs
+- Optional raw JSONL parsing inside Rust for parse/parquet-only runs
 - Parquet writing through Arrow
 - OpenAlex `semantic_column_strip` ID compaction in the Rust path
 - Optional parquet-to-MySQL batch insert when `--rust-db-load` is enabled
@@ -46,6 +47,18 @@ kisti-db-manager json run \
   --flatten-backend rust-arrow
 ```
 
+For plain JSONL/NDJSON parse/parquet-only runs, you can also bypass Python JSON decoding and parse raw lines in Rust:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/openalex_config.json \
+  --mode parse-parquet-safe \
+  --flatten-backend rust-arrow \
+  --rust-raw-jsonl-parse
+```
+
+This path is opt-in and intentionally narrow. It requires `flatten_backend=rust-arrow`, `persist_parquet_files=true`, no DB/create/index/optimize stages, no `records_key`, and plain `.jsonl`/`.ndjson` input. Reports include `rust_raw_jsonl_parse_effective` and the Rust parser timing key `rust_arrow.json_parse` when measurable.
+
 For backend comparison:
 
 ```bash
@@ -60,6 +73,7 @@ kisti-db-manager json profile-parallel \
 ```
 
 `json profile-parallel` keeps per-run reports and parquet artifacts by default.
+Add `--rust-raw-jsonl-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser fast path.
 It also writes:
 
 - `parallel_profile.json`
@@ -159,6 +173,7 @@ The Rust path is intentionally conservative.
 - `excepted_expand_dict=true` remains Python-only
 - `persist_parquet_files=false` cannot use Rust
 - custom Python `extract_fn` disables Rust
+- raw JSONL parsing is limited to explicit `rust-arrow` parse/parquet-only runs
 - schema-freeze extra-column mode disables direct Rust DB load
 - DB indexes and optimize remain Python-managed
 

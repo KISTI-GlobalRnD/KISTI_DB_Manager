@@ -8,6 +8,10 @@ class FakeRustExtension:
     def __init__(self):
         self.calls = []
 
+    def persist_json_lines_batch(self, lines, options):
+        self.calls.append((lines, options))
+        return {"ok": True, "records_ok": len(lines), "records_failed": 0, "tables": []}
+
     def load_parquet_files_to_mysql(self, payload, options):
         self.calls.append((payload, options))
         return {"ok": True, "files_loaded": len(payload), "tables_loaded": len(payload), "rows_loaded": 0}
@@ -53,6 +57,32 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
             )
 
         self.assertEqual(ext.calls[0][1]["transaction"], False)
+
+    def test_raw_jsonl_wrapper_passes_lines_and_options(self):
+        ext = FakeRustExtension()
+        with patch("KISTI_DB_Manager.rust_arrow_backend._load_extension", return_value=ext):
+            res = rust_arrow_backend.persist_json_lines_batch_to_parquet(
+                [b'{"id": 1}', '{"id": 2}'],
+                base_table="base",
+                index_key="id",
+                except_keys=["items"],
+                excepted_expand_dict=False,
+                sep="__",
+                parquet_dir="/tmp/parquet",
+                batch_idx=3,
+                index_offset=10,
+                record_contexts=[{"line_no": 1}, {"line_no": 2}],
+                parallel_workers=2,
+            )
+
+        self.assertTrue(res["ok"])
+        lines, options = ext.calls[0]
+        self.assertEqual(lines, [b'{"id": 1}', '{"id": 2}'])
+        self.assertEqual(options["base_table"], "base")
+        self.assertEqual(options["except_keys"], ["items"])
+        self.assertEqual(options["batch_idx"], 3)
+        self.assertEqual(options["index_offset"], 10)
+        self.assertEqual(options["parallel_workers"], 2)
 
 
 if __name__ == "__main__":
