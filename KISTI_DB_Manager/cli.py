@@ -583,6 +583,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["rust_raw_jsonl_file_parse"] = bool(args.rust_raw_jsonl_file_parse)
     if getattr(args, "rust_parallel_table_writes", None) is not None:
         data_config["rust_parallel_table_writes"] = bool(args.rust_parallel_table_writes)
+    if getattr(args, "rust_columnar_accumulator", None) is not None:
+        data_config["rust_columnar_accumulator"] = bool(args.rust_columnar_accumulator)
     if getattr(args, "db_load_parallel_tables", None) is not None:
         data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
     if getattr(args, "load_data_commit_strategy", None):
@@ -754,6 +756,7 @@ def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
         rust_raw_jsonl_parse=args.rust_raw_jsonl_parse,
         rust_raw_jsonl_file_parse=args.rust_raw_jsonl_file_parse,
         rust_parallel_table_writes=args.rust_parallel_table_writes,
+        rust_columnar_accumulator=args.rust_columnar_accumulator,
         id_compaction=args.id_compaction,
         id_compaction_preset=args.id_compaction_preset,
         id_compaction_mode=args.id_compaction_mode,
@@ -1274,6 +1277,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Allow Rust to write per-table parquet artifacts in parallel when supported (default: config or false).",
     )
     p_json_run.add_argument(
+        "--rust-columnar-accumulator",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Use the opt-in Rust columnar flatten/parquet accumulator when supported (default: config or false).",
+    )
+    p_json_run.add_argument(
         "--db-load-parallel-tables",
         type=int,
         help="Parallelize LOAD DATA across tables (default: config or 0/off)",
@@ -1493,6 +1502,12 @@ def build_parser() -> argparse.ArgumentParser:
         action=argparse.BooleanOptionalAction,
         default=None,
         help="For rust-arrow profile runs, allow parallel per-table parquet writes when supported.",
+    )
+    p_json_profile_parallel.add_argument(
+        "--rust-columnar-accumulator",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="For rust-arrow profile runs, use the opt-in columnar flatten/parquet accumulator when supported.",
     )
     p_json_profile_parallel.add_argument(
         "--mode",

@@ -2525,6 +2525,102 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertNotIsInstance(values["n"][0], str)
             self.assertNotIsInstance(values["b"][0], str)
 
+    def test_run_json_pipeline_rust_arrow_columnar_accumulator_matches_row_accumulator(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "x.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps(
+                            {
+                                "id": "r1",
+                                "n": 1,
+                                "b": True,
+                                "f": 1.25,
+                                "name": "alpha",
+                                "items": [{"code": "A", "score": 10}, "loose"],
+                                "tags": ["x", 2, None],
+                                "meta": {"homepage_url": "https://example.org", "ids": {"openalex": "W1"}},
+                                "extra": {"keep": 1},
+                            }
+                        ),
+                        "{bad json",
+                        json.dumps(
+                            {
+                                "id": "r2",
+                                "n": 2,
+                                "b": False,
+                                "f": 2.5,
+                                "name": None,
+                                "items": [{"code": "B", "score": 11}, {"code": "C", "score": 12}],
+                                "tags": [],
+                                "meta": {"homepage_url": {"value": "intentional"}, "ids": {"doi": "10/abc"}},
+                                "extra": [1, 2],
+                            }
+                        ),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
+
+            def run_columnar(columnar: bool):
+                out_dir = root / ("parquet_columnar" if columnar else "parquet_rows")
+                res = run_json_pipeline(
+                    {
+                        "PATH": str(root),
+                        "file_name": "x.jsonl",
+                        "file_type": "jsonl",
+                        "table_name": "base",
+                        "KEY_SEP": "__",
+                        "except_keys": ["extra"],
+                        "persist_parquet_files": True,
+                        "persist_parquet_dir": str(out_dir),
+                        "flatten_backend": "rust-arrow",
+                        "rust_raw_jsonl_parse": True,
+                        "rust_raw_jsonl_file_parse": True,
+                        "rust_columnar_accumulator": columnar,
+                        "parallel_workers": 2,
+                    },
+                    db_config,
+                    chunk_size=2,
+                    create=False,
+                    load=False,
+                    index=False,
+                    optimize=False,
+                    continue_on_error=True,
+                )
+                tables = {
+                    table_dir.name: self._read_single_parquet_table(pq, out_dir, table_dir.name)
+                    for table_dir in sorted(out_dir.iterdir())
+                    if table_dir.is_dir()
+                }
+                return res, tables
+
+            row_res, row_tables = run_columnar(False)
+            columnar_res, columnar_tables = run_columnar(True)
+
+            self.assertEqual(row_res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+            self.assertEqual(columnar_res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+            self.assertEqual(columnar_res.report.artifacts.get("rust_columnar_accumulator"), True)
+            self.assertEqual(columnar_res.report.artifacts.get("rust_raw_jsonl_file_parse_effective"), True)
+            self.assertEqual(columnar_res.report.stats.get("records_read"), 3)
+            self.assertEqual(columnar_res.report.stats.get("records_ok"), 2)
+            self.assertEqual(columnar_res.report.stats.get("records_failed"), 1)
+            self.assertEqual(sorted(columnar_tables), sorted(row_tables))
+            for table_name in sorted(row_tables):
+                row_table = row_tables[table_name]
+                columnar_table = columnar_tables[table_name]
+                self.assertEqual(columnar_table.to_pydict(), row_table.to_pydict(), table_name)
+                self.assertEqual(
+                    [(field.name, str(field.type)) for field in columnar_table.schema],
+                    [(field.name, str(field.type)) for field in row_table.schema],
+                    table_name,
+                )
+
     def test_run_json_pipeline_rust_arrow_matches_excepted_value_storage(self):
         _pa, pq = self._require_rust_arrow_with_pyarrow()
 

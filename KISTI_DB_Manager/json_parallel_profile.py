@@ -563,6 +563,7 @@ def _summarize_worker_run(
         "rust_raw_jsonl_file_parse_effective": bool(artifacts.get("rust_raw_jsonl_file_parse_effective", False)),
         "rust_raw_jsonl_file_parse_disabled_reason": artifacts.get("rust_raw_jsonl_file_parse_disabled_reason"),
         "rust_parallel_table_writes": bool(artifacts.get("rust_parallel_table_writes", False)),
+        "rust_columnar_accumulator": bool(artifacts.get("rust_columnar_accumulator", False)),
         "rust_arrow_failed_batches": _as_int(
             artifacts.get("rust_arrow_failed_batches"),
             _as_int(artifacts.get("flatten_backend_fallback_batches"), 0),
@@ -773,6 +774,7 @@ def _aggregate_worker_attempts(
             "rust_raw_jsonl_file_parse_effective": False,
             "rust_raw_jsonl_file_parse_disabled_reason": None,
             "rust_parallel_table_writes": False,
+            "rust_columnar_accumulator": False,
             "rust_arrow_failed_batches": 0,
             "flatten_backend_fallback_reason": None,
             "flatten_backend_auto_disabled_reason": None,
@@ -924,6 +926,7 @@ def _aggregate_worker_attempts(
             "; ".join(sorted(set(raw_jsonl_file_disabled_reasons))) if raw_jsonl_file_disabled_reasons else None
         ),
         "rust_parallel_table_writes": any(bool(item.get("rust_parallel_table_writes")) for item in attempt_rows),
+        "rust_columnar_accumulator": any(bool(item.get("rust_columnar_accumulator")) for item in attempt_rows),
         "rust_arrow_failed_batches": rust_arrow_failed_batches,
         "flatten_backend_fallback_reason": "; ".join(sorted(set(fallback_reasons))) if fallback_reasons else None,
         "flatten_backend_auto_disabled_reason": "; ".join(sorted(set(auto_disabled_reasons))) if auto_disabled_reasons else None,
@@ -975,6 +978,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append(f"- rust_raw_jsonl_parse: `{summary.get('rust_raw_jsonl_parse')}`")
     lines.append(f"- rust_raw_jsonl_file_parse: `{summary.get('rust_raw_jsonl_file_parse')}`")
     lines.append(f"- rust_parallel_table_writes: `{summary.get('rust_parallel_table_writes')}`")
+    lines.append(f"- rust_columnar_accumulator: `{summary.get('rust_columnar_accumulator')}`")
     lines.append(f"- repeat: `{summary.get('repeat')}`")
     lines.append(f"- records_per_s_basis: `{summary.get('records_per_s_basis')}`")
     lines.append(f"- recommended_flatten_backend: `{summary.get('recommended_flatten_backend')}`")
@@ -984,13 +988,13 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append("## Worker Runs")
     lines.append("")
     lines.append(
-        "| backend | effective | raw_jsonl | file_jsonl | table_write_parallel | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
+        "| backend | effective | raw_jsonl | file_jsonl | table_write_parallel | columnar | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
         "io.json_parse_ms | rust_arrow.json_parse_ms | rust_arrow.py_to_json_ms | json.flatten_ms | "
         "json.parquet.persist_ms | rust_arrow.total_ms | "
         "issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
     lines.append(
-        "|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+        "|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
     )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
@@ -1008,6 +1012,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
             f"{'yes' if row.get('rust_raw_jsonl_parse_effective') else 'no'} | "
             f"{'yes' if row.get('rust_raw_jsonl_file_parse_effective') else 'no'} | "
             f"{'yes' if row.get('rust_parallel_table_writes') else 'no'} | "
+            f"{'yes' if row.get('rust_columnar_accumulator') else 'no'} | "
             f"{row.get('workers')} | {row.get('status')} | "
             f"{_as_int(row.get('attempt_count'), 1)} | {_as_int(row.get('eligible_attempt_count'), 0)} | "
             f"{duration_s} | {rps_s} | {rps_min_s} | {rps_max_s} | "
@@ -1147,6 +1152,7 @@ def profile_parallel(
     rust_raw_jsonl_parse: bool | None = None,
     rust_raw_jsonl_file_parse: bool | None = None,
     rust_parallel_table_writes: bool | None = None,
+    rust_columnar_accumulator: bool | None = None,
     profile_top: int = 8,
     repeat: int = 1,
     shuffle_order: bool = True,
@@ -1241,6 +1247,12 @@ def profile_parallel(
         data_config["rust_parallel_table_writes"] = bool(
             parallel_table_writes_requested and str(flatten_backend) == "rust-arrow"
         )
+        columnar_requested = (
+            _as_bool(rust_columnar_accumulator, default=False)
+            if rust_columnar_accumulator is not None
+            else _as_bool(data_config.get("rust_columnar_accumulator", False), default=False)
+        )
+        data_config["rust_columnar_accumulator"] = bool(columnar_requested and str(flatten_backend) == "rust-arrow")
         data_config["progress_path"] = ""
         data_config["progress_interval_s"] = 0.0
         if chunk_size is not None:
@@ -1266,6 +1278,7 @@ def profile_parallel(
                 "rust_raw_jsonl_parse": bool(data_config.get("rust_raw_jsonl_parse", False)),
                 "rust_raw_jsonl_file_parse": bool(data_config.get("rust_raw_jsonl_file_parse", False)),
                 "rust_parallel_table_writes": bool(data_config.get("rust_parallel_table_writes", False)),
+                "rust_columnar_accumulator": bool(data_config.get("rust_columnar_accumulator", False)),
                 "repeat_index": int(repeat_index),
                 "execution_order": int(order),
                 "out_dir": str(out),
@@ -1429,6 +1442,9 @@ def profile_parallel(
         ),
         "rust_parallel_table_writes": (
             bool(_as_bool(rust_parallel_table_writes, default=False)) if rust_parallel_table_writes is not None else None
+        ),
+        "rust_columnar_accumulator": (
+            bool(_as_bool(rust_columnar_accumulator, default=False)) if rust_columnar_accumulator is not None else None
         ),
         "repeat": int(repeat_count),
         "shuffle_order": bool(shuffle_order),

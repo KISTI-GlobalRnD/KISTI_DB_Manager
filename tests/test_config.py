@@ -33,6 +33,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["rust_raw_jsonl_parse"], False)
         self.assertEqual(cfg["rust_raw_jsonl_file_parse"], False)
         self.assertEqual(cfg["rust_parallel_table_writes"], False)
+        self.assertEqual(cfg["rust_columnar_accumulator"], False)
         self.assertEqual(cfg["json_streaming_load"], False)
         self.assertEqual(cfg["persist_parquet_files"], True)
         self.assertEqual(cfg["persist_parquet_dir"], "")
@@ -72,6 +73,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(out["rust_raw_jsonl_parse"], False)
         self.assertEqual(out["rust_raw_jsonl_file_parse"], False)
         self.assertEqual(out["rust_parallel_table_writes"], False)
+        self.assertEqual(out["rust_columnar_accumulator"], False)
 
 
 if __name__ == "__main__":

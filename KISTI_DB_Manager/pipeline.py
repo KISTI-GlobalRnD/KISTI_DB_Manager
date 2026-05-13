@@ -1128,6 +1128,8 @@ def run_json_pipeline(
     report.set_artifact("rust_db_load", bool(rust_db_load))
     rust_parallel_table_writes = _coerce_bool(dc.get("rust_parallel_table_writes", False), default=False)
     report.set_artifact("rust_parallel_table_writes", bool(rust_parallel_table_writes))
+    rust_columnar_accumulator = _coerce_bool(dc.get("rust_columnar_accumulator", False), default=False)
+    report.set_artifact("rust_columnar_accumulator", bool(rust_columnar_accumulator))
     persist_parquet_files = _coerce_bool(dc.get("persist_parquet_files", True), default=True)
     persist_parquet_dir = str(dc.get("persist_parquet_dir", "") or "").strip()
     if persist_parquet_files and not persist_parquet_dir:
@@ -3852,6 +3854,7 @@ def run_json_pipeline(
                             "record_contexts": record_contexts,
                             "parallel_workers": int(parallel_workers or 0),
                             "parallel_table_writes": bool(rust_parallel_table_writes),
+                            "columnar_accumulator": bool(rust_columnar_accumulator),
                             "id_compaction": dict(id_compactor.config) if id_compactor.enabled else None,
                         }
                         if raw_json_lines is not None:
@@ -4489,6 +4492,7 @@ def run_json_pipeline(
                         index_offset=int(global_index),
                         parallel_workers=int(parallel_workers or 0),
                         parallel_table_writes=bool(rust_parallel_table_writes),
+                        columnar_accumulator=bool(rust_columnar_accumulator),
                         chunk_size=int(chunk_size),
                         max_records=max_records,
                         id_compaction=None,

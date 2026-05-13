@@ -11,6 +11,7 @@ The Rust extension is intentionally scoped.
 - Optional raw JSONL parsing inside Rust for parse/parquet-only runs
 - Optional direct JSONL/NDJSON source-file reading inside Rust for supported parse/parquet-only runs
 - Optional per-table parallel parquet writes inside Rust
+- Optional columnar accumulator for Rust flatten/parquet output
 - Parquet writing through Arrow
 - OpenAlex `semantic_column_strip` ID compaction in the Rust path
 - Optional parquet-to-MySQL batch insert when `--rust-db-load` is enabled
@@ -65,6 +66,8 @@ For the narrowest fast path, add `--rust-raw-jsonl-file-parse` as well. That kee
 
 `--rust-parallel-table-writes` is also available for profiling table-level parquet write parallelism. Keep it opt-in: on some inputs it lowers `json.parquet.persist` but can still reduce total throughput due to I/O contention.
 
+`--rust-columnar-accumulator` is an opt-in Rust parquet path that accumulates column data directly instead of materializing full row maps before Arrow arrays are built. It is intended for profile-driven optimization of parse/parquet-only `rust-arrow` runs. Keep it disabled for ID compaction runs; the current ID compaction path still uses the mature row accumulator so manifest and compaction accounting stay unchanged.
+
 For backend comparison:
 
 ```bash
@@ -81,6 +84,7 @@ kisti-db-manager json profile-parallel \
 `json profile-parallel` keeps per-run reports and parquet artifacts by default.
 Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser and direct file reader fast paths.
 Add `--rust-parallel-table-writes` only when you want to test table-level parquet write parallelism explicitly.
+Add `--rust-columnar-accumulator` to compare the opt-in columnar Rust accumulator against the existing row accumulator before using it in a real run.
 It also writes:
 
 - `parallel_profile.json`

@@ -92,6 +92,7 @@ struct Options {
     index_offset: usize,
     parallel_workers: usize,
     parallel_table_writes: bool,
+    columnar_accumulator: bool,
     record_contexts: Vec<Value>,
     id_compaction: IdCompactionOptions,
 }
@@ -371,6 +372,7 @@ fn parse_options(options: &Bound<'_, PyDict>) -> PyResult<Options> {
         index_offset: get_usize_option(options, "index_offset", 0)?,
         parallel_workers: get_usize_option(options, "parallel_workers", 0)?,
         parallel_table_writes: get_bool_option(options, "parallel_table_writes", false)?,
+        columnar_accumulator: get_bool_option(options, "columnar_accumulator", false)?,
         record_contexts,
         id_compaction: parse_id_compaction_options(options)?,
     })
@@ -696,6 +698,188 @@ fn build_excepted_row(
     row
 }
 
+fn build_excepted_cell_row(
+    path: &str,
+    value: &Value,
+    id_value: &Value,
+    context: Option<&Value>,
+    options: &Options,
+) -> CellRow {
+    let raw_json = serde_json::to_string(value).unwrap_or_else(|_| "null".to_string());
+    let mut row = CellRow::new();
+    let stored_value = if options.excepted_expand_dict {
+        cell_from_value(value)
+    } else {
+        match value {
+            Value::Array(_) | Value::Object(_) => CellValue::String(raw_json.clone()),
+            _ => cell_from_value(value),
+        }
+    };
+    row.insert("value".to_string(), stored_value);
+    if options.excepted_expand_dict {
+        if let Value::Object(map) = value {
+            for (k, v) in map.iter() {
+                row.insert(k.clone(), cell_from_value(v));
+            }
+        }
+    }
+    row.insert(options.index_key.clone(), cell_from_value(id_value));
+    row.insert(
+        "__except_path__".to_string(),
+        CellValue::String(path.to_string()),
+    );
+    row.insert(
+        "__except_raw_type__".to_string(),
+        CellValue::String(value_type_name(value).to_string()),
+    );
+    row.insert(
+        "__except_raw_json__".to_string(),
+        CellValue::String(raw_json),
+    );
+    if let Some(Value::Object(ctx)) = context {
+        for key in ["source_path", "source_member", "line_no", "record_index"] {
+            if let Some(v) = ctx.get(key) {
+                let out_key = match key {
+                    "source_path" => "__source_path__",
+                    "source_member" => "__source_member__",
+                    "line_no" => "__line_no__",
+                    "record_index" => "__record_index__",
+                    _ => key,
+                };
+                row.insert(out_key.to_string(), cell_from_value(v));
+            }
+        }
+    }
+    row
+}
+
+fn process_value_list_columnar(
+    list_key: &str,
+    values: &[Value],
+    id_value: &Value,
+    options: &Options,
+    tables: &mut ColumnarTables,
+) {
+    if values.is_empty() {
+        return;
+    }
+    let table = table_for_sub(options, list_key);
+    if matches!(values.first(), Some(Value::Object(_))) {
+        for item in values {
+            let Value::Object(map) = item else {
+                let mut row = CellRow::new();
+                row.insert(options.index_key.clone(), cell_from_value(id_value));
+                row.insert(list_key.to_string(), cell_from_value(item));
+                tables.push_row(table.clone(), row);
+                continue;
+            };
+            let needs_deep = map.values().any(|v| match v {
+                Value::Object(_) => true,
+                Value::Array(items) => matches!(items.first(), Some(Value::Object(_))),
+                _ => false,
+            });
+            let mut row = CellRow::new();
+            row.insert(options.index_key.clone(), cell_from_value(id_value));
+            if needs_deep {
+                for (col, value) in
+                    flatten_dict_keep_lists(item, &options.except_keys, &options.sep)
+                {
+                    row.insert(
+                        prefixed_col(list_key, &col, &options.sep),
+                        cell_from_value(&value),
+                    );
+                }
+            } else {
+                for (col, value) in map.iter() {
+                    if options.except_keys.contains(col) {
+                        continue;
+                    }
+                    row.insert(
+                        prefixed_col(list_key, col, &options.sep),
+                        cell_from_value(value),
+                    );
+                }
+            }
+            tables.push_row(table.clone(), row);
+        }
+    } else {
+        for value in values {
+            let mut row = CellRow::new();
+            row.insert(options.index_key.clone(), cell_from_value(id_value));
+            row.insert(list_key.to_string(), cell_from_value(value));
+            tables.push_row(table.clone(), row);
+        }
+    }
+}
+
+fn flatten_record_columnar(
+    record: &Value,
+    record_index: usize,
+    context: Option<&Value>,
+    options: &Options,
+    tables: &mut ColumnarTables,
+) {
+    let id_value = match record {
+        Value::Object(map) if !options.except_keys.contains(&options.index_key) => {
+            value_to_index(map.get(&options.index_key), record_index)
+        }
+        _ => Value::Number(Number::from(record_index as u64)),
+    };
+
+    let mut single = CellRow::new();
+    let mut excepted_values = BTreeMap::<String, &Value>::new();
+    let mut stack: Vec<(&Value, String)> = vec![(record, String::new())];
+
+    while let Some((cur, prefix)) = stack.pop() {
+        if let Value::Object(map) = cur {
+            for (k, v) in map.iter() {
+                let full_key = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}{k}")
+                };
+                if options.except_keys.contains(k) || options.except_keys.contains(&full_key) {
+                    excepted_values.insert(full_key, v);
+                    continue;
+                }
+                match v {
+                    Value::Object(_) => stack.push((v, format!("{full_key}{}", options.sep))),
+                    Value::Array(items) => {
+                        process_value_list_columnar(&full_key, items, &id_value, options, tables)
+                    }
+                    _ => {
+                        single.insert(full_key, cell_from_value(v));
+                    }
+                }
+            }
+        } else if prefix.is_empty() {
+            single.insert("root".to_string(), cell_from_value(cur));
+        } else {
+            let key = prefix
+                .strip_suffix(&options.sep)
+                .unwrap_or(&prefix)
+                .to_string();
+            single.insert(key, cell_from_value(cur));
+        }
+    }
+
+    if !single.contains_key(&options.index_key)
+        || matches!(single.get(&options.index_key), Some(CellValue::Null))
+        || matches!(single.get(&options.index_key), Some(CellValue::String(s)) if s.is_empty())
+    {
+        single.insert(options.index_key.clone(), cell_from_value(&id_value));
+    }
+
+    tables.push_row(options.base_table.clone(), single);
+    for (key, value) in excepted_values {
+        let table = table_for_excepted(options, &key);
+        tables.push_row(
+            table,
+            build_excepted_cell_row(&key, value, &id_value, context, options),
+        );
+    }
+}
+
 fn flatten_record(
     record: &Value,
     record_index: usize,
@@ -984,6 +1168,155 @@ fn value_as_i64(value: &Value) -> Option<i64> {
             .as_i64()
             .or_else(|| n.as_u64().and_then(|u| i64::try_from(u).ok())),
         _ => None,
+    }
+}
+
+#[derive(Clone)]
+enum CellValue {
+    Null,
+    Bool(bool),
+    Number(Number),
+    String(String),
+}
+
+type CellRow = BTreeMap<String, CellValue>;
+
+fn cell_from_value(value: &Value) -> CellValue {
+    match value {
+        Value::Null => CellValue::Null,
+        Value::Bool(v) => CellValue::Bool(*v),
+        Value::Number(v) => CellValue::Number(v.clone()),
+        Value::String(v) => CellValue::String(v.clone()),
+        Value::Array(_) | Value::Object(_) => CellValue::String(json_dumps_python_spacing(value)),
+    }
+}
+
+fn cell_kind(value: &CellValue) -> Option<ColumnKind> {
+    match value {
+        CellValue::Null => None,
+        CellValue::Bool(_) => Some(ColumnKind::Bool),
+        CellValue::Number(n) => {
+            if n.is_i64() {
+                Some(ColumnKind::Int64)
+            } else if let Some(u) = n.as_u64() {
+                if u <= i64::MAX as u64 {
+                    Some(ColumnKind::Int64)
+                } else {
+                    Some(ColumnKind::LargeUtf8)
+                }
+            } else if number_is_integer_literal(n) {
+                Some(ColumnKind::LargeUtf8)
+            } else {
+                Some(ColumnKind::Float64)
+            }
+        }
+        CellValue::String(_) => Some(ColumnKind::LargeUtf8),
+    }
+}
+
+fn cell_as_i64(value: &CellValue) -> Option<i64> {
+    match value {
+        CellValue::Number(n) => n
+            .as_i64()
+            .or_else(|| n.as_u64().and_then(|u| i64::try_from(u).ok())),
+        _ => None,
+    }
+}
+
+fn append_large_utf8_cell(builder: &mut LargeStringBuilder, value: Option<&CellValue>) {
+    match value {
+        Some(CellValue::Null) | None => builder.append_null(),
+        Some(CellValue::Bool(v)) => builder.append_value(if *v { "true" } else { "false" }),
+        Some(CellValue::Number(v)) => builder.append_value(v.as_str()),
+        Some(CellValue::String(v)) => builder.append_value(v),
+    }
+}
+
+struct ColumnAccumulator {
+    kind: Option<ColumnKind>,
+    entries: Vec<(usize, CellValue)>,
+}
+
+impl ColumnAccumulator {
+    fn new() -> Self {
+        Self {
+            kind: None,
+            entries: Vec::new(),
+        }
+    }
+
+    fn push(&mut self, row_index: usize, value: CellValue) {
+        self.kind = merge_kind(self.kind, cell_kind(&value));
+        self.entries.push((row_index, value));
+    }
+}
+
+struct TableAccumulator {
+    rows: usize,
+    columns: BTreeMap<String, ColumnAccumulator>,
+}
+
+impl TableAccumulator {
+    fn new() -> Self {
+        Self {
+            rows: 0,
+            columns: BTreeMap::new(),
+        }
+    }
+
+    fn push_row(&mut self, row: CellRow) {
+        let row_index = self.rows;
+        self.rows += 1;
+        for (column, value) in row {
+            self.columns
+                .entry(column)
+                .or_insert_with(ColumnAccumulator::new)
+                .push(row_index, value);
+        }
+    }
+
+    fn merge_from(&mut self, other: TableAccumulator) {
+        let offset = self.rows;
+        self.rows += other.rows;
+        for (column, mut incoming) in other.columns {
+            let target = self
+                .columns
+                .entry(column)
+                .or_insert_with(ColumnAccumulator::new);
+            target.kind = merge_kind(target.kind, incoming.kind);
+            target.entries.reserve(incoming.entries.len());
+            for (row_index, value) in incoming.entries.drain(..) {
+                target.entries.push((row_index + offset, value));
+            }
+        }
+    }
+}
+
+struct ColumnarTables {
+    tables: BTreeMap<String, TableAccumulator>,
+}
+
+impl ColumnarTables {
+    fn new() -> Self {
+        Self {
+            tables: BTreeMap::new(),
+        }
+    }
+
+    fn push_row(&mut self, table: String, row: CellRow) {
+        self.tables
+            .entry(table)
+            .or_insert_with(TableAccumulator::new)
+            .push_row(row);
+    }
+
+    fn merge_from(&mut self, other: ColumnarTables) {
+        for (table, incoming) in other.tables {
+            self.tables
+                .entry(table)
+                .or_insert_with(TableAccumulator::new)
+                .merge_from(incoming);
+        }
     }
 }
 
@@ -1602,6 +1935,172 @@ fn write_table(
     Ok((path, cols, rows.len()))
 }
 
+fn write_columnar_table(
+    root: &Path,
+    table: &str,
+    accumulator: &TableAccumulator,
+    batch_idx: usize,
+    index_key: &str,
+) -> PyResult<(PathBuf, Vec<String>, usize)> {
+    let mut cols: Vec<String> = accumulator.columns.keys().cloned().collect();
+    if let Some(pos) = cols.iter().position(|c| c == index_key) {
+        let index_col = cols.remove(pos);
+        cols.insert(0, index_col);
+    }
+    if cols.is_empty() {
+        return Err(PyRuntimeError::new_err(format!(
+            "table {table} has no columns"
+        )));
+    }
+
+    let fields: Vec<Field> = cols
+        .iter()
+        .map(|c| {
+            let dtype = match accumulator
+                .columns
+                .get(c)
+                .and_then(|column| column.kind)
+                .unwrap_or(ColumnKind::LargeUtf8)
+            {
+                ColumnKind::Bool => DataType::Boolean,
+                ColumnKind::Int64 => DataType::Int64,
+                ColumnKind::Float64 => DataType::Float64,
+                ColumnKind::LargeUtf8 => DataType::LargeUtf8,
+            };
+            Field::new(c, dtype, true)
+        })
+        .collect();
+    let schema = Arc::new(Schema::new(fields));
+    let mut arrays: Vec<ArrayRef> = Vec::with_capacity(cols.len());
+    for col in cols.iter() {
+        let column = accumulator.columns.get(col).ok_or_else(|| {
+            PyRuntimeError::new_err(format!(
+                "missing column accumulator for table {table}.{col}"
+            ))
+        })?;
+        match column.kind.unwrap_or(ColumnKind::LargeUtf8) {
+            ColumnKind::Bool => {
+                let mut builder = BooleanBuilder::with_capacity(accumulator.rows);
+                let mut next_row = 0usize;
+                for (row_index, value) in column.entries.iter() {
+                    while next_row < *row_index {
+                        builder.append_null();
+                        next_row += 1;
+                    }
+                    match value {
+                        CellValue::Bool(v) => builder.append_value(*v),
+                        _ => builder.append_null(),
+                    }
+                    next_row = *row_index + 1;
+                }
+                while next_row < accumulator.rows {
+                    builder.append_null();
+                    next_row += 1;
+                }
+                arrays.push(Arc::new(builder.finish()) as ArrayRef);
+            }
+            ColumnKind::Int64 => {
+                let mut builder = Int64Builder::with_capacity(accumulator.rows);
+                let mut next_row = 0usize;
+                for (row_index, value) in column.entries.iter() {
+                    while next_row < *row_index {
+                        builder.append_null();
+                        next_row += 1;
+                    }
+                    match cell_as_i64(value) {
+                        Some(v) => builder.append_value(v),
+                        None => builder.append_null(),
+                    }
+                    next_row = *row_index + 1;
+                }
+                while next_row < accumulator.rows {
+                    builder.append_null();
+                    next_row += 1;
+                }
+                arrays.push(Arc::new(builder.finish()) as ArrayRef);
+            }
+            ColumnKind::Float64 => {
+                let mut builder = Float64Builder::with_capacity(accumulator.rows);
+                let mut next_row = 0usize;
+                for (row_index, value) in column.entries.iter() {
+                    while next_row < *row_index {
+                        builder.append_null();
+                        next_row += 1;
+                    }
+                    match value {
+                        CellValue::Number(n) => match n.as_f64() {
+                            Some(v) => builder.append_value(v),
+                            None => builder.append_null(),
+                        },
+                        _ => builder.append_null(),
+                    }
+                    next_row = *row_index + 1;
+                }
+                while next_row < accumulator.rows {
+                    builder.append_null();
+                    next_row += 1;
+                }
+                arrays.push(Arc::new(builder.finish()) as ArrayRef);
+            }
+            ColumnKind::LargeUtf8 => {
+                let mut builder = LargeStringBuilder::with_capacity(accumulator.rows, 0);
+                let mut next_row = 0usize;
+                for (row_index, value) in column.entries.iter() {
+                    while next_row < *row_index {
+                        builder.append_null();
+                        next_row += 1;
+                    }
+                    append_large_utf8_cell(&mut builder, Some(value));
+                    next_row = *row_index + 1;
+                }
+                while next_row < accumulator.rows {
+                    builder.append_null();
+                    next_row += 1;
+                }
+                arrays.push(Arc::new(builder.finish()) as ArrayRef);
+            }
+        }
+    }
+
+    let batch = RecordBatch::try_new(schema.clone(), arrays)
+        .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+    let mut path = output_path(root, table, batch_idx)?;
+    let table_dir = path
+        .parent()
+        .ok_or_else(|| PyRuntimeError::new_err("rust-arrow output path has no parent"))?;
+    let (tmp_path, file) = temp_output_file(table_dir, batch_idx)?;
+    let write_result = (|| -> PyResult<()> {
+        let mut writer = ArrowWriter::try_new(file, schema, None)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        writer
+            .write(&batch)
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        writer
+            .close()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        Ok(())
+    })();
+    if let Err(err) = write_result {
+        let _ = fs::remove_file(&tmp_path);
+        return Err(err);
+    }
+
+    loop {
+        match fs::hard_link(&tmp_path, &path) {
+            Ok(()) => break,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                path = output_path(root, table, batch_idx)?;
+            }
+            Err(e) => {
+                let _ = fs::remove_file(&tmp_path);
+                return Err(PyRuntimeError::new_err(e.to_string()));
+            }
+        }
+    }
+    let _ = fs::remove_file(&tmp_path);
+    Ok((path, cols, accumulator.rows))
+}
+
 fn sql_quote_ident(value: &str) -> String {
     format!("`{}`", value.replace('`', "``"))
 }
@@ -2136,6 +2635,145 @@ fn load_parquet_files_to_mysql(
     Ok(result.into())
 }
 
+struct ColumnarChunkOut {
+    tables: ColumnarTables,
+    records_ok: usize,
+}
+
+fn flatten_columnar_chunk(chunk: &[(usize, Value)], options: &Options) -> ColumnarChunkOut {
+    let mut tables = ColumnarTables::new();
+    let mut records_ok = 0usize;
+    for (local_i, record) in chunk {
+        let global_i = options.index_offset + *local_i;
+        let ctx = options.record_contexts.get(*local_i);
+        flatten_record_columnar(record, global_i, ctx, options, &mut tables);
+        records_ok += 1;
+    }
+    ColumnarChunkOut { tables, records_ok }
+}
+
+fn persist_indexed_json_values_columnar_inner(
+    options: Options,
+    parquet_root: PathBuf,
+    indexed_values: IndexedJsonValues,
+    extras: PersistExtras,
+    total_start: Instant,
+) -> PyResult<PersistOutput> {
+    let PersistExtras {
+        initial_records_failed,
+        errors,
+        error_indices,
+        mut timings_ms,
+    } = extras;
+
+    let flatten_start = Instant::now();
+    let mut tables = ColumnarTables::new();
+    let records_ok = if options.parallel_workers >= 2 && indexed_values.len() >= 2 {
+        let pool = rayon_pool(options.parallel_workers)?;
+        let chunk_len = indexed_values
+            .len()
+            .div_ceil(options.parallel_workers)
+            .max(1);
+        let chunks: Vec<ColumnarChunkOut> = pool.install(|| {
+            indexed_values
+                .par_chunks(chunk_len)
+                .map(|chunk| flatten_columnar_chunk(chunk, &options))
+                .collect()
+        });
+        let mut count = 0usize;
+        for chunk in chunks {
+            count += chunk.records_ok;
+            tables.merge_from(chunk.tables);
+        }
+        count
+    } else {
+        let chunk = flatten_columnar_chunk(&indexed_values, &options);
+        let count = chunk.records_ok;
+        tables.merge_from(chunk.tables);
+        count
+    };
+    let flatten_ms = flatten_start.elapsed().as_millis() as u64;
+
+    let parquet_start = Instant::now();
+    let mut table_meta = Vec::<TableMeta>::new();
+    let mut file_count = 0usize;
+    let mut row_count = 0usize;
+    let table_entries: Vec<(&String, &TableAccumulator)> = tables
+        .tables
+        .iter()
+        .filter(|(_, table)| table.rows > 0)
+        .collect();
+    if options.parallel_table_writes && options.parallel_workers >= 2 && table_entries.len() >= 2 {
+        let pool = rayon_pool(options.parallel_workers)?;
+        let results: Vec<PyResult<TableMeta>> = pool.install(|| {
+            table_entries
+                .par_iter()
+                .map(|(table, accumulator)| {
+                    let (path, columns, rows_written) = write_columnar_table(
+                        &parquet_root,
+                        table,
+                        accumulator,
+                        options.batch_idx,
+                        &options.index_key,
+                    )?;
+                    Ok(TableMeta {
+                        table: (*table).clone(),
+                        path: path.to_string_lossy().to_string(),
+                        columns,
+                        rows: rows_written,
+                    })
+                })
+                .collect()
+        });
+        for result in results {
+            let meta = result?;
+            file_count += 1;
+            row_count += meta.rows;
+            table_meta.push(meta);
+        }
+    } else {
+        for (table, accumulator) in table_entries {
+            let (path, columns, rows_written) = write_columnar_table(
+                &parquet_root,
+                table,
+                accumulator,
+                options.batch_idx,
+                &options.index_key,
+            )?;
+            file_count += 1;
+            row_count += rows_written;
+            table_meta.push(TableMeta {
+                table: table.clone(),
+                path: path.to_string_lossy().to_string(),
+                columns,
+                rows: rows_written,
+            });
+        }
+    }
+    let parquet_ms = parquet_start.elapsed().as_millis() as u64;
+    timings_ms.push(("json.flatten", flatten_ms));
+    timings_ms.push(("json.parquet.persist", parquet_ms));
+    timings_ms.push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
+    let records_failed = initial_records_failed;
+    let records_read = records_ok + records_failed;
+
+    Ok(PersistOutput {
+        records_read,
+        bytes_read: 0,
+        records_ok,
+        records_failed,
+        parquet_files_persisted: file_count,
+        parquet_rows_emitted: row_count,
+        parquet_batches_total: usize::from(file_count > 0),
+        tables: table_meta,
+        errors,
+        error_indices,
+        error_records: Vec::new(),
+        timings_ms,
+        id_compaction_state: None,
+    })
+}
+
 fn persist_indexed_json_values_inner(
     options: Options,
     parquet_root: PathBuf,
@@ -2143,6 +2781,16 @@ fn persist_indexed_json_values_inner(
     extras: PersistExtras,
     total_start: Instant,
 ) -> PyResult<PersistOutput> {
+    if options.columnar_accumulator && !options.id_compaction.enabled {
+        return persist_indexed_json_values_columnar_inner(
+            options,
+            parquet_root,
+            indexed_values,
+            extras,
+            total_start,
+        );
+    }
+
     let PersistExtras {
         initial_records_failed,
         mut errors,

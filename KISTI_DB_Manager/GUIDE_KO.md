@@ -115,6 +115,8 @@ kisti-db-manager json run \
 
 지원되는 경우 `--rust-raw-jsonl-file-parse`를 추가하면 Python line loop 없이 Rust가 JSONL/NDJSON 파일을 직접 읽습니다. ID compaction이 켜진 실행은 현재 batch raw parser 경로를 사용합니다.
 
+`--rust-columnar-accumulator`는 Rust가 Arrow array를 만들기 전에 전체 row map을 쌓는 비용을 줄이기 위한 opt-in 경로입니다. profile에서 이득이 확인된 parse/parquet-only 실행에만 적용하고, ID compaction 실행은 현재 기본 row accumulator 경로를 유지합니다.
+
 `--rust-parallel-table-writes`는 table 단위 parquet write 병렬화를 검증할 때만 켭니다. parquet write 시간은 줄 수 있지만 I/O 경합으로 전체 시간은 늘 수 있으므로 profile 결과를 보고 선택합니다.
 
 Rust MySQL loader는 아직 명시 opt-in입니다. 테이블 생성/스키마 매핑은 Python이 유지하고, Rust가 parquet를 읽어 batch insert합니다.
