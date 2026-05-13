@@ -1645,6 +1645,61 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertIn("bad json", quarantine_text)
             self.assertIn("non-dict JSON record", quarantine_text)
 
+    def test_run_json_pipeline_rust_arrow_direct_jsonl_context_survives_failed_records(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            source = root / "x.jsonl"
+            source.write_text(
+                "\n".join(
+                    [
+                        json.dumps({"id": 1, "name": "ok"}),
+                        "{bad json",
+                        json.dumps({"id": 2, "a": {"x": 10}}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out_dir = root / "parquet_out"
+            quarantine_path = root / "quarantine.jsonl"
+            from KISTI_DB_Manager.quarantine import QuarantineWriter
+
+            data_config = {
+                "PATH": str(root),
+                "file_name": "x.jsonl",
+                "file_type": "jsonl",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "except_keys": ["a"],
+                "persist_parquet_files": True,
+                "persist_parquet_dir": str(out_dir),
+                "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": True,
+                "rust_raw_jsonl_file_parse": True,
+            }
+
+            res = run_json_pipeline(
+                data_config,
+                {},
+                chunk_size=10,
+                create=False,
+                load=False,
+                index=False,
+                optimize=False,
+                continue_on_error=True,
+                quarantine=QuarantineWriter(quarantine_path),
+            )
+
+            self.assertEqual(res.report.stats.get("records_ok"), 2)
+            self.assertEqual(res.report.stats.get("records_failed"), 1)
+            excepted = self._read_single_parquet_table(pq, out_dir, "base__excepted__a").to_pydict()
+            self.assertEqual(excepted["id"], [2])
+            self.assertEqual(excepted["__line_no__"], [3])
+            self.assertEqual(excepted["__record_index__"], [2])
+            self.assertEqual(excepted["__source_path__"], [str(source)])
+
     def test_rust_arrow_raw_jsonl_rejects_integer_outside_u64(self):
         self._require_rust_arrow_with_pyarrow()
 

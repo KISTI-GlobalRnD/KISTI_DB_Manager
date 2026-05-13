@@ -2470,8 +2470,13 @@ fn persist_jsonl_sources_inner(
         id_compaction_state: None,
     };
 
+    let collect_contexts = !options.except_keys.is_empty();
     let mut values = IndexedJsonValues::with_capacity(chunk_size);
-    let mut contexts = Vec::<Value>::with_capacity(chunk_size);
+    let mut contexts = if collect_contexts {
+        Vec::<Value>::with_capacity(chunk_size)
+    } else {
+        Vec::new()
+    };
     let mut chunk_start_index = options.index_offset;
     let mut next_record_index = options.index_offset;
     let mut batch_idx = options.batch_idx;
@@ -2490,8 +2495,12 @@ fn persist_jsonl_sources_inner(
         let mut chunk_options = options.clone();
         chunk_options.batch_idx = *batch_idx;
         chunk_options.index_offset = chunk_start_index;
-        chunk_options.record_contexts = std::mem::take(contexts);
-        let chunk_values = std::mem::take(values);
+        chunk_options.record_contexts = if collect_contexts {
+            std::mem::replace(contexts, Vec::with_capacity(chunk_size))
+        } else {
+            Vec::new()
+        };
+        let chunk_values = std::mem::replace(values, Vec::with_capacity(chunk_size));
         let output = persist_indexed_json_values_inner(
             chunk_options,
             parquet_root.clone(),
@@ -2555,7 +2564,12 @@ fn persist_jsonl_sources_inner(
                         }
                         let local_index = record_index - chunk_start_index;
                         values.push((local_index, value));
-                        contexts.push(jsonl_context(source, line_no, record_index));
+                        if collect_contexts {
+                            while contexts.len() < local_index {
+                                contexts.push(Value::Null);
+                            }
+                            contexts.push(jsonl_context(source, line_no, record_index));
+                        }
                     }
                     Err(e) => {
                         aggregate.records_failed += 1;
