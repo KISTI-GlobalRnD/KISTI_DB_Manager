@@ -436,49 +436,70 @@ fn value_type_name(value: &Value) -> &'static str {
 }
 
 fn number_is_integer_literal(number: &Number) -> bool {
-    let text = number.to_string();
+    let text = number.as_str();
     !text.contains('.') && !text.contains('e') && !text.contains('E')
 }
 
-fn validate_json_numbers(value: &Value, path: &str) -> Result<(), String> {
+enum JsonPathPart<'a> {
+    Key(&'a str),
+    Index(usize),
+}
+
+fn json_number_path(parts: &[JsonPathPart<'_>]) -> String {
+    let mut out = String::from("$");
+    for part in parts {
+        match part {
+            JsonPathPart::Key(key) => {
+                out.push('.');
+                out.push_str(key);
+            }
+            JsonPathPart::Index(index) => out.push_str(&format!("[{index}]")),
+        }
+    }
+    out
+}
+
+fn validate_json_numbers(value: &Value) -> Result<(), String> {
+    let mut path = Vec::<JsonPathPart<'_>>::new();
+    validate_json_numbers_inner(value, &mut path)
+}
+
+fn validate_json_numbers_inner<'a>(
+    value: &'a Value,
+    path: &mut Vec<JsonPathPart<'a>>,
+) -> Result<(), String> {
     match value {
         Value::Number(number) => {
             if number_is_integer_literal(number)
                 && number.as_i64().is_none()
                 && number.as_u64().is_none()
             {
-                let location = if path.is_empty() { "$" } else { path };
                 return Err(format!(
-                    "integer outside supported i64/u64 range at {location}: {number}"
+                    "integer outside supported i64/u64 range at {}: {number}",
+                    json_number_path(path)
                 ));
             }
             if !number_is_integer_literal(number) && number.as_f64().is_none() {
-                let location = if path.is_empty() { "$" } else { path };
                 return Err(format!(
-                    "number is not representable as f64 at {location}: {number}"
+                    "number is not representable as f64 at {}: {number}",
+                    json_number_path(path)
                 ));
             }
             Ok(())
         }
         Value::Array(items) => {
             for (i, item) in items.iter().enumerate() {
-                let child_path = if path.is_empty() {
-                    format!("$[{i}]")
-                } else {
-                    format!("{path}[{i}]")
-                };
-                validate_json_numbers(item, &child_path)?;
+                path.push(JsonPathPart::Index(i));
+                validate_json_numbers_inner(item, path)?;
+                path.pop();
             }
             Ok(())
         }
         Value::Object(map) => {
             for (key, item) in map.iter() {
-                let child_path = if path.is_empty() {
-                    format!("$.{key}")
-                } else {
-                    format!("{path}.{key}")
-                };
-                validate_json_numbers(item, &child_path)?;
+                path.push(JsonPathPart::Key(key));
+                validate_json_numbers_inner(item, path)?;
+                path.pop();
             }
             Ok(())
         }
@@ -2527,7 +2548,7 @@ fn persist_jsonl_sources_inner(
             parse_ns += parse_start.elapsed().as_nanos();
 
             match parsed {
-                Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value, "") {
+                Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value) {
                     Ok(()) => {
                         if values.is_empty() {
                             chunk_start_index = record_index;
@@ -2675,7 +2696,7 @@ fn persist_json_lines_batch(
     let mut error_indices = Vec::<usize>::new();
     for (i, item) in list.iter().enumerate() {
         match parse_json_line_value(&item)? {
-            Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value, "") {
+            Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value) {
                 Ok(()) => values.push((i, value)),
                 Err(e) => {
                     records_failed += 1;
