@@ -618,7 +618,7 @@ def _eligible_for_recommendation(row: Mapping[str, Any]) -> bool:
         return False
     if _as_int(row.get("error_count"), 0) > 0:
         return False
-    if str(row.get("artifact_contract_status") or "") == "failed":
+    if str(row.get("artifact_contract_status") or "") != "done":
         return False
     if str(row.get("effective_backend") or "") == "mixed":
         return False
@@ -1218,7 +1218,14 @@ def _apply_id_compaction_overrides(
     return bool(normalized.get("enabled"))
 
 
-def _failed_contract(parquet_dir: Path, *, require_schema_manifest: bool, require_id_compaction: bool, exc: BaseException) -> dict[str, Any]:
+def _failed_contract(
+    parquet_dir: Path,
+    *,
+    require_schema_manifest: bool,
+    require_id_compaction: bool,
+    strict_schema_manifest: bool,
+    exc: BaseException,
+) -> dict[str, Any]:
     return {
         "status": "failed",
         "generated_at": _utc_now_iso(),
@@ -1226,6 +1233,7 @@ def _failed_contract(parquet_dir: Path, *, require_schema_manifest: bool, requir
         "input": {
             "require_schema_manifest": bool(require_schema_manifest),
             "require_id_compaction": bool(require_id_compaction),
+            "strict_schema_manifest": bool(strict_schema_manifest),
         },
         "schema_manifest": {},
         "summary": {},
@@ -1457,20 +1465,23 @@ def profile_parallel(
             )
         run_report = run_report_obj.to_dict()
 
-        require_schema_manifest = bool(effective_id_compaction)
+        require_schema_manifest = True
         require_id_compaction = bool(effective_id_compaction)
+        strict_schema_manifest = True
         try:
             _assert_profile_child_path(out, parquet_dir, purpose="profile parquet inspect")
             artifact_contract = inspect_parquet_artifact_contract(
                 parquet_dir,
                 require_schema_manifest=require_schema_manifest,
                 require_id_compaction=require_id_compaction,
+                strict_schema_manifest=strict_schema_manifest,
             )
         except Exception as exc:
             artifact_contract = _failed_contract(
                 parquet_dir,
                 require_schema_manifest=require_schema_manifest,
                 require_id_compaction=require_id_compaction,
+                strict_schema_manifest=strict_schema_manifest,
                 exc=exc,
             )
         try:

@@ -1500,6 +1500,21 @@ def run_json_pipeline(
     def _column_descriptions_for(table_original: str) -> dict[str, str]:
         return id_compactor.column_descriptions(table_original) if id_compactor.enabled else {}
 
+    parquet_manifest_table_columns: dict[str, list[str]] = {}
+
+    def _record_parquet_manifest_columns(table_original: Any, columns: Any) -> None:
+        table = str(table_original or "")
+        if not table:
+            return
+        out = parquet_manifest_table_columns.setdefault(table, [])
+        seen = set(out)
+        for column in list(columns or []):
+            col = str(column or "")
+            if not col or col in seen:
+                continue
+            out.append(col)
+            seen.add(col)
+
     def _json_absolute_no_resolve(path: Any):
         from pathlib import Path
 
@@ -1529,8 +1544,8 @@ def run_json_pipeline(
             normalized_parts.append(part)
         return Path(path_abs.anchor).joinpath(*normalized_parts)
 
-    def _write_id_compaction_schema_manifest() -> None:
-        if not id_compactor.enabled or not persist_parquet_files:
+    def _write_schema_manifest() -> None:
+        if not persist_parquet_files or int(report.stats.get("parquet_files_persisted", 0) or 0) <= 0:
             return
         try:
             import json as _json
@@ -1551,7 +1566,11 @@ def run_json_pipeline(
             else:
                 if path.is_symlink() or path.is_dir():
                     raise RuntimeError(f"schema manifest path already exists and is not a safe file: {path}")
-            payload = id_compactor.schema_manifest(name_maps=name_maps)
+            _scan_parquet_manifest_columns(root)
+            payload = id_compactor.schema_manifest(
+                name_maps=name_maps,
+                table_columns=parquet_manifest_table_columns,
+            )
             fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=str(root))
             try:
                 with os.fdopen(fd, "w", encoding="utf-8") as handle:
@@ -1577,9 +1596,36 @@ def run_json_pipeline(
         except Exception as e:
             report.warn(
                 stage="id_compaction.schema_manifest",
-                message="Failed to write ID compaction schema manifest",
+                message="Failed to write parquet schema manifest",
                 error={"type": type(e).__name__, "message": str(e)},
             )
+
+    def _scan_parquet_manifest_columns(root: Any) -> None:
+        try:
+            import pyarrow.parquet as _pq
+        except Exception:
+            return
+
+        try:
+            children = sorted(root.iterdir())
+        except Exception:
+            return
+
+        for table_dir in children:
+            try:
+                if table_dir.is_symlink() or not table_dir.is_dir():
+                    continue
+            except Exception:
+                continue
+            table = str(table_dir.name)
+            for path in sorted(table_dir.glob("*.parquet")):
+                try:
+                    if path.is_symlink() or not path.is_file():
+                        continue
+                    pf = _pq.ParquetFile(path)
+                    _record_parquet_manifest_columns(table, list(pf.schema_arrow.names))
+                except Exception:
+                    continue
 
     engine = None
     inspector = None
@@ -2432,6 +2478,7 @@ def run_json_pipeline(
                             raise
                         _write_parquet_file(fallback_df)
 
+                    _record_parquet_manifest_columns(table_original, list(getattr(parquet_df, "columns", [])))
                     report.bump("parquet_files_persisted", 1)
                     try:
                         report.bump("parquet_rows_emitted", int(len(df)))
@@ -4022,6 +4069,7 @@ def run_json_pipeline(
                             table_original = str(table_info.get("table") or "")
                             cols = [str(c) for c in list(table_info.get("columns") or []) if str(c)]
                             if table_original and cols:
+                                _record_parquet_manifest_columns(table_original, cols)
                                 ensure_name_map(table_original, cols)
 
                         parquet_tables_written = int(rust_result.get("parquet_tables_written") or len(tables_meta))
@@ -4634,6 +4682,7 @@ def run_json_pipeline(
                         table_original = str(table_info.get("table") or "")
                         cols = [str(c) for c in list(table_info.get("columns") or []) if str(c)]
                         if table_original and cols:
+                            _record_parquet_manifest_columns(table_original, cols)
                             ensure_name_map(table_original, cols)
 
                     parquet_tables_written = int(rust_result.get("parquet_tables_written") or len(tables_meta))
@@ -4885,7 +4934,7 @@ def run_json_pipeline(
                     message="Column collisions occurred during ID compaction; original columns were preserved",
                     columns=list((summary.get("collisions") or {}).keys())[:20],
                 )
-            _write_id_compaction_schema_manifest()
+        _write_schema_manifest()
         maybe_update_artifacts()
         return JsonRunResult(name_maps=name_maps, report=report)
     finally:

@@ -529,22 +529,54 @@ class IdCompactor:
                 out[col] = desc
         return out
 
-    def schema_manifest(self, *, name_maps: Mapping[str, Any] | None = None) -> dict[str, Any]:
+    def schema_manifest(
+        self,
+        *,
+        name_maps: Mapping[str, Any] | None = None,
+        table_columns: Mapping[str, Any] | None = None,
+    ) -> dict[str, Any]:
         tables: dict[str, dict[str, Any]] = {}
+
+        def sql_column_for(table: str, column: str) -> str:
+            sql_col = column
+            nm = name_maps.get(table) if isinstance(name_maps, Mapping) else None
+            try:
+                sql_col = nm.map_column(column)
+                if sql_col == column and "." in column:
+                    sql_col = nm.map_column(column.replace(".", getattr(nm, "key_sep", "__")))
+            except Exception:
+                sql_col = column
+            return str(sql_col)
+
+        if isinstance(table_columns, Mapping):
+            for table_raw, columns_raw in table_columns.items():
+                table = str(table_raw or "")
+                if not table:
+                    continue
+                t = tables.setdefault(table, {"columns": {}})
+                seen: set[str] = set()
+                for column_raw in list(columns_raw or []):
+                    col = str(column_raw or "")
+                    if not col or col in seen:
+                        continue
+                    seen.add(col)
+                    t["columns"].setdefault(
+                        col,
+                        {
+                            "sql_column": sql_column_for(table, col),
+                            "source_column": "",
+                            "description": "",
+                        },
+                    )
+
         for entry in self.columns.values():
             table = str(entry.get("table") or "")
             col = str(entry.get("new_column") or "")
             if not table or not col:
                 continue
             t = tables.setdefault(table, {"columns": {}})
-            sql_col = col
-            nm = name_maps.get(table) if isinstance(name_maps, Mapping) else None
-            try:
-                sql_col = nm.map_column(col)
-            except Exception:
-                sql_col = col
             t["columns"][col] = {
-                "sql_column": sql_col,
+                "sql_column": sql_column_for(table, col),
                 "source_column": str(entry.get("original_column") or ""),
                 "id_namespace": str(entry.get("namespace") or ""),
                 "id_entity": entry.get("entity"),

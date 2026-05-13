@@ -319,6 +319,18 @@ def inspect_parquet_artifact_contract(
                     count=len(missing_in_parquet),
                     sample=missing_in_parquet[:limit],
                 )
+        if missing_in_manifest:
+            msg = f"parquet columns are missing from schema_manifest.json: {table}"
+            if strict_schema_manifest:
+                _issue(
+                    issues,
+                    check="parquet_columns_missing_from_schema_manifest",
+                    message=msg,
+                    table=table,
+                    count=len(missing_in_manifest),
+                    sample=missing_in_manifest[:limit],
+                )
+                entry["status"] = "failed"
         if source_and_compacted:
             msg = f"source and compacted ID columns coexist in parquet table: {table}"
             if strict_schema_manifest or require_id_compaction:

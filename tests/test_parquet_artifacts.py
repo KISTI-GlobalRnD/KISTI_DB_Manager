@@ -38,6 +38,11 @@ def _write_manifest(root: Path, *, table: str = "works") -> None:
         "tables": {
             table: {
                 "columns": {
+                    "id": {
+                        "sql_column": "id",
+                        "source_column": "",
+                        "description": "",
+                    },
                     "author_openalex_id": {
                         "sql_column": "author_openalex_id",
                         "source_column": "author_id",

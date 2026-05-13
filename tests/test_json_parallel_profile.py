@@ -316,7 +316,7 @@ class TestJsonParallelProfile(unittest.TestCase):
             [{"flatten_backend": "python", "workers": 0}],
         )
 
-        warnings_allowed = recommend_parallel_workers(
+        artifact_contract_warnings_excluded = recommend_parallel_workers(
             [
                 {"workers": 0, "records_per_s": 100.0, **base},
                 {
@@ -329,7 +329,7 @@ class TestJsonParallelProfile(unittest.TestCase):
                 },
             ]
         )
-        self.assertEqual(warnings_allowed["recommended_parallel_workers"], 4)
+        self.assertEqual(artifact_contract_warnings_excluded["recommended_parallel_workers"], 0)
 
         all_failed = recommend_parallel_workers(
             [{"workers": 0, "records_per_s": 100.0, "status": "failed", "error_count": 1, "artifact_contract_status": "failed"}]
@@ -1154,6 +1154,7 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertTrue(Path(out_dir, "w0", "artifact_contract.json").exists())
             self.assertEqual(inspect_calls[0][1]["require_schema_manifest"], True)
             self.assertEqual(inspect_calls[0][1]["require_id_compaction"], True)
+            self.assertEqual(inspect_calls[0][1]["strict_schema_manifest"], True)
 
     def test_profile_parallel_cleanup_failure_is_reported_without_losing_summary(self):
         with tempfile.TemporaryDirectory() as td:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 
 from KISTI_DB_Manager.pipeline import _json_loads_factory, run_json_pipeline
+from KISTI_DB_Manager.parquet_artifacts import inspect_parquet_artifact_contract
 from KISTI_DB_Manager.processing import extract_rows_from_jsons, flatten_nested_json_with_list
 
 
@@ -118,6 +119,52 @@ class TestJsonPipeline(unittest.TestCase):
         paths = sorted((root / table).glob("*.parquet"))
         self.assertEqual(len(paths), 1, [p.name for p in paths])
         return pq_module.read_table(paths[0])
+
+    def test_run_json_pipeline_writes_schema_manifest_without_id_compaction(self):
+        _pa, pq = self._require_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "x.jsonl").write_text(
+                '{"id": 1, "name": "alpha", "items": [{"code": "A"}]}\n',
+                encoding="utf-8",
+            )
+            out_dir = root / "parquet_out"
+            res = run_json_pipeline(
+                {
+                    "PATH": str(root),
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "base",
+                    "KEY_SEP": "__",
+                    "persist_parquet_files": True,
+                    "persist_parquet_dir": str(out_dir),
+                    "flatten_backend": "python",
+                },
+                {"host": "h", "user": "u", "password": "p", "database": "d"},
+                chunk_size=10,
+                create=False,
+                load=False,
+                index=False,
+                optimize=False,
+                continue_on_error=False,
+            )
+
+            self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "python")
+            manifest_path = out_dir / "schema_manifest.json"
+            self.assertTrue(manifest_path.exists())
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+            self.assertEqual(manifest["id_compaction"]["enabled"], False)
+            self.assertEqual(manifest["id_compaction"]["columns"], [])
+            self.assertEqual(manifest["id_compaction"]["counts"], {})
+            self.assertEqual(
+                set(manifest["tables"]["base"]["columns"]),
+                set(self._read_single_parquet_table(pq, out_dir, "base").schema.names),
+            )
+            self.assertEqual(manifest["tables"]["base"]["columns"]["id"]["source_column"], "")
+            self.assertEqual(manifest["tables"]["base"]["columns"]["id"]["description"], "")
+            report = inspect_parquet_artifact_contract(out_dir, require_schema_manifest=True, strict_schema_manifest=True)
+            self.assertEqual(report["status"], "done")
 
     def test_run_json_pipeline_handles_missing_processing_backend(self):
         # Ensure the import path is exercised even when optional deps are installed
@@ -2416,6 +2463,11 @@ class TestJsonPipeline(unittest.TestCase):
             table = self._read_single_parquet_table(pq, out_dir, "base")
             self.assertTrue(pa.types.is_string(table.schema.field("n").type) or pa.types.is_large_string(table.schema.field("n").type))
             self.assertEqual(table.to_pydict()["n"], [str(value)])
+            manifest = json.loads((out_dir / "schema_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(manifest["id_compaction"]["enabled"], False)
+            self.assertEqual(set(manifest["tables"]["base"]["columns"]), set(table.schema.names))
+            report = inspect_parquet_artifact_contract(out_dir, require_schema_manifest=True, strict_schema_manifest=True)
+            self.assertEqual(report["status"], "done")
 
     def test_run_json_pipeline_rust_arrow_preserves_scalar_items_in_mixed_object_list(self):
         _pa, pq = self._require_rust_arrow_with_pyarrow()
@@ -2802,6 +2854,27 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(columnar_res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
             self.assertEqual(columnar_res.report.artifacts.get("rust_columnar_accumulator"), True)
             self.assertEqual(columnar_res.report.artifacts.get("rust_raw_jsonl_file_parse_effective"), True)
+            self.assertEqual(
+                inspect_parquet_artifact_contract(
+                    root / "parquet_rows",
+                    require_schema_manifest=True,
+                    strict_schema_manifest=True,
+                )["status"],
+                "done",
+            )
+            self.assertEqual(
+                inspect_parquet_artifact_contract(
+                    root / "parquet_columnar",
+                    require_schema_manifest=True,
+                    strict_schema_manifest=True,
+                )["status"],
+                "done",
+            )
+            columnar_manifest = json.loads((root / "parquet_columnar" / "schema_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(
+                set(columnar_manifest["tables"]["base"]["columns"]),
+                set(columnar_tables["base"].schema.names),
+            )
             self.assertEqual(columnar_res.report.stats.get("records_read"), 3)
             self.assertEqual(columnar_res.report.stats.get("records_ok"), 2)
             self.assertEqual(columnar_res.report.stats.get("records_failed"), 1)
@@ -2979,6 +3052,15 @@ class TestJsonPipeline(unittest.TestCase):
                 1,
             )
             self.assertIn("author_openalex_id", manifest["tables"]["base"]["columns"])
+            self.assertIn("id", manifest["tables"]["base"]["columns"])
+            self.assertIn("primary_location__source_openalex_id", manifest["tables"]["base"]["columns"])
+            contract = inspect_parquet_artifact_contract(
+                out_dir,
+                require_schema_manifest=True,
+                require_id_compaction=True,
+                strict_schema_manifest=True,
+            )
+            self.assertEqual(contract["status"], "done")
 
     def test_run_json_pipeline_rust_arrow_matches_python_openalex_golden_contract(self):
         _pa, pq = self._require_rust_arrow_with_pyarrow()
@@ -3090,6 +3172,7 @@ class TestJsonPipeline(unittest.TestCase):
             manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
             self.assertEqual(manifest["id_compaction"]["counts"]["base.author_openalex_id"], 1)
             self.assertIn("author_openalex_id", manifest["tables"]["base"]["columns"])
+            self.assertIn("id", manifest["tables"]["base"]["columns"])
             self.assertEqual(res.report.artifacts["id_compaction"]["enabled"], True)
 
     def test_run_json_pipeline_schema_manifest_does_not_follow_symlink(self):
