@@ -1456,13 +1456,14 @@ fn write_table(
     batch_idx: usize,
     index_key: &str,
 ) -> PyResult<(PathBuf, Vec<String>, usize)> {
-    let mut columns = BTreeSet::new();
+    let mut inferred_kinds: BTreeMap<String, Option<ColumnKind>> = BTreeMap::new();
     for row in rows {
-        for key in row.keys() {
-            columns.insert(key.clone());
+        for (key, value) in row.iter() {
+            let entry = inferred_kinds.entry(key.clone()).or_insert(None);
+            *entry = merge_kind(*entry, value_kind(value));
         }
     }
-    let mut cols: Vec<String> = columns.into_iter().collect();
+    let mut cols: Vec<String> = inferred_kinds.keys().cloned().collect();
     if let Some(pos) = cols.iter().position(|c| c == index_key) {
         let index_col = cols.remove(pos);
         cols.insert(0, index_col);
@@ -1473,19 +1474,14 @@ fn write_table(
         )));
     }
 
-    let mut kinds: BTreeMap<String, ColumnKind> = BTreeMap::new();
-    for col in cols.iter() {
-        let mut kind = None;
-        for row in rows {
-            kind = merge_kind(kind, row.get(col).and_then(value_kind));
-        }
-        kinds.insert(col.clone(), kind.unwrap_or(ColumnKind::LargeUtf8));
-    }
-
     let fields: Vec<Field> = cols
         .iter()
         .map(|c| {
-            let dtype = match kinds.get(c).copied().unwrap_or(ColumnKind::LargeUtf8) {
+            let dtype = match inferred_kinds
+                .get(c)
+                .and_then(|kind| *kind)
+                .unwrap_or(ColumnKind::LargeUtf8)
+            {
                 ColumnKind::Bool => DataType::Boolean,
                 ColumnKind::Int64 => DataType::Int64,
                 ColumnKind::Float64 => DataType::Float64,
@@ -1497,7 +1493,11 @@ fn write_table(
     let schema = Arc::new(Schema::new(fields));
     let mut arrays: Vec<ArrayRef> = Vec::with_capacity(cols.len());
     for col in cols.iter() {
-        match kinds.get(col).copied().unwrap_or(ColumnKind::LargeUtf8) {
+        match inferred_kinds
+            .get(col)
+            .and_then(|kind| *kind)
+            .unwrap_or(ColumnKind::LargeUtf8)
+        {
             ColumnKind::Bool => {
                 let mut builder = BooleanBuilder::new();
                 for row in rows {
