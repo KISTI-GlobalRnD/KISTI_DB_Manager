@@ -60,9 +60,10 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
 
     def test_raw_jsonl_wrapper_passes_lines_and_options(self):
         ext = FakeRustExtension()
+        input_lines = [b'{"id": 1}', '{"id": 2}']
         with patch("KISTI_DB_Manager.rust_arrow_backend._load_extension", return_value=ext):
             res = rust_arrow_backend.persist_json_lines_batch_to_parquet(
-                [b'{"id": 1}', '{"id": 2}'],
+                input_lines,
                 base_table="base",
                 index_key="id",
                 except_keys=["items"],
@@ -77,6 +78,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
 
         self.assertTrue(res["ok"])
         lines, options = ext.calls[0]
+        self.assertIs(lines, input_lines)
         self.assertEqual(lines, [b'{"id": 1}', '{"id": 2}'])
         self.assertEqual(options["base_table"], "base")
         self.assertEqual(options["except_keys"], ["items"])

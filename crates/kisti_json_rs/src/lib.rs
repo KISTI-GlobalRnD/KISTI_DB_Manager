@@ -19,7 +19,7 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 use parquet::arrow::ArrowWriter;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::prelude::*;
-use pyo3::types::{PyDict, PyFloat, PyList, PyTuple};
+use pyo3::types::{PyBytes, PyDict, PyFloat, PyList, PyTuple};
 use rayon::prelude::*;
 use serde_json::{Number, Value};
 
@@ -165,14 +165,32 @@ fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
     Ok(Value::String(obj.str()?.to_string()))
 }
 
-fn py_line_to_string(obj: &Bound<'_, PyAny>) -> PyResult<String> {
+fn parse_json_line_value(obj: &Bound<'_, PyAny>) -> PyResult<Result<Option<Value>, String>> {
+    if let Ok(v) = obj.downcast::<PyBytes>() {
+        let bytes = v.as_bytes();
+        if bytes.iter().all(|b| b.is_ascii_whitespace()) {
+            return Ok(Ok(None));
+        }
+        return Ok(serde_json::from_slice::<Value>(bytes)
+            .map(Some)
+            .map_err(|e| format!("failed to parse JSONL line: {e}")));
+    }
     if let Ok(v) = obj.extract::<String>() {
-        return Ok(v);
+        let line = v.trim();
+        if line.is_empty() {
+            return Ok(Ok(None));
+        }
+        return Ok(serde_json::from_str::<Value>(line)
+            .map(Some)
+            .map_err(|e| format!("failed to parse JSONL line: {e}")));
     }
     if let Ok(v) = obj.extract::<Vec<u8>>() {
-        return String::from_utf8(v).map_err(|e| {
-            PyRuntimeError::new_err(format!("rust-arrow JSONL input is not valid UTF-8: {e}"))
-        });
+        if v.iter().all(|b| b.is_ascii_whitespace()) {
+            return Ok(Ok(None));
+        }
+        return Ok(serde_json::from_slice::<Value>(&v)
+            .map(Some)
+            .map_err(|e| format!("failed to parse JSONL line: {e}")));
     }
     Err(PyRuntimeError::new_err(
         "rust-arrow JSONL input records must be str or bytes",
@@ -2173,13 +2191,8 @@ fn persist_json_lines_batch(
     let mut errors = Vec::<String>::new();
     let mut error_indices = Vec::<usize>::new();
     for (i, item) in list.iter().enumerate() {
-        let line = py_line_to_string(&item)?;
-        let line_trimmed = line.trim();
-        if line_trimmed.is_empty() {
-            continue;
-        }
-        match serde_json::from_str::<Value>(line_trimmed) {
-            Ok(value @ Value::Object(_)) => match validate_json_numbers(&value, "") {
+        match parse_json_line_value(&item)? {
+            Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value, "") {
                 Ok(()) => values.push((i, value)),
                 Err(e) => {
                     records_failed += 1;
@@ -2187,7 +2200,7 @@ fn persist_json_lines_batch(
                     errors.push(format!("record {i}: {e}; use the Python backend"));
                 }
             },
-            Ok(value) => {
+            Ok(Some(value)) => {
                 records_failed += 1;
                 error_indices.push(i);
                 errors.push(format!(
@@ -2195,10 +2208,11 @@ fn persist_json_lines_batch(
                     value_type_name(&value)
                 ));
             }
+            Ok(None) => {}
             Err(e) => {
                 records_failed += 1;
                 error_indices.push(i);
-                errors.push(format!("record {i}: failed to parse JSONL line: {e}"));
+                errors.push(format!("record {i}: {e}"));
             }
         }
     }

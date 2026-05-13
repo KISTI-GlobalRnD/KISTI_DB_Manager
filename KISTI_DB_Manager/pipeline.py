@@ -4464,8 +4464,7 @@ def run_json_pipeline(
                         break
                     with open(raw_source, "rb") as raw_fp:
                         for line_no, raw_line in enumerate(raw_fp, start=1):
-                            line = raw_line.strip()
-                            if not line:
+                            if not raw_line or raw_line.isspace():
                                 continue
                             if max_records is not None and global_index >= max_records:
                                 reached_max_records = True
@@ -4483,7 +4482,7 @@ def run_json_pipeline(
                             _write_progress_snapshot(stage="read", ctx=rec_ctx)
                             if not raw_batch:
                                 batch_index_offset = global_index
-                            raw_batch.append(bytes(line))
+                            raw_batch.append(raw_line)
                             batch_contexts.append(rec_ctx)
                             global_index += 1
                             if len(raw_batch) >= chunk_size:

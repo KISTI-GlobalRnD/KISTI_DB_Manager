@@ -216,7 +216,8 @@ def persist_json_lines_batch_to_parquet(
         parallel_workers=parallel_workers,
         id_compaction=id_compaction,
     )
-    result = persist_fn(list(lines), options)
+    payload = lines if isinstance(lines, list) else list(lines)
+    result = persist_fn(payload, options)
     if not isinstance(result, Mapping):
         raise RustArrowBackendUnavailable("Rust Arrow raw JSONL backend returned an invalid result")
     return dict(result)
