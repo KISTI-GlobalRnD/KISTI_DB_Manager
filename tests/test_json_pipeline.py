@@ -1753,6 +1753,72 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertIn("outside supported i64/u64 range", result["errors"][0])
             self.assertFalse(list(out_dir.rglob("*.parquet")))
 
+    def test_rust_arrow_raw_jsonl_simd_parser_matches_serde_contract(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        from KISTI_DB_Manager.rust_arrow_backend import persist_json_lines_batch_to_parquet
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            results = {}
+            for parser_backend in ("serde-json", "simd-json"):
+                out_dir = root / parser_backend
+                result = persist_json_lines_batch_to_parquet(
+                    [
+                        '{"id": 1, "name": "alpha", "items": [{"x": 7}]}',
+                        '{"id": 2, "name": "beta", "items": [{"x": 8}]}',
+                    ],
+                    base_table="base",
+                    index_key="id",
+                    except_keys=[],
+                    excepted_expand_dict=False,
+                    sep="__",
+                    parquet_dir=out_dir,
+                    batch_idx=0,
+                    index_offset=0,
+                    record_contexts=[{"line_no": 1}, {"line_no": 2}],
+                    parallel_workers=0,
+                    parser_backend=parser_backend,
+                )
+                self.assertEqual(result["records_ok"], 2)
+                self.assertEqual(result["parser_backend"], parser_backend)
+                results[parser_backend] = {
+                    table_dir.name: self._read_single_parquet_table(pq, out_dir, table_dir.name).to_pydict()
+                    for table_dir in sorted(out_dir.iterdir())
+                    if table_dir.is_dir()
+                }
+
+            self.assertEqual(results["simd-json"], results["serde-json"])
+
+    def test_rust_arrow_raw_jsonl_simd_parser_preserves_large_integer_validation(self):
+        self._require_rust_arrow_with_pyarrow()
+
+        from KISTI_DB_Manager.rust_arrow_backend import persist_json_lines_batch_to_parquet
+
+        with tempfile.TemporaryDirectory() as td:
+            out_dir = Path(td) / "parquet_out"
+            result = persist_json_lines_batch_to_parquet(
+                ['{"id": 1, "outer": {"items": [{"bad": 18446744073709551616}]}}'],
+                base_table="base",
+                index_key="id",
+                except_keys=[],
+                excepted_expand_dict=False,
+                sep="__",
+                parquet_dir=out_dir,
+                batch_idx=0,
+                index_offset=0,
+                record_contexts=[{"line_no": 1}],
+                parallel_workers=0,
+                parser_backend="simd-json",
+            )
+
+            self.assertEqual(result["records_ok"], 0)
+            self.assertEqual(result["records_failed"], 1)
+            self.assertEqual(result["parser_backend"], "simd-json")
+            self.assertIn("$.outer.items[0].bad", result["errors"][0])
+            self.assertIn("outside supported i64/u64 range", result["errors"][0])
+            self.assertFalse(list(out_dir.rglob("*.parquet")))
+
     def test_rust_arrow_direct_jsonl_rejects_excepted_nested_integer_during_flatten(self):
         _pa, pq = self._require_rust_arrow_with_pyarrow()
 

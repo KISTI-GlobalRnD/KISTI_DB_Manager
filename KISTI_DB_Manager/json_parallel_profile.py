@@ -592,6 +592,8 @@ def _summarize_worker_run(
         "rust_parallel_table_writes": bool(artifacts.get("rust_parallel_table_writes", False)),
         "rust_columnar_accumulator": bool(artifacts.get("rust_columnar_accumulator", False)),
         "rust_parquet_flush_records": _as_int(artifacts.get("rust_parquet_flush_records"), 0),
+        "rust_parser_backend": artifacts.get("rust_parser_backend"),
+        "rust_parser_backend_effective": artifacts.get("rust_parser_backend_effective"),
         "rust_arrow_failed_batches": _as_int(
             artifacts.get("rust_arrow_failed_batches"),
             _as_int(artifacts.get("flatten_backend_fallback_batches"), 0),
@@ -910,6 +912,14 @@ def _aggregate_worker_attempts(
         for item in attempt_rows
         if item.get("flatten_backend_auto_disabled_reason")
     ]
+    parser_backends = sorted({str(item.get("rust_parser_backend") or "") for item in attempt_rows if item.get("rust_parser_backend")})
+    parser_effective = sorted(
+        {
+            str(item.get("rust_parser_backend_effective") or "")
+            for item in attempt_rows
+            if item.get("rust_parser_backend_effective")
+        }
+    )
     rust_arrow_failed_batches = sum(
         _as_int(item.get("rust_arrow_failed_batches"), _as_int(item.get("flatten_backend_fallback_batches"), 0))
         for item in attempt_rows
@@ -966,6 +976,10 @@ def _aggregate_worker_attempts(
         "rust_parallel_table_writes": any(bool(item.get("rust_parallel_table_writes")) for item in attempt_rows),
         "rust_columnar_accumulator": any(bool(item.get("rust_columnar_accumulator")) for item in attempt_rows),
         "rust_parquet_flush_records": max(_as_int(item.get("rust_parquet_flush_records"), 0) for item in attempt_rows),
+        "rust_parser_backend": parser_backends[0] if len(parser_backends) == 1 else ("mixed" if parser_backends else None),
+        "rust_parser_backend_effective": (
+            parser_effective[0] if len(parser_effective) == 1 else ("mixed" if parser_effective else None)
+        ),
         "rust_arrow_failed_batches": rust_arrow_failed_batches,
         "flatten_backend_fallback_reason": "; ".join(sorted(set(fallback_reasons))) if fallback_reasons else None,
         "flatten_backend_auto_disabled_reason": "; ".join(sorted(set(auto_disabled_reasons))) if auto_disabled_reasons else None,
@@ -1019,6 +1033,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append(f"- rust_parallel_table_writes: `{summary.get('rust_parallel_table_writes')}`")
     lines.append(f"- rust_columnar_accumulator: `{summary.get('rust_columnar_accumulator')}`")
     lines.append(f"- rust_parquet_flush_records: `{summary.get('rust_parquet_flush_records')}`")
+    lines.append(f"- rust_parser_backend: `{summary.get('rust_parser_backend')}`")
     lines.append(f"- repeat: `{summary.get('repeat')}`")
     lines.append(f"- records_per_s_basis: `{summary.get('records_per_s_basis')}`")
     lines.append(f"- recommended_flatten_backend: `{summary.get('recommended_flatten_backend')}`")
@@ -1028,7 +1043,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append("## Worker Runs")
     lines.append("")
     lines.append(
-        "| backend | effective | raw_jsonl | file_jsonl | table_write_parallel | columnar | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
+        "| backend | effective | parser | raw_jsonl | file_jsonl | table_write_parallel | columnar | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
         "io.json_parse_ms | rust_arrow.read_line_ms | rust_arrow.json_parse_ms | rust_arrow.number_validate_ms | "
         "rust_arrow.py_to_json_ms | json.flatten_ms | rust_arrow.columnar_merge_ms | "
         "json.parquet.persist_ms | rust_arrow.arrow_build_ms | rust_arrow.parquet_write_ms | "
@@ -1036,7 +1051,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
         "issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
     lines.append(
-        "|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+        "|---|---|---|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
     )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
@@ -1051,6 +1066,7 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
         lines.append(
             "| "
             f"{row.get('flatten_backend')} | {row.get('effective_backend')} | "
+            f"{_markdown_table_cell(row.get('rust_parser_backend_effective') or row.get('rust_parser_backend'))} | "
             f"{'yes' if row.get('rust_raw_jsonl_parse_effective') else 'no'} | "
             f"{'yes' if row.get('rust_raw_jsonl_file_parse_effective') else 'no'} | "
             f"{'yes' if row.get('rust_parallel_table_writes') else 'no'} | "
@@ -1203,6 +1219,7 @@ def profile_parallel(
     rust_parallel_table_writes: bool | None = None,
     rust_columnar_accumulator: bool | None = None,
     rust_parquet_flush_records: int | None = None,
+    rust_parser_backend: str | None = None,
     profile_top: int = 8,
     repeat: int = 1,
     shuffle_order: bool = True,
@@ -1212,7 +1229,7 @@ def profile_parallel(
     from . import pipeline
     from .parquet_artifacts import inspect_parquet_artifact_contract
     from .report import RunReport
-    from .rust_arrow_backend import parse_backend_list
+    from .rust_arrow_backend import normalize_parser_backend, parse_backend_list
 
     config = Path(config_path).expanduser().resolve()
     worker_values = parse_worker_list(workers)
@@ -1309,6 +1326,10 @@ def profile_parallel(
             else _as_int(data_config.get("rust_parquet_flush_records"), 0)
         )
         data_config["rust_parquet_flush_records"] = int(flush_requested if str(flatten_backend) == "rust-arrow" else 0)
+        parser_requested = normalize_parser_backend(
+            rust_parser_backend if rust_parser_backend is not None else data_config.get("rust_parser_backend", "serde-json")
+        )
+        data_config["rust_parser_backend"] = parser_requested if str(flatten_backend) == "rust-arrow" else "serde-json"
         data_config["progress_path"] = ""
         data_config["progress_interval_s"] = 0.0
         if chunk_size is not None:
@@ -1506,6 +1527,7 @@ def profile_parallel(
         "rust_parquet_flush_records": (
             max(0, int(rust_parquet_flush_records)) if rust_parquet_flush_records is not None else None
         ),
+        "rust_parser_backend": normalize_parser_backend(rust_parser_backend) if rust_parser_backend is not None else None,
         "repeat": int(repeat_count),
         "shuffle_order": bool(shuffle_order),
         "seed": seed,

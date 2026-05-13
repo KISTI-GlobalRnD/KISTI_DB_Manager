@@ -71,6 +71,8 @@ class TestJsonParallelProfile(unittest.TestCase):
                 "--rust-columnar-accumulator",
                 "--rust-parquet-flush-records",
                 "10000",
+                "--rust-parser-backend",
+                "simd-json",
                 "--id-compaction",
                 "--out",
                 "runs/profile",
@@ -90,6 +92,7 @@ class TestJsonParallelProfile(unittest.TestCase):
         self.assertEqual(args.rust_parallel_table_writes, True)
         self.assertEqual(args.rust_columnar_accumulator, True)
         self.assertEqual(args.rust_parquet_flush_records, 10000)
+        self.assertEqual(args.rust_parser_backend, "simd-json")
         self.assertEqual(args.id_compaction, True)
 
     def test_cli_profile_parallel_invokes_orchestrator(self):
@@ -135,6 +138,8 @@ class TestJsonParallelProfile(unittest.TestCase):
                             "--rust-columnar-accumulator",
                             "--rust-parquet-flush-records",
                             "10000",
+                            "--rust-parser-backend",
+                            "simd-json",
                             "--out",
                             str(Path(td, "out")),
                         ]
@@ -149,6 +154,7 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertEqual(p_profile.call_args.kwargs["rust_parallel_table_writes"], True)
             self.assertEqual(p_profile.call_args.kwargs["rust_columnar_accumulator"], True)
             self.assertEqual(p_profile.call_args.kwargs["rust_parquet_flush_records"], 10000)
+            self.assertEqual(p_profile.call_args.kwargs["rust_parser_backend"], "simd-json")
 
     def test_cli_profile_parallel_rejects_bad_workers(self):
         with tempfile.TemporaryDirectory() as td:
@@ -494,10 +500,12 @@ class TestJsonParallelProfile(unittest.TestCase):
                 encoding="utf-8",
             )
             seen: dict[str, bool] = {}
+            seen_parser: dict[str, str] = {}
 
             def fake_run_json_pipeline(data_config, db_config, **kwargs):
                 backend = str(data_config["flatten_backend"])
                 seen[backend] = bool(data_config.get("rust_raw_jsonl_parse"))
+                seen_parser[backend] = str(data_config.get("rust_parser_backend"))
                 parquet_dir = Path(data_config["persist_parquet_dir"])
                 parquet_dir.mkdir(parents=True, exist_ok=True)
                 Path(parquet_dir, "placeholder.txt").write_text("x", encoding="utf-8")
@@ -509,6 +517,9 @@ class TestJsonParallelProfile(unittest.TestCase):
                     "rust_raw_jsonl_parse_effective",
                     backend == "rust-arrow" and bool(data_config.get("rust_raw_jsonl_parse")),
                 )
+                report.set_artifact("rust_parser_backend", str(data_config.get("rust_parser_backend")))
+                if backend == "rust-arrow":
+                    report.set_artifact("rust_parser_backend_effective", str(data_config.get("rust_parser_backend")))
                 report.bump("records_read", 100)
                 report.bump("records_ok", 100)
                 report.add_time_ms("pipeline.json.total", 1000)
@@ -538,19 +549,23 @@ class TestJsonParallelProfile(unittest.TestCase):
                     workers=[0],
                     flatten_backends=["python", "rust-arrow"],
                     rust_raw_jsonl_parse=True,
+                    rust_parser_backend="simd-json",
                     out_dir=out_dir,
                     shuffle_order=False,
                 )
 
             self.assertEqual(seen, {"python": False, "rust-arrow": True})
+            self.assertEqual(seen_parser, {"python": "serde-json", "rust-arrow": "simd-json"})
             rows = {row["flatten_backend"]: row for row in summary["runs"]}
             self.assertEqual(rows["python"]["rust_raw_jsonl_parse_requested"], False)
             self.assertEqual(rows["python"]["rust_raw_jsonl_parse_effective"], False)
             self.assertEqual(rows["rust-arrow"]["rust_raw_jsonl_parse_requested"], True)
             self.assertEqual(rows["rust-arrow"]["rust_raw_jsonl_parse_effective"], True)
+            self.assertEqual(rows["rust-arrow"]["rust_parser_backend_effective"], "simd-json")
             self.assertEqual(rows["rust-arrow"]["timings_ms"]["rust_arrow.json_parse"], 20)
             md = Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8")
             self.assertIn("raw_jsonl", md)
+            self.assertIn("simd-json", md)
 
     def test_profile_parallel_repeats_and_recommends_by_median(self):
         with tempfile.TemporaryDirectory() as td:

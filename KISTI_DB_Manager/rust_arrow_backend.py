@@ -10,6 +10,9 @@ BACKEND_PYTHON = "python"
 BACKEND_RUST_ARROW = "rust-arrow"
 BACKEND_CHOICES = (BACKEND_AUTO, BACKEND_PYTHON, BACKEND_RUST_ARROW)
 DEFAULT_PROFILE_BACKENDS = (BACKEND_AUTO,)
+PARSER_BACKEND_SERDE_JSON = "serde-json"
+PARSER_BACKEND_SIMD_JSON = "simd-json"
+PARSER_BACKEND_CHOICES = (PARSER_BACKEND_SERDE_JSON, PARSER_BACKEND_SIMD_JSON)
 
 
 class RustArrowBackendUnavailable(RuntimeError):
@@ -57,6 +60,21 @@ def parse_backend_list(value: str | Sequence[str] | None) -> list[str]:
     if not out:
         raise ValueError("at least one flatten backend is required")
     return out
+
+
+def normalize_parser_backend(value: Any) -> str:
+    raw = str(value or PARSER_BACKEND_SERDE_JSON).strip().lower().replace("_", "-")
+    aliases = {
+        "serde": PARSER_BACKEND_SERDE_JSON,
+        "serdejson": PARSER_BACKEND_SERDE_JSON,
+        "simd": PARSER_BACKEND_SIMD_JSON,
+        "simdjson": PARSER_BACKEND_SIMD_JSON,
+    }
+    backend = aliases.get(raw, raw)
+    if backend not in PARSER_BACKEND_CHOICES:
+        choices = ", ".join(PARSER_BACKEND_CHOICES)
+        raise ValueError(f"invalid rust_parser_backend {value!r}; expected one of: {choices}")
+    return backend
 
 
 def _load_extension():
@@ -131,6 +149,7 @@ def _persist_options(
     parallel_workers: int,
     parallel_table_writes: bool = False,
     columnar_accumulator: bool = False,
+    parser_backend: str | None = None,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     id_compaction_payload = _normalize_id_compaction_payload(id_compaction)
@@ -147,6 +166,7 @@ def _persist_options(
         "parallel_workers": int(parallel_workers or 0),
         "parallel_table_writes": bool(parallel_table_writes),
         "columnar_accumulator": bool(columnar_accumulator),
+        "parser_backend": normalize_parser_backend(parser_backend),
     }
     if id_compaction_payload:
         options["id_compaction"] = id_compaction_payload
@@ -168,6 +188,7 @@ def persist_json_batch_to_parquet(
     parallel_workers: int,
     parallel_table_writes: bool = False,
     columnar_accumulator: bool = False,
+    parser_backend: str | None = None,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ext = _load_extension()
@@ -184,6 +205,7 @@ def persist_json_batch_to_parquet(
         parallel_workers=parallel_workers,
         parallel_table_writes=parallel_table_writes,
         columnar_accumulator=columnar_accumulator,
+        parser_backend=parser_backend,
         id_compaction=id_compaction,
     )
     result = ext.persist_json_batch(records, options)
@@ -207,6 +229,7 @@ def persist_json_lines_batch_to_parquet(
     parallel_workers: int,
     parallel_table_writes: bool = False,
     columnar_accumulator: bool = False,
+    parser_backend: str | None = None,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ext = _load_extension()
@@ -226,6 +249,7 @@ def persist_json_lines_batch_to_parquet(
         parallel_workers=parallel_workers,
         parallel_table_writes=parallel_table_writes,
         columnar_accumulator=columnar_accumulator,
+        parser_backend=parser_backend,
         id_compaction=id_compaction,
     )
     payload = lines if isinstance(lines, list) else list(lines)
@@ -251,6 +275,7 @@ def persist_jsonl_sources_to_parquet(
     parquet_flush_records: int | None = None,
     parallel_table_writes: bool = False,
     columnar_accumulator: bool = False,
+    parser_backend: str | None = None,
     max_records: int | None = None,
     id_compaction: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -271,6 +296,7 @@ def persist_jsonl_sources_to_parquet(
         parallel_workers=parallel_workers,
         parallel_table_writes=parallel_table_writes,
         columnar_accumulator=columnar_accumulator,
+        parser_backend=parser_backend,
         id_compaction=id_compaction,
     )
     options["chunk_size"] = int(chunk_size or 1000)

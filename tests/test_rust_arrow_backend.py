@@ -79,6 +79,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
                 record_contexts=[{"line_no": 1}, {"line_no": 2}],
                 parallel_workers=2,
                 columnar_accumulator=True,
+                parser_backend="simd-json",
             )
 
         self.assertTrue(res["ok"])
@@ -92,6 +93,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
         self.assertEqual(options["parallel_workers"], 2)
         self.assertEqual(options["parallel_table_writes"], False)
         self.assertEqual(options["columnar_accumulator"], True)
+        self.assertEqual(options["parser_backend"], "simd-json")
 
     def test_direct_jsonl_source_wrapper_passes_sources_and_options(self):
         ext = FakeRustExtension()
@@ -111,6 +113,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
                 parquet_flush_records=500,
                 parallel_table_writes=True,
                 columnar_accumulator=True,
+                parser_backend="simd_json",
                 max_records=123,
             )
 
@@ -122,6 +125,7 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
         self.assertEqual(options["parallel_workers"], 3)
         self.assertEqual(options["parallel_table_writes"], True)
         self.assertEqual(options["columnar_accumulator"], True)
+        self.assertEqual(options["parser_backend"], "simd-json")
         self.assertEqual(options["chunk_size"], 99)
         self.assertEqual(options["parquet_flush_records"], 500)
         self.assertEqual(options["max_records"], 123)

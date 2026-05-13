@@ -35,6 +35,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["rust_parallel_table_writes"], False)
         self.assertEqual(cfg["rust_columnar_accumulator"], False)
         self.assertEqual(cfg["rust_parquet_flush_records"], 0)
+        self.assertEqual(cfg["rust_parser_backend"], "serde-json")
         self.assertEqual(cfg["json_streaming_load"], False)
         self.assertEqual(cfg["persist_parquet_files"], True)
         self.assertEqual(cfg["persist_parquet_dir"], "")
@@ -76,6 +77,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(out["rust_parallel_table_writes"], False)
         self.assertEqual(out["rust_columnar_accumulator"], False)
         self.assertEqual(out["rust_parquet_flush_records"], 0)
+        self.assertEqual(out["rust_parser_backend"], "serde-json")
 
 
 if __name__ == "__main__":

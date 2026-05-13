@@ -1205,6 +1205,7 @@ def run_json_pipeline(
         RustArrowBackendUnavailable,
         load_parquet_files_to_mysql,
         normalize_flatten_backend,
+        normalize_parser_backend,
         persist_json_batch_to_parquet,
         persist_json_lines_batch_to_parquet,
         persist_jsonl_sources_to_parquet,
@@ -1214,6 +1215,8 @@ def run_json_pipeline(
     flatten_backend_requested = normalize_flatten_backend(dc.get("flatten_backend", BACKEND_AUTO))
     report.set_artifact("flatten_backend", flatten_backend_requested)
     report.set_artifact("flatten_backend_requested", flatten_backend_requested)
+    rust_parser_backend = normalize_parser_backend(dc.get("rust_parser_backend", "serde-json"))
+    report.set_artifact("rust_parser_backend", rust_parser_backend)
     rust_raw_jsonl_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_parse", False), default=False)
     rust_raw_jsonl_file_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_file_parse", False), default=False)
     report.set_artifact("rust_raw_jsonl_parse_requested", bool(rust_raw_jsonl_parse_requested))
@@ -3893,6 +3896,7 @@ def run_json_pipeline(
                             "parallel_workers": int(parallel_workers or 0),
                             "parallel_table_writes": bool(rust_parallel_table_writes),
                             "columnar_accumulator": bool(rust_columnar_accumulator),
+                            "parser_backend": rust_parser_backend,
                             "id_compaction": dict(id_compactor.config) if id_compactor.enabled else None,
                         }
                         if raw_json_lines is not None:
@@ -3930,6 +3934,8 @@ def run_json_pipeline(
                         if flatten_backend_requested == BACKEND_AUTO:
                             rust_auto_success_batches += 1
                         report.set_artifact("flatten_backend_effective", BACKEND_RUST_ARROW)
+                        if raw_json_lines is not None and rust_result.get("parser_backend"):
+                            report.set_artifact("rust_parser_backend_effective", str(rust_result.get("parser_backend")))
                         timings = (
                             rust_result.get("timings_ms")
                             if isinstance(rust_result.get("timings_ms"), Mapping)
@@ -4538,6 +4544,7 @@ def run_json_pipeline(
                         parallel_workers=int(parallel_workers or 0),
                         parallel_table_writes=bool(rust_parallel_table_writes),
                         columnar_accumulator=bool(rust_columnar_accumulator),
+                        parser_backend=rust_parser_backend,
                         chunk_size=int(chunk_size),
                         parquet_flush_records=int(rust_parquet_flush_records or 0),
                         max_records=max_records,
@@ -4555,6 +4562,8 @@ def run_json_pipeline(
                         raise
                 else:
                     report.set_artifact("flatten_backend_effective", BACKEND_RUST_ARROW)
+                    if rust_result.get("parser_backend"):
+                        report.set_artifact("rust_parser_backend_effective", str(rust_result.get("parser_backend")))
                     timings = rust_result.get("timings_ms") if isinstance(rust_result.get("timings_ms"), Mapping) else {}
                     total_ms = int(round((time.perf_counter() - rust_t0) * 1000.0))
                     rust_json_parse_ms = int(timings.get("rust_arrow.json_parse", 0) or 0)

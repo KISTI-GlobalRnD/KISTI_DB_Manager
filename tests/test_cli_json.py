@@ -291,6 +291,8 @@ class TestCLIJson(unittest.TestCase):
                         "--rust-columnar-accumulator",
                         "--rust-parquet-flush-records",
                         "10000",
+                        "--rust-parser-backend",
+                        "simd-json",
                     ]
                 )
 
@@ -301,6 +303,7 @@ class TestCLIJson(unittest.TestCase):
             self.assertEqual(data_cfg["rust_parallel_table_writes"], True)
             self.assertEqual(data_cfg["rust_columnar_accumulator"], True)
             self.assertEqual(data_cfg["rust_parquet_flush_records"], 10000)
+            self.assertEqual(data_cfg["rust_parser_backend"], "simd-json")
 
     def test_json_run_accepts_rust_arrow_with_id_compaction(self):
         with tempfile.TemporaryDirectory() as td:

@@ -587,6 +587,8 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["rust_columnar_accumulator"] = bool(args.rust_columnar_accumulator)
     if getattr(args, "rust_parquet_flush_records", None) is not None:
         data_config["rust_parquet_flush_records"] = int(args.rust_parquet_flush_records)
+    if getattr(args, "rust_parser_backend", None):
+        data_config["rust_parser_backend"] = str(args.rust_parser_backend)
     if getattr(args, "db_load_parallel_tables", None) is not None:
         data_config["db_load_parallel_tables"] = int(args.db_load_parallel_tables)
     if getattr(args, "load_data_commit_strategy", None):
@@ -760,6 +762,7 @@ def _cmd_json_profile_parallel(args: argparse.Namespace) -> int:
         rust_parallel_table_writes=args.rust_parallel_table_writes,
         rust_columnar_accumulator=args.rust_columnar_accumulator,
         rust_parquet_flush_records=args.rust_parquet_flush_records,
+        rust_parser_backend=args.rust_parser_backend,
         id_compaction=args.id_compaction,
         id_compaction_preset=args.id_compaction_preset,
         id_compaction_mode=args.id_compaction_mode,
@@ -1291,6 +1294,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="For direct Rust JSONL file parsing, write parquet after roughly N valid records instead of every chunk_size records (0/default: chunk_size).",
     )
     p_json_run.add_argument(
+        "--rust-parser-backend",
+        choices=["serde-json", "simd-json"],
+        help="Experimental Rust raw JSONL parser backend: serde-json or simd-json (default: config or serde-json).",
+    )
+    p_json_run.add_argument(
         "--db-load-parallel-tables",
         type=int,
         help="Parallelize LOAD DATA across tables (default: config or 0/off)",
@@ -1521,6 +1529,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--rust-parquet-flush-records",
         type=int,
         help="For rust-arrow direct JSONL profile runs, write parquet after roughly N valid records instead of every chunk_size records.",
+    )
+    p_json_profile_parallel.add_argument(
+        "--rust-parser-backend",
+        choices=["serde-json", "simd-json"],
+        help="For rust-arrow raw JSONL profile runs, choose experimental parser backend.",
     )
     p_json_profile_parallel.add_argument(
         "--mode",

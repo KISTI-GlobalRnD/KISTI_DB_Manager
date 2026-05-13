@@ -56,6 +56,7 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     cfg.setdefault("rust_parallel_table_writes", False)  # opt-in table-level parallel parquet writes in Rust
     cfg.setdefault("rust_columnar_accumulator", False)  # opt-in Rust columnar flatten/parquet accumulator
     cfg.setdefault("rust_parquet_flush_records", 0)  # direct Rust JSONL: parquet output flush size (0=chunk_size)
+    cfg.setdefault("rust_parser_backend", "serde-json")  # experimental raw JSONL parser: serde-json|simd-json
     cfg.setdefault("json_streaming_load", False)  # parquet-first/DataFrame path by default
     # Schema drift strategy (JSON-oriented)
     # - "evolve": add new columns (ALTER TABLE) when needed
@@ -194,6 +195,7 @@ class DataConfig:
     rust_parallel_table_writes: bool = False
     rust_columnar_accumulator: bool = False
     rust_parquet_flush_records: int = 0
+    rust_parser_backend: str = "serde-json"
     json_streaming_load: bool = False
     schema_mode: str = "evolve"
     extra_column_name: str = "__extra__"
@@ -244,6 +246,7 @@ class DataConfig:
             rust_parallel_table_writes=bool(cfg.get("rust_parallel_table_writes", False)),
             rust_columnar_accumulator=bool(cfg.get("rust_columnar_accumulator", False)),
             rust_parquet_flush_records=int(cfg.get("rust_parquet_flush_records", 0) or 0),
+            rust_parser_backend=str(cfg.get("rust_parser_backend", "serde-json")),
             json_streaming_load=bool(cfg.get("json_streaming_load", False)),
             schema_mode=str(cfg.get("schema_mode", "evolve")),
             extra_column_name=str(cfg.get("extra_column_name", "__extra__")),
@@ -293,6 +296,7 @@ class DataConfig:
             "rust_parallel_table_writes": bool(self.rust_parallel_table_writes),
             "rust_columnar_accumulator": bool(self.rust_columnar_accumulator),
             "rust_parquet_flush_records": int(self.rust_parquet_flush_records or 0),
+            "rust_parser_backend": str(self.rust_parser_backend),
             "json_streaming_load": bool(self.json_streaming_load),
             "schema_mode": str(self.schema_mode),
             "extra_column_name": str(self.extra_column_name),
