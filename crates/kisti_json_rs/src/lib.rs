@@ -3,7 +3,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
 use std::path::{Component, Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
 
 use arrow::array::{
@@ -26,6 +26,8 @@ use serde_json::{Number, Value};
 type Row = BTreeMap<String, Value>;
 type TableRows = BTreeMap<String, Vec<Row>>;
 type IndexedJsonValues = Vec<(usize, Value)>;
+
+static RAYON_POOLS: OnceLock<Mutex<HashMap<usize, Arc<rayon::ThreadPool>>>> = OnceLock::new();
 
 #[derive(Clone)]
 struct IdCompactionOptions {
@@ -202,6 +204,32 @@ fn get_string_option(options: &Bound<'_, PyDict>, key: &str, default: &str) -> P
         Some(value) => Ok(value.extract::<String>()?),
         None => Ok(default.to_string()),
     }
+}
+
+fn rayon_pool(workers: usize) -> PyResult<Arc<rayon::ThreadPool>> {
+    let pools = RAYON_POOLS.get_or_init(|| Mutex::new(HashMap::new()));
+    {
+        let guard = pools.lock().map_err(|e| {
+            PyRuntimeError::new_err(format!("rust-arrow rayon pool cache poisoned: {e}"))
+        })?;
+        if let Some(pool) = guard.get(&workers) {
+            return Ok(pool.clone());
+        }
+    }
+    let pool = Arc::new(
+        rayon::ThreadPoolBuilder::new()
+            .num_threads(workers)
+            .build()
+            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?,
+    );
+    let mut guard = pools.lock().map_err(|e| {
+        PyRuntimeError::new_err(format!("rust-arrow rayon pool cache poisoned: {e}"))
+    })?;
+    if let Some(existing) = guard.get(&workers) {
+        return Ok(existing.clone());
+    }
+    guard.insert(workers, pool.clone());
+    Ok(pool)
 }
 
 fn get_bool_option(options: &Bound<'_, PyDict>, key: &str, default: bool) -> PyResult<bool> {
@@ -2022,10 +2050,7 @@ fn persist_indexed_json_values(
     } = extras;
     let flatten_start = Instant::now();
     let outs: Vec<RecordOut> = if options.parallel_workers >= 2 && indexed_values.len() >= 2 {
-        let pool = rayon::ThreadPoolBuilder::new()
-            .num_threads(options.parallel_workers)
-            .build()
-            .map_err(|e| PyRuntimeError::new_err(e.to_string()))?;
+        let pool = rayon_pool(options.parallel_workers)?;
         pool.install(|| {
             indexed_values
                 .par_iter()
