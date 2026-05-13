@@ -410,7 +410,7 @@ fn append_large_utf8_value(builder: &mut LargeStringBuilder, value: Option<&Valu
     match value {
         Some(Value::Null) | None => builder.append_null(),
         Some(Value::Bool(v)) => builder.append_value(if *v { "true" } else { "false" }),
-        Some(Value::Number(v)) => builder.append_value(v.to_string()),
+        Some(Value::Number(v)) => builder.append_value(v.as_str()),
         Some(Value::String(v)) => builder.append_value(v),
         Some(v @ (Value::Array(_) | Value::Object(_))) => {
             builder.append_value(json_dumps_python_spacing(v))
@@ -470,16 +470,15 @@ fn validate_json_numbers_inner<'a>(
 ) -> Result<(), String> {
     match value {
         Value::Number(number) => {
-            if number_is_integer_literal(number)
-                && number.as_i64().is_none()
-                && number.as_u64().is_none()
-            {
-                return Err(format!(
-                    "integer outside supported i64/u64 range at {}: {number}",
-                    json_number_path(path)
-                ));
-            }
-            if !number_is_integer_literal(number) && number.as_f64().is_none() {
+            let is_integer = number_is_integer_literal(number);
+            if is_integer {
+                if number.as_i64().is_none() && number.as_u64().is_none() {
+                    return Err(format!(
+                        "integer outside supported i64/u64 range at {}: {number}",
+                        json_number_path(path)
+                    ));
+                }
+            } else if number.as_f64().is_none() {
                 return Err(format!(
                     "number is not representable as f64 at {}: {number}",
                     json_number_path(path)
