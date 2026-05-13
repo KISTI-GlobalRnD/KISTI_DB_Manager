@@ -8,6 +8,7 @@ While the manual is workflow-oriented, this section is optimized for finding com
 - [CLI Quick Reference](cli.md)
 - [Examples](examples.md)
 - [Overton Validation Queries](overton-validation.md)
+- [Rust Backend and Profiling](../manual/json-rust-backend.md)
 
 ## Use this section when
 

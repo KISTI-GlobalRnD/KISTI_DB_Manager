@@ -1,4 +1,4 @@
-# Chapter 5. Review and Visualization
+# Chapter 6. Review and Visualization
 
 This chapter covers the package-side review outputs rather than dataset-specific workflows.
 

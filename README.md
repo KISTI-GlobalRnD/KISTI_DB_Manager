@@ -112,7 +112,7 @@ kisti-db-manager json run --config path/to/openalex_config.json --mode parse-par
 kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe
 ```
 
-`json run` defaults to `flatten_backend=auto`. If the optional Rust Arrow/Parquet extension is installed, supported parquet artifact runs can use the Rust path; otherwise `auto` falls back to the existing Python path. The Rust backend preserves nested object/list values as JSON string parquet columns and supports the OpenAlex `semantic_column_strip` ID compaction manifest contract. When DB/DDL stages are enabled, the default bridge reads the Rust parquet artifacts back into the existing Python create/load path. `--rust-db-load` opts into the experimental Rust MySQL insert path for Rust parquet artifacts. `excepted_expand_dict=true` still uses the Python flatten path. To force a backend:
+`json run` defaults to `flatten_backend=auto`. The optional Rust Arrow backend can accelerate supported parquet artifact runs while keeping Python in charge of table creation, schema mapping, reports, indexes, and fallbacks. To force a backend:
 
 ```bash
 kisti-db-manager json run \
@@ -131,15 +131,15 @@ kisti-db-manager json run \
   --rust-db-load
 ```
 
-This keeps table creation, schema mapping, indexes, and optimize in Python, but uses the Rust extension to read the generated parquet files and batch INSERT rows through the Rust MySQL driver. Leave it disabled when you need Python's mature per-row fallback behavior.
+Leave `--rust-db-load` disabled when you need Python's mature per-row fallback behavior. The Rust loader runs each parquet batch in a DB transaction by default.
 
-The Rust MySQL loader runs each parquet batch in a DB transaction by default, so an insert failure rolls back that batch instead of leaving a partial batch load behind. To smoke-test the full Rust parquet + Rust DB path against a local MariaDB config, use the dedicated script. It creates a unique table prefix and drops those temporary tables unless `--keep-tables` is set:
+Smoke-test the full Rust parquet + Rust DB path against a local MariaDB config:
 
 ```bash
 python scripts/smoke_rust_db_load.py --dotenv .env
 ```
 
-To compare DB load-only throughput from existing parquet artifacts:
+Compare DB load-only throughput from existing parquet artifacts:
 
 ```bash
 python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
@@ -155,7 +155,7 @@ pip install -e '.[json,rust]'
 python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
 ```
 
-To choose `parallel_workers` from evidence instead of a one-off guess, profile parse/parquet-only samples first:
+Choose `parallel_workers` and backend from evidence instead of a one-off guess:
 
 ```bash
 kisti-db-manager json profile-parallel \
@@ -168,8 +168,7 @@ kisti-db-manager json profile-parallel \
   --out runs/profile_parallel_test
 ```
 
-The profiler keeps per-worker/backend reports and parquet artifacts by default, validates the parquet artifact contract, and writes `parallel_profile.json` plus `parallel_profile.md`. Recommendations use median throughput when `--repeat` is greater than 1.
-When profiling `excepted_expand_dict=true`, use `--flatten-backends python`; that expanded excepted-object contract remains Python-only.
+Detailed Rust backend, profile, smoke-test, benchmark, and limitation notes are in [docs/manual/json-rust-backend.md](docs/manual/json-rust-backend.md).
 
 If schema drift is heavy and ALTER is too expensive:
 

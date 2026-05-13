@@ -13,9 +13,10 @@ The priority is operational guidance for large, messy datasets rather than auto-
 - [Chapter 1. Package Overview](manual/package-overview.md)
 - [Chapter 2. Getting Started](manual/getting-started.md)
 - [Chapter 3. JSON Modes](manual/json-modes.md)
-- [Chapter 4. OpenAlex Example Workflow](manual/openalex-workflow.md)
-- [Chapter 5. Review and Visualization](manual/review-visualization.md)
-- [Chapter 6. Restart & Recovery](manual/restart-recovery.md)
+- [Chapter 4. Rust Backend and Profiling](manual/json-rust-backend.md)
+- [Chapter 5. OpenAlex Example Workflow](manual/openalex-workflow.md)
+- [Chapter 6. Review and Visualization](manual/review-visualization.md)
+- [Chapter 7. Restart & Recovery](manual/restart-recovery.md)
 
 ### Reference
 
@@ -35,9 +36,10 @@ The priority is operational guidance for large, messy datasets rather than auto-
 2. Read [Chapter 1. Package Overview](manual/package-overview.md)
 3. Read [Chapter 2. Getting Started](manual/getting-started.md)
 4. Read [Chapter 3. JSON Modes](manual/json-modes.md)
-5. If you are working with OpenAlex, go to [Chapter 4. OpenAlex Example Workflow](manual/openalex-workflow.md)
-6. Review package-side inspection outputs in [Chapter 5. Review and Visualization](manual/review-visualization.md)
-7. For operational interruptions and restart policy, read [Chapter 6. Restart & Recovery](manual/restart-recovery.md)
+5. If you are choosing Python vs Rust parsing, read [Chapter 4. Rust Backend and Profiling](manual/json-rust-backend.md)
+6. If you are working with OpenAlex, go to [Chapter 5. OpenAlex Example Workflow](manual/openalex-workflow.md)
+7. Review package-side inspection outputs in [Chapter 6. Review and Visualization](manual/review-visualization.md)
+8. For operational interruptions and restart policy, read [Chapter 7. Restart & Recovery](manual/restart-recovery.md)
 
 ## Scope
 

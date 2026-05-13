@@ -8,9 +8,10 @@ The goal is to help you decide quickly which data to run, which mode to choose, 
 1. [Chapter 1. Package Overview](package-overview.md)
 2. [Chapter 2. Getting Started](getting-started.md)
 3. [Chapter 3. JSON Modes](json-modes.md)
-4. [Chapter 4. OpenAlex Example Workflow](openalex-workflow.md)
-5. [Chapter 5. Review and Visualization](review-visualization.md)
-6. [Chapter 6. Restart & Recovery](restart-recovery.md)
+4. [Chapter 4. Rust Backend and Profiling](json-rust-backend.md)
+5. [Chapter 5. OpenAlex Example Workflow](openalex-workflow.md)
+6. [Chapter 6. Review and Visualization](review-visualization.md)
+7. [Chapter 7. Restart & Recovery](restart-recovery.md)
 
 ## Audience
 
@@ -22,5 +23,6 @@ The goal is to help you decide quickly which data to run, which mode to choose, 
 
 - If DB completion speed is the priority, start with `ingest-fast*`
 - If local artifacts and reuse are the priority, start with `parse-parquet*`
+- If you are deciding between Python and Rust parsing, run `json profile-parallel` before changing production settings
 - For OpenAlex, the default recommendation is `parse-parquet-safe -> materialize`
 - If schema inspection is the goal, use `review plan / pack / preview / schema-viewer`

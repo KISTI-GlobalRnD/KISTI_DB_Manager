@@ -1,4 +1,4 @@
-# Chapter 6. Restart & Recovery
+# Chapter 7. Restart & Recovery
 
 This chapter explains which checkpoints exist, what resume granularity is guaranteed, and what replay still happens after interruption.
 

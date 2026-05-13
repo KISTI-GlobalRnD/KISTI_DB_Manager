@@ -67,3 +67,10 @@ kisti-db-manager json id-compaction-preflight \
 ```
 
 The preflight scanner uses `preserve` internally so it can collect all findings in the scan window instead of stopping at the first bad row. The report still records the production policies configured for `json run`. It returns exit code `1` when collisions, namespace conflicts, or scan errors are found; add `--allow-issues` for review-only automation.
+
+## Rust backend and profiling
+
+Backend selection is separate from mode selection.
+Use `--flatten-backend auto|python|rust-arrow` to choose the parser/parquet backend, and use `json profile-parallel` to compare settings before changing production runs.
+
+Detailed Rust backend, Rust DB loader, smoke-test, and benchmark guidance is in [Chapter 4. Rust Backend and Profiling](json-rust-backend.md).
