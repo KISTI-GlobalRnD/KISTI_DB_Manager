@@ -46,6 +46,7 @@ kisti-db-manager json run --config path/to/openalex_config.json --mode parse-par
 kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe --id-compaction
 kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe --flatten-backend rust-arrow
 kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe --flatten-backend rust-arrow --rust-raw-jsonl-parse
+kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe --flatten-backend rust-arrow --rust-raw-jsonl-parse --rust-raw-jsonl-file-parse
 kisti-db-manager json profile-parallel \
   --config path/to/openalex_config.json \
   --flatten-backends python,rust-arrow \
@@ -57,7 +58,7 @@ kisti-db-manager json profile-parallel \
 kisti-db-manager json id-compaction-preflight --config path/to/openalex_config.json --report id_compaction_preflight.json
 ```
 
-`json run --flatten-backend auto|python|rust-arrow` selects the JSON parse/parquet backend. `auto` is the default: it uses the optional Rust Arrow/Parquet extension for supported parquet artifact runs when installed and falls back to Python otherwise. `--rust-raw-jsonl-parse` is an opt-in fast path for explicit `rust-arrow` parse/parquet-only runs over plain JSONL/NDJSON input. `--rust-db-load` opts into the experimental Rust MySQL insert path for Rust parquet artifacts while keeping table creation/schema mapping/index/optimize in Python. Build the optional extension with `pip install -e '.[json,rust]'` and `python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release`. For backend policy, limitations, smoke tests, and benchmarks, see [Rust Backend and Profiling](../manual/json-rust-backend.md).
+`json run --flatten-backend auto|python|rust-arrow` selects the JSON parse/parquet backend. `auto` is the default: it uses the optional Rust Arrow/Parquet extension for supported parquet artifact runs when installed and falls back to Python otherwise. `--rust-raw-jsonl-parse` is an opt-in fast path for explicit `rust-arrow` parse/parquet-only runs over plain JSONL/NDJSON input. Add `--rust-raw-jsonl-file-parse` to let Rust read source JSONL/NDJSON files directly when supported. `--rust-db-load` opts into the experimental Rust MySQL insert path for Rust parquet artifacts while keeping table creation/schema mapping/index/optimize in Python. Build the optional extension with `pip install -e '.[json,rust]'` and `python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release`. For backend policy, limitations, smoke tests, and benchmarks, see [Rust Backend and Profiling](../manual/json-rust-backend.md).
 
 Operational Rust DB checks:
 
@@ -69,7 +70,7 @@ python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
   --report runs/example/rust_mysql_load_benchmark.json
 ```
 
-`json profile-parallel` compares JSON parse/parquet-only sample runs across `parallel_workers` values and optional `--flatten-backends` values. It disables DB stages, writes artifacts under `<out>/w<workers>/` for one backend or `<out>/<backend>/w<workers>/` for multiple backends, runs `parquet inspect`-style artifact contract checks, and creates `parallel_profile.json` plus `parallel_profile.md`. Use `--repeat N` to run each worker/backend setting multiple times; recommendations use median `records_per_s`. Add `--rust-raw-jsonl-parse` to include the Rust raw JSONL parser in `rust-arrow` profile runs. Add `--cleanup-parquet` when you want to keep reports/contracts but remove sample parquet directories.
+`json profile-parallel` compares JSON parse/parquet-only sample runs across `parallel_workers` values and optional `--flatten-backends` values. It disables DB stages, writes artifacts under `<out>/w<workers>/` for one backend or `<out>/<backend>/w<workers>/` for multiple backends, runs `parquet inspect`-style artifact contract checks, and creates `parallel_profile.json` plus `parallel_profile.md`. Use `--repeat N` to run each worker/backend setting multiple times; recommendations use median `records_per_s`. Add `--rust-raw-jsonl-parse` to include the Rust raw JSONL parser in `rust-arrow` profile runs, and add `--rust-raw-jsonl-file-parse` to include direct Rust source-file reading. Add `--cleanup-parquet` when you want to keep reports/contracts but remove sample parquet directories.
 
 `--id-compaction` currently supports the OpenAlex semantic column strip mode. It keeps compacted schemas stable across URL, bare ID, and null values, can run with `--parallel-workers`, and fails fast on conflicting nonblank values that would collapse into the same output column. The conflict policies can be set with `--id-compaction-collision-policy error|preserve` and `--id-compaction-namespace-conflict-policy error|preserve`.
 

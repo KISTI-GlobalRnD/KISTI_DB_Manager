@@ -31,6 +31,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(cfg["auto_except_novelty_threshold"], 2.0)
         self.assertEqual(cfg["excepted_expand_dict"], False)
         self.assertEqual(cfg["rust_raw_jsonl_parse"], False)
+        self.assertEqual(cfg["rust_raw_jsonl_file_parse"], False)
         self.assertEqual(cfg["json_streaming_load"], False)
         self.assertEqual(cfg["persist_parquet_files"], True)
         self.assertEqual(cfg["persist_parquet_dir"], "")
@@ -68,6 +69,7 @@ class TestConfig(unittest.TestCase):
         self.assertEqual(out["KEYs"], ["id"])
         self.assertEqual(out["chunksize"], 1000)
         self.assertEqual(out["rust_raw_jsonl_parse"], False)
+        self.assertEqual(out["rust_raw_jsonl_file_parse"], False)
 
 
 if __name__ == "__main__":

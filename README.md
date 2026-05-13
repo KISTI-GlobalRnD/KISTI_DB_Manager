@@ -130,6 +130,8 @@ kisti-db-manager json run \
   --rust-raw-jsonl-parse
 ```
 
+Add `--rust-raw-jsonl-file-parse` to also let Rust read plain JSONL/NDJSON source files directly. This removes the Python line-reading loop for supported parse/parquet-only runs.
+
 For an experimental Rust-driven DB load after Rust parquet creation:
 
 ```bash
@@ -177,7 +179,7 @@ kisti-db-manager json profile-parallel \
   --out runs/profile_parallel_test
 ```
 
-Add `--rust-raw-jsonl-parse` to include Rust-side JSONL decoding in the `rust-arrow` profile runs.
+Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` to include Rust-side JSONL decoding and direct file reading in the `rust-arrow` profile runs.
 
 Detailed Rust backend, profile, smoke-test, benchmark, and limitation notes are in [docs/manual/json-rust-backend.md](docs/manual/json-rust-backend.md).
 

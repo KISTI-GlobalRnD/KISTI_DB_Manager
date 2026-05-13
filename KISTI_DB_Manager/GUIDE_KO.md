@@ -113,6 +113,8 @@ kisti-db-manager json run \
   --rust-raw-jsonl-parse
 ```
 
+지원되는 경우 `--rust-raw-jsonl-file-parse`를 추가하면 Python line loop 없이 Rust가 JSONL/NDJSON 파일을 직접 읽습니다. ID compaction이 켜진 실행은 현재 batch raw parser 경로를 사용합니다.
+
 Rust MySQL loader는 아직 명시 opt-in입니다. 테이블 생성/스키마 매핑은 Python이 유지하고, Rust가 parquet를 읽어 batch insert합니다.
 
 ```bash

@@ -12,6 +12,10 @@ class FakeRustExtension:
         self.calls.append((lines, options))
         return {"ok": True, "records_ok": len(lines), "records_failed": 0, "tables": []}
 
+    def persist_jsonl_sources(self, sources, options):
+        self.calls.append((sources, options))
+        return {"ok": True, "records_read": 0, "records_ok": 0, "records_failed": 0, "tables": []}
+
     def load_parquet_files_to_mysql(self, payload, options):
         self.calls.append((payload, options))
         return {"ok": True, "files_loaded": len(payload), "tables_loaded": len(payload), "rows_loaded": 0}
@@ -85,6 +89,33 @@ class TestRustArrowBackendWrapper(unittest.TestCase):
         self.assertEqual(options["batch_idx"], 3)
         self.assertEqual(options["index_offset"], 10)
         self.assertEqual(options["parallel_workers"], 2)
+
+    def test_direct_jsonl_source_wrapper_passes_sources_and_options(self):
+        ext = FakeRustExtension()
+        with patch("KISTI_DB_Manager.rust_arrow_backend._load_extension", return_value=ext):
+            res = rust_arrow_backend.persist_jsonl_sources_to_parquet(
+                ["/tmp/a.jsonl"],
+                base_table="base",
+                index_key="id",
+                except_keys=[],
+                excepted_expand_dict=False,
+                sep="__",
+                parquet_dir="/tmp/parquet",
+                batch_idx=4,
+                index_offset=11,
+                parallel_workers=3,
+                chunk_size=99,
+                max_records=123,
+            )
+
+        self.assertTrue(res["ok"])
+        sources, options = ext.calls[0]
+        self.assertEqual(sources, ["/tmp/a.jsonl"])
+        self.assertEqual(options["batch_idx"], 4)
+        self.assertEqual(options["index_offset"], 11)
+        self.assertEqual(options["parallel_workers"], 3)
+        self.assertEqual(options["chunk_size"], 99)
+        self.assertEqual(options["max_records"], 123)
 
 
 if __name__ == "__main__":

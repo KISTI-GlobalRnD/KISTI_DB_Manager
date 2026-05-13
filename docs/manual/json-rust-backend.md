@@ -9,6 +9,7 @@ The Rust extension is intentionally scoped.
 
 - JSON record flattening for supported parquet artifact runs
 - Optional raw JSONL parsing inside Rust for parse/parquet-only runs
+- Optional direct JSONL/NDJSON source-file reading inside Rust for supported parse/parquet-only runs
 - Parquet writing through Arrow
 - OpenAlex `semantic_column_strip` ID compaction in the Rust path
 - Optional parquet-to-MySQL batch insert when `--rust-db-load` is enabled
@@ -59,6 +60,8 @@ kisti-db-manager json run \
 
 This path is opt-in and intentionally narrow. It requires `flatten_backend=rust-arrow`, `persist_parquet_files=true`, no DB/create/index/optimize stages, no `records_key`, and plain `.jsonl`/`.ndjson` input. Reports include `rust_raw_jsonl_parse_effective` and the Rust parser timing key `rust_arrow.json_parse` when measurable.
 
+For the narrowest fast path, add `--rust-raw-jsonl-file-parse` as well. That keeps the same parse/parquet-only constraints and bypasses Python's line-reading loop. It currently falls back to the batch raw parser when ID compaction is enabled.
+
 For backend comparison:
 
 ```bash
@@ -73,7 +76,7 @@ kisti-db-manager json profile-parallel \
 ```
 
 `json profile-parallel` keeps per-run reports and parquet artifacts by default.
-Add `--rust-raw-jsonl-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser fast path.
+Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser and direct file reader fast paths.
 It also writes:
 
 - `parallel_profile.json`
@@ -174,6 +177,7 @@ The Rust path is intentionally conservative.
 - `persist_parquet_files=false` cannot use Rust
 - custom Python `extract_fn` disables Rust
 - raw JSONL parsing is limited to explicit `rust-arrow` parse/parquet-only runs
+- direct Rust JSONL file parsing currently excludes ID compaction and uses the batch raw parser instead
 - schema-freeze extra-column mode disables direct Rust DB load
 - DB indexes and optimize remain Python-managed
 

@@ -1585,6 +1585,66 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(sub_table["id"], [2])
             self.assertIn("bad json", quarantine_path.read_text(encoding="utf-8"))
 
+    def test_run_json_pipeline_rust_arrow_direct_jsonl_file_parse_path(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "x.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"id": 1, "name": "ok"}),
+                        "{bad json",
+                        json.dumps(["not", "a", "dict"]),
+                        json.dumps({"id": 2, "items": [{"x": 7}]}),
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            out_dir = root / "parquet_out"
+            quarantine_path = root / "quarantine.jsonl"
+            from KISTI_DB_Manager.quarantine import QuarantineWriter
+
+            data_config = {
+                "PATH": str(root),
+                "file_name": "x.jsonl",
+                "file_type": "jsonl",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "persist_parquet_files": True,
+                "persist_parquet_dir": str(out_dir),
+                "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": True,
+                "rust_raw_jsonl_file_parse": True,
+            }
+
+            res = run_json_pipeline(
+                data_config,
+                {},
+                chunk_size=10,
+                create=False,
+                load=False,
+                index=False,
+                optimize=False,
+                continue_on_error=True,
+                quarantine=QuarantineWriter(quarantine_path),
+            )
+
+            self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+            self.assertEqual(res.report.artifacts.get("rust_raw_jsonl_file_parse_effective"), True)
+            self.assertEqual(res.report.stats.get("records_read"), 4)
+            self.assertEqual(res.report.stats.get("records_ok"), 2)
+            self.assertEqual(res.report.stats.get("records_failed"), 2)
+            self.assertGreaterEqual(res.report.stats.get("parquet_batches_total", 0), 1)
+            main_table = self._read_single_parquet_table(pq, out_dir, "base").to_pydict()
+            self.assertEqual(main_table["id"], [1, 2])
+            sub_table = self._read_single_parquet_table(pq, out_dir, "base__items").to_pydict()
+            self.assertEqual(sub_table["id"], [2])
+            quarantine_text = quarantine_path.read_text(encoding="utf-8")
+            self.assertIn("bad json", quarantine_text)
+            self.assertIn("non-dict JSON record", quarantine_text)
+
     def test_rust_arrow_raw_jsonl_rejects_integer_outside_u64(self):
         self._require_rust_arrow_with_pyarrow()
 

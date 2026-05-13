@@ -2,6 +2,7 @@
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::fs::{self, OpenOptions};
+use std::io::{BufRead, BufReader};
 use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Instant;
@@ -118,13 +119,17 @@ struct TableMeta {
 }
 
 struct PersistOutput {
+    records_read: usize,
+    bytes_read: usize,
     records_ok: usize,
     records_failed: usize,
     parquet_files_persisted: usize,
     parquet_rows_emitted: usize,
+    parquet_batches_total: usize,
     tables: Vec<TableMeta>,
     errors: Vec<String>,
     error_indices: Vec<usize>,
+    error_records: Vec<JsonlErrorRecord>,
     timings_ms: Vec<(&'static str, u64)>,
     id_compaction_state: Option<IdCompactionState>,
 }
@@ -140,6 +145,14 @@ struct RustMysqlTableMeta {
     table_sql: String,
     path: String,
     rows_loaded: usize,
+}
+
+struct JsonlErrorRecord {
+    source_path: String,
+    line_no: usize,
+    record_index: usize,
+    raw_line: String,
+    error: String,
 }
 
 fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
@@ -202,33 +215,45 @@ fn py_to_json(obj: &Bound<'_, PyAny>) -> PyResult<Value> {
 fn parse_json_line_value(obj: &Bound<'_, PyAny>) -> PyResult<Result<Option<Value>, String>> {
     if let Ok(v) = obj.downcast::<PyBytes>() {
         let bytes = v.as_bytes();
-        if bytes.iter().all(|b| b.is_ascii_whitespace()) {
-            return Ok(Ok(None));
-        }
-        return Ok(serde_json::from_slice::<Value>(bytes)
-            .map(Some)
-            .map_err(|e| format!("failed to parse JSONL line: {e}")));
+        return Ok(parse_json_bytes_value(bytes));
     }
     if let Ok(v) = obj.extract::<String>() {
-        let line = v.trim();
-        if line.is_empty() {
-            return Ok(Ok(None));
-        }
-        return Ok(serde_json::from_str::<Value>(line)
-            .map(Some)
-            .map_err(|e| format!("failed to parse JSONL line: {e}")));
+        return Ok(parse_json_bytes_value(v.as_bytes()));
     }
     if let Ok(v) = obj.extract::<Vec<u8>>() {
-        if v.iter().all(|b| b.is_ascii_whitespace()) {
-            return Ok(Ok(None));
-        }
-        return Ok(serde_json::from_slice::<Value>(&v)
-            .map(Some)
-            .map_err(|e| format!("failed to parse JSONL line: {e}")));
+        return Ok(parse_json_bytes_value(&v));
     }
     Err(PyRuntimeError::new_err(
         "rust-arrow JSONL input records must be str or bytes",
     ))
+}
+
+fn parse_json_bytes_value(bytes: &[u8]) -> Result<Option<Value>, String> {
+    let trimmed = trim_ascii_whitespace(bytes);
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_slice::<Value>(trimmed)
+        .map(Some)
+        .map_err(|e| format!("failed to parse JSONL line: {e}"))
+}
+
+fn trim_ascii_whitespace(mut bytes: &[u8]) -> &[u8] {
+    while let Some((first, rest)) = bytes.split_first() {
+        if first.is_ascii_whitespace() {
+            bytes = rest;
+        } else {
+            break;
+        }
+    }
+    while let Some((last, rest)) = bytes.split_last() {
+        if last.is_ascii_whitespace() {
+            bytes = rest;
+        } else {
+            break;
+        }
+    }
+    bytes
 }
 
 fn get_string_option(options: &Bound<'_, PyDict>, key: &str, default: &str) -> PyResult<String> {
@@ -2192,15 +2217,20 @@ fn persist_indexed_json_values_inner(
     timings_ms.push(("json.flatten", flatten_ms));
     timings_ms.push(("json.parquet.persist", parquet_ms));
     timings_ms.push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
+    let records_read = records_ok + records_failed;
 
     Ok(PersistOutput {
+        records_read,
+        bytes_read: 0,
         records_ok,
         records_failed,
         parquet_files_persisted: file_count,
         parquet_rows_emitted: row_count,
+        parquet_batches_total: usize::from(file_count > 0),
         tables: table_meta,
         errors,
         error_indices,
+        error_records: Vec::new(),
         timings_ms,
         id_compaction_state: if options.id_compaction.enabled {
             Some(id_compaction_state)
@@ -2218,11 +2248,14 @@ fn persist_output_to_py(
     let result = PyDict::new_bound(py);
     result.set_item("ok", true)?;
     result.set_item("effective_backend", "rust-arrow")?;
+    result.set_item("records_read", output.records_read)?;
+    result.set_item("bytes_read", output.bytes_read)?;
     result.set_item("records_ok", output.records_ok)?;
     result.set_item("records_failed", output.records_failed)?;
     result.set_item("parquet_files_persisted", output.parquet_files_persisted)?;
     result.set_item("parquet_rows_emitted", output.parquet_rows_emitted)?;
     result.set_item("parquet_tables_written", output.tables.len())?;
+    result.set_item("parquet_batches_total", output.parquet_batches_total)?;
     let table_items = PyList::empty_bound(py);
     for meta in output.tables {
         let item = PyDict::new_bound(py);
@@ -2235,6 +2268,17 @@ fn persist_output_to_py(
     result.set_item("tables", table_items)?;
     result.set_item("errors", output.errors)?;
     result.set_item("error_indices", output.error_indices)?;
+    let error_records = PyList::empty_bound(py);
+    for error_record in output.error_records {
+        let item = PyDict::new_bound(py);
+        item.set_item("source_path", error_record.source_path)?;
+        item.set_item("line_no", error_record.line_no)?;
+        item.set_item("record_index", error_record.record_index)?;
+        item.set_item("raw_line", error_record.raw_line)?;
+        item.set_item("error", error_record.error)?;
+        error_records.append(item)?;
+    }
+    result.set_item("error_records", error_records)?;
     let timings = PyDict::new_bound(py);
     for (key, value) in output.timings_ms {
         timings.set_item(key, value)?;
@@ -2266,6 +2310,273 @@ fn persist_indexed_json_values(
         )
     })?;
     persist_output_to_py(py, output, &id_compaction_options)
+}
+
+fn jsonl_context(source_path: &str, line_no: usize, record_index: usize) -> Value {
+    let mut ctx = serde_json::Map::new();
+    ctx.insert(
+        "source_path".to_string(),
+        Value::String(source_path.to_string()),
+    );
+    ctx.insert("line_no".to_string(), Value::Number(Number::from(line_no)));
+    ctx.insert(
+        "record_index".to_string(),
+        Value::Number(Number::from(record_index)),
+    );
+    Value::Object(ctx)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn push_jsonl_error(
+    errors: &mut Vec<String>,
+    error_indices: &mut Vec<usize>,
+    error_records: &mut Vec<JsonlErrorRecord>,
+    source_path: &str,
+    line_no: usize,
+    record_index: usize,
+    raw_line: &[u8],
+    error: String,
+) {
+    errors.push(format!("record {record_index}: {error}"));
+    error_indices.push(record_index);
+    error_records.push(JsonlErrorRecord {
+        source_path: source_path.to_string(),
+        line_no,
+        record_index,
+        raw_line: String::from_utf8_lossy(trim_ascii_whitespace(raw_line)).to_string(),
+        error,
+    });
+}
+
+fn merge_persist_outputs(target: &mut PersistOutput, output: PersistOutput) {
+    target.records_ok += output.records_ok;
+    target.records_failed += output.records_failed;
+    target.parquet_files_persisted += output.parquet_files_persisted;
+    target.parquet_rows_emitted += output.parquet_rows_emitted;
+    target.parquet_batches_total += output.parquet_batches_total;
+    target.tables.extend(output.tables);
+    target.errors.extend(output.errors);
+    target.error_indices.extend(output.error_indices);
+    target.error_records.extend(output.error_records);
+    for (key, value) in output.timings_ms {
+        if matches!(key, "json.flatten" | "json.parquet.persist") {
+            if let Some((_, existing)) = target.timings_ms.iter_mut().find(|(name, _)| *name == key)
+            {
+                *existing += value;
+            } else {
+                target.timings_ms.push((key, value));
+            }
+        }
+    }
+}
+
+fn persist_jsonl_sources_inner(
+    options: Options,
+    parquet_root: PathBuf,
+    sources: Vec<String>,
+    chunk_size: usize,
+    max_records: Option<usize>,
+    total_start: Instant,
+) -> PyResult<PersistOutput> {
+    if options.id_compaction.enabled {
+        return Err(PyRuntimeError::new_err(
+            "rust-arrow direct JSONL file parser does not support id_compaction yet; use batch raw JSONL parsing",
+        ));
+    }
+
+    let mut aggregate = PersistOutput {
+        records_read: 0,
+        bytes_read: 0,
+        records_ok: 0,
+        records_failed: 0,
+        parquet_files_persisted: 0,
+        parquet_rows_emitted: 0,
+        parquet_batches_total: 0,
+        tables: Vec::new(),
+        errors: Vec::new(),
+        error_indices: Vec::new(),
+        error_records: Vec::new(),
+        timings_ms: vec![
+            ("rust_arrow.json_parse", 0),
+            ("json.flatten", 0),
+            ("json.parquet.persist", 0),
+        ],
+        id_compaction_state: None,
+    };
+
+    let mut values = IndexedJsonValues::with_capacity(chunk_size);
+    let mut contexts = Vec::<Value>::with_capacity(chunk_size);
+    let mut chunk_start_index = options.index_offset;
+    let mut next_record_index = options.index_offset;
+    let mut batch_idx = options.batch_idx;
+    let mut parse_ns = 0u128;
+
+    let flush_chunk = |values: &mut IndexedJsonValues,
+                       contexts: &mut Vec<Value>,
+                       batch_idx: &mut usize,
+                       chunk_start_index: usize,
+                       aggregate: &mut PersistOutput,
+                       options: &Options|
+     -> PyResult<()> {
+        if values.is_empty() {
+            return Ok(());
+        }
+        let mut chunk_options = options.clone();
+        chunk_options.batch_idx = *batch_idx;
+        chunk_options.index_offset = chunk_start_index;
+        chunk_options.record_contexts = std::mem::take(contexts);
+        let chunk_values = std::mem::take(values);
+        let output = persist_indexed_json_values_inner(
+            chunk_options,
+            parquet_root.clone(),
+            chunk_values,
+            PersistExtras {
+                initial_records_failed: 0,
+                errors: Vec::new(),
+                error_indices: Vec::new(),
+                timings_ms: Vec::new(),
+            },
+            Instant::now(),
+        )?;
+        merge_persist_outputs(aggregate, output);
+        *batch_idx += 1;
+        Ok(())
+    };
+
+    'sources: for source in sources.iter() {
+        let path = PathBuf::from(source);
+        let file = fs::File::open(&path).map_err(|e| {
+            PyRuntimeError::new_err(format!(
+                "failed to open Rust JSONL source {}: {e}",
+                path.display()
+            ))
+        })?;
+        let mut reader = BufReader::new(file);
+        let mut raw_line = Vec::<u8>::new();
+        let mut line_no = 0usize;
+        loop {
+            raw_line.clear();
+            let bytes = reader.read_until(b'\n', &mut raw_line).map_err(|e| {
+                PyRuntimeError::new_err(format!(
+                    "failed to read Rust JSONL source {}: {e}",
+                    path.display()
+                ))
+            })?;
+            if bytes == 0 {
+                break;
+            }
+            line_no += 1;
+            if trim_ascii_whitespace(&raw_line).is_empty() {
+                continue;
+            }
+            if max_records.is_some_and(|limit| aggregate.records_read >= limit) {
+                break 'sources;
+            }
+            aggregate.records_read += 1;
+            aggregate.bytes_read += raw_line.len();
+            let record_index = next_record_index;
+            next_record_index += 1;
+
+            let parse_start = Instant::now();
+            let parsed = parse_json_bytes_value(&raw_line);
+            parse_ns += parse_start.elapsed().as_nanos();
+
+            match parsed {
+                Ok(Some(value @ Value::Object(_))) => match validate_json_numbers(&value, "") {
+                    Ok(()) => {
+                        if values.is_empty() {
+                            chunk_start_index = record_index;
+                        }
+                        let local_index = record_index - chunk_start_index;
+                        values.push((local_index, value));
+                        contexts.push(jsonl_context(source, line_no, record_index));
+                    }
+                    Err(e) => {
+                        aggregate.records_failed += 1;
+                        push_jsonl_error(
+                            &mut aggregate.errors,
+                            &mut aggregate.error_indices,
+                            &mut aggregate.error_records,
+                            source,
+                            line_no,
+                            record_index,
+                            &raw_line,
+                            format!("{e}; use the Python backend"),
+                        );
+                    }
+                },
+                Ok(Some(value)) => {
+                    aggregate.records_failed += 1;
+                    push_jsonl_error(
+                        &mut aggregate.errors,
+                        &mut aggregate.error_indices,
+                        &mut aggregate.error_records,
+                        source,
+                        line_no,
+                        record_index,
+                        &raw_line,
+                        format!(
+                            "non-dict JSON record encountered (type={})",
+                            value_type_name(&value)
+                        ),
+                    );
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    aggregate.records_failed += 1;
+                    push_jsonl_error(
+                        &mut aggregate.errors,
+                        &mut aggregate.error_indices,
+                        &mut aggregate.error_records,
+                        source,
+                        line_no,
+                        record_index,
+                        &raw_line,
+                        e,
+                    );
+                }
+            }
+
+            if values.len() >= chunk_size {
+                flush_chunk(
+                    &mut values,
+                    &mut contexts,
+                    &mut batch_idx,
+                    chunk_start_index,
+                    &mut aggregate,
+                    &options,
+                )?;
+            }
+        }
+    }
+
+    flush_chunk(
+        &mut values,
+        &mut contexts,
+        &mut batch_idx,
+        chunk_start_index,
+        &mut aggregate,
+        &options,
+    )?;
+    if let Some((_, total_ms)) = aggregate
+        .timings_ms
+        .iter_mut()
+        .find(|(name, _)| *name == "rust_arrow.total")
+    {
+        *total_ms = total_start.elapsed().as_millis() as u64;
+    } else {
+        aggregate
+            .timings_ms
+            .push(("rust_arrow.total", total_start.elapsed().as_millis() as u64));
+    }
+    if let Some((_, parse_ms)) = aggregate
+        .timings_ms
+        .iter_mut()
+        .find(|(name, _)| *name == "rust_arrow.json_parse")
+    {
+        *parse_ms = (parse_ns / 1_000_000) as u64;
+    }
+    Ok(aggregate)
 }
 
 #[allow(clippy::useless_conversion)]
@@ -2360,10 +2671,45 @@ fn persist_json_lines_batch(
     )
 }
 
+#[allow(clippy::useless_conversion)]
+#[pyfunction]
+fn persist_jsonl_sources(
+    py: Python<'_>,
+    sources: &Bound<'_, PyAny>,
+    options: &Bound<'_, PyDict>,
+) -> PyResult<PyObject> {
+    let total_start = Instant::now();
+    let chunk_size = get_usize_option(options, "chunk_size", 1000)?.max(1);
+    let max_records = match options.get_item("max_records")? {
+        Some(value) if !value.is_none() => Some(value.extract::<usize>()?),
+        _ => None,
+    };
+    let options = parse_options(options)?;
+    let id_compaction_options = options.id_compaction.clone();
+    let parquet_root = prepare_parquet_root(&options.parquet_dir)?;
+    let source_items = sources.downcast::<PyList>()?;
+    let mut source_paths = Vec::<String>::with_capacity(source_items.len());
+    for item in source_items.iter() {
+        source_paths.push(item.extract::<String>()?);
+    }
+    let output = py.allow_threads(move || {
+        persist_jsonl_sources_inner(
+            options,
+            parquet_root,
+            source_paths,
+            chunk_size,
+            max_records,
+            total_start,
+        )
+    })?;
+    persist_output_to_py(py, output, &id_compaction_options)
+}
+
 #[pymodule]
 fn kisti_json_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(persist_json_batch, m)?)?;
     m.add_function(wrap_pyfunction!(persist_json_lines_batch, m)?)?;
+    m.add_function(wrap_pyfunction!(persist_jsonl_sources, m)?)?;
     m.add_function(wrap_pyfunction!(load_parquet_files_to_mysql, m)?)?;
     Ok(())
 }

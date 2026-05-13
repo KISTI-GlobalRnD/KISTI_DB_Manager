@@ -223,6 +223,48 @@ def persist_json_lines_batch_to_parquet(
     return dict(result)
 
 
+def persist_jsonl_sources_to_parquet(
+    sources: Sequence[str | Path],
+    *,
+    base_table: str,
+    index_key: str,
+    except_keys: Sequence[str] | None,
+    excepted_expand_dict: bool,
+    sep: str,
+    parquet_dir: str | Path,
+    batch_idx: int,
+    index_offset: int,
+    parallel_workers: int,
+    chunk_size: int,
+    max_records: int | None = None,
+    id_compaction: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    ext = _load_extension()
+    persist_fn = getattr(ext, "persist_jsonl_sources", None)
+    if not callable(persist_fn):
+        raise RustArrowBackendUnavailable("Rust Arrow backend does not support direct JSONL source parsing")
+    options = _persist_options(
+        base_table=base_table,
+        index_key=index_key,
+        except_keys=except_keys,
+        excepted_expand_dict=excepted_expand_dict,
+        sep=sep,
+        parquet_dir=parquet_dir,
+        batch_idx=batch_idx,
+        index_offset=index_offset,
+        record_contexts=None,
+        parallel_workers=parallel_workers,
+        id_compaction=id_compaction,
+    )
+    options["chunk_size"] = int(chunk_size or 1000)
+    if max_records is not None:
+        options["max_records"] = int(max_records)
+    result = persist_fn([str(Path(source)) for source in sources], options)
+    if not isinstance(result, Mapping):
+        raise RustArrowBackendUnavailable("Rust Arrow direct JSONL source backend returned an invalid result")
+    return dict(result)
+
+
 def load_parquet_files_to_mysql(
     tables: Sequence[Mapping[str, Any]],
     *,

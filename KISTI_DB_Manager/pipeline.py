@@ -1165,6 +1165,7 @@ def run_json_pipeline(
         normalize_flatten_backend,
         persist_json_batch_to_parquet,
         persist_json_lines_batch_to_parquet,
+        persist_jsonl_sources_to_parquet,
         rust_arrow_unsupported_reason,
     )
 
@@ -1172,7 +1173,9 @@ def run_json_pipeline(
     report.set_artifact("flatten_backend", flatten_backend_requested)
     report.set_artifact("flatten_backend_requested", flatten_backend_requested)
     rust_raw_jsonl_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_parse", False), default=False)
+    rust_raw_jsonl_file_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_file_parse", False), default=False)
     report.set_artifact("rust_raw_jsonl_parse_requested", bool(rust_raw_jsonl_parse_requested))
+    report.set_artifact("rust_raw_jsonl_file_parse_requested", bool(rust_raw_jsonl_file_parse_requested))
 
     # Best-effort progress checkpointing (for crash recovery / quick shard detection).
     # This intentionally writes a tiny JSON snapshot periodically without waiting for the final report.
@@ -4454,9 +4457,123 @@ def run_json_pipeline(
             if raw_jsonl_disabled_reason and rust_raw_jsonl_parse_requested:
                 report.set_artifact("rust_raw_jsonl_parse_disabled_reason", raw_jsonl_disabled_reason)
             report.set_artifact("rust_raw_jsonl_parse_effective", raw_jsonl_disabled_reason is None)
+            raw_jsonl_file_disabled_reason = None
+            if not rust_raw_jsonl_file_parse_requested:
+                raw_jsonl_file_disabled_reason = "not requested"
+            elif raw_jsonl_disabled_reason is not None:
+                raw_jsonl_file_disabled_reason = raw_jsonl_disabled_reason
+            elif id_compactor.enabled:
+                raw_jsonl_file_disabled_reason = "id_compaction is not supported by direct Rust JSONL file parser"
+            if raw_jsonl_file_disabled_reason and rust_raw_jsonl_file_parse_requested:
+                report.set_artifact("rust_raw_jsonl_file_parse_disabled_reason", raw_jsonl_file_disabled_reason)
+            report.set_artifact("rust_raw_jsonl_file_parse_effective", raw_jsonl_file_disabled_reason is None)
 
             batch_index_offset = 0
-            if raw_jsonl_disabled_reason is None and raw_jsonl_sources is not None:
+            if raw_jsonl_file_disabled_reason is None and raw_jsonl_sources is not None:
+                import time
+
+                try:
+                    rust_t0 = time.perf_counter()
+                    rust_result = persist_jsonl_sources_to_parquet(
+                        raw_jsonl_sources,
+                        base_table=base_table,
+                        index_key=index_key,
+                        except_keys=except_keys,
+                        excepted_expand_dict=bool(excepted_expand_dict),
+                        sep=key_sep,
+                        parquet_dir=persist_parquet_dir,
+                        batch_idx=int(batch_no),
+                        index_offset=int(global_index),
+                        parallel_workers=int(parallel_workers or 0),
+                        chunk_size=int(chunk_size),
+                        max_records=max_records,
+                        id_compaction=None,
+                    )
+                except Exception as e:
+                    rust_explicit_failed = True
+                    report.exception(
+                        stage="json_pipeline.rust_arrow_file_parse",
+                        message="Rust Arrow direct JSONL file parser failed",
+                        exc=e,
+                    )
+                    q.write(stage="json_pipeline.rust_arrow_file_parse", record={"table_name": base_table}, exc=e)
+                    if not continue_on_error:
+                        raise
+                else:
+                    report.set_artifact("flatten_backend_effective", BACKEND_RUST_ARROW)
+                    timings = rust_result.get("timings_ms") if isinstance(rust_result.get("timings_ms"), Mapping) else {}
+                    total_ms = int(round((time.perf_counter() - rust_t0) * 1000.0))
+                    rust_json_parse_ms = int(timings.get("rust_arrow.json_parse", 0) or 0)
+                    flatten_ms = int(timings.get("json.flatten", 0) or 0)
+                    parquet_ms = int(timings.get("json.parquet.persist", 0) or 0)
+                    rust_total_ms = int(timings.get("rust_arrow.total", total_ms) or 0)
+                    if rust_json_parse_ms > 0:
+                        report.add_time_ms("rust_arrow.json_parse", rust_json_parse_ms)
+                    if flatten_ms > 0:
+                        report.add_time_ms("json.flatten", flatten_ms)
+                    if parquet_ms > 0:
+                        report.add_time_ms("json.parquet.persist", parquet_ms)
+                    if rust_total_ms > 0:
+                        report.add_time_ms("rust_arrow.total", rust_total_ms)
+                    records_read = int(rust_result.get("records_read") or 0)
+                    bytes_read = int(rust_result.get("bytes_read") or 0)
+                    records_ok = int(rust_result.get("records_ok") or 0)
+                    failed = int(rust_result.get("records_failed") or 0)
+                    report.bump("records_read", records_read)
+                    report.bump("records_total", records_read)
+                    report.bump("records_ok", records_ok)
+                    if bytes_read:
+                        report.bump("io_bytes_read", bytes_read)
+                    if failed:
+                        report.bump("records_failed", failed)
+                        error_records = list(rust_result.get("error_records") or [])
+                        for item in error_records:
+                            if not isinstance(item, Mapping):
+                                continue
+                            q.write(
+                                stage="iter_json_records",
+                                record=str(item.get("raw_line") or ""),
+                                index=item.get("line_no", item.get("record_index")),
+                                exc=RuntimeError(str(item.get("error") or "Rust JSONL parse failed")),
+                                source=item.get("source_path"),
+                                line_no=item.get("line_no"),
+                            )
+                        report.warn(
+                            stage="json_pipeline.rust_arrow_file_parse",
+                            message="Rust Arrow direct JSONL parser reported failed records",
+                            failed=failed,
+                            errors=list(rust_result.get("errors") or [])[:3],
+                        )
+
+                    tables_meta = list(rust_result.get("tables") or [])
+                    for table_info in tables_meta:
+                        if not isinstance(table_info, Mapping):
+                            continue
+                        table_original = str(table_info.get("table") or "")
+                        cols = [str(c) for c in list(table_info.get("columns") or []) if str(c)]
+                        if table_original and cols:
+                            ensure_name_map(table_original, cols)
+
+                    parquet_tables_written = int(rust_result.get("parquet_tables_written") or len(tables_meta))
+                    parquet_files_written = int(rust_result.get("parquet_files_persisted") or parquet_tables_written)
+                    parquet_rows_written = int(rust_result.get("parquet_rows_emitted") or 0)
+                    parquet_batches_total = int(rust_result.get("parquet_batches_total") or 0)
+                    report.bump("parquet_files_persisted", parquet_files_written)
+                    report.bump("parquet_rows_emitted", parquet_rows_written)
+                    if parquet_batches_total:
+                        report.bump("parquet_batches_total", parquet_batches_total)
+                    batch_no += parquet_batches_total
+                    global_index += records_read
+                    parquet_progress = {
+                        "tables": int(parquet_tables_written),
+                        "files_delta": int(parquet_files_written),
+                        "rows_delta": int(parquet_rows_written),
+                        "duration_ms": int(parquet_ms or total_ms),
+                        "backend": BACKEND_RUST_ARROW,
+                        "direct_jsonl_file_parse": True,
+                    }
+                    report.set_artifact("latest_parquet_batch", dict(parquet_progress))
+            elif raw_jsonl_disabled_reason is None and raw_jsonl_sources is not None:
                 raw_batch: list[bytes | str] = []
                 reached_max_records = False
                 for raw_source in raw_jsonl_sources:
