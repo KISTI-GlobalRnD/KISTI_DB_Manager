@@ -1,0 +1,99 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  python:
+    name: python-${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version:
+          - '3.10'
+          - '3.11'
+          - '3.12'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      - name: Install package and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[tabular,json,db,viz,review,docs,rust]"
+
+      - name: Run unit tests
+        run: python -m unittest discover -s tests -q
+
+      - name: Build documentation
+        run: mkdocs build --strict
+
+  rust:
+    name: rust
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+          rustup component add rustfmt
+
+      - name: Check formatting
+        run: cargo fmt --manifest-path crates/kisti_json_rs/Cargo.toml --check
+
+      - name: Check crate
+        run: cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
+
+      - name: Run crate tests
+        run: cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
+
+  package:
+    name: package
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install build backend
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install build
+
+      - name: Build wheel and sdist
+        run: python -m build --sdist --wheel
+
+      - name: Smoke-test built wheel
+        run: |
+          python -m venv /tmp/kisti-wheel-smoke
+          . /tmp/kisti-wheel-smoke/bin/activate
+          WHEEL="$(ls dist/kisti_db_manager-*.whl)"
+          python -m pip install --upgrade pip
+          python -m pip install "$WHEEL"
+          kisti-db-manager version
+          kisti-db-manager --help
