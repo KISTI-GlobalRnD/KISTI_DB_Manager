@@ -37,9 +37,14 @@ These commands are for preflight inspection, schema validation, and artifact gen
 
 - `report *`
 - `quarantine summary`
-- helper scripts under `scripts/`
+- `parquet *`
+- `openalex materialize / benchmark-load / validate-reload`
+- `smoke rust-db-load`
 
 These are for profiling, restart, diff, and post-parse materialization.
+Source-checkout scripts remain available for maintainer and dataset-specific
+workflows, but they are not automatically part of the installed product
+contract. See [CLI and Script Boundaries](../reference/script-boundaries.md).
 
 ## Architectural split
 
@@ -77,6 +82,8 @@ Use this map when changing code or tracing CLI behavior:
 |---|---|---|
 | CLI facade | `KISTI_DB_Manager/cli.py` | compatibility entrypoint |
 | CLI implementation | `KISTI_DB_Manager/_cli/` | parser registration and command handlers |
+| Packaged OpenAlex operations | `KISTI_DB_Manager/openalex_*.py` | reusable OpenAlex materialize, benchmark, validation helpers |
+| Parquet operations | `KISTI_DB_Manager/parquet_*.py` | artifact inspection, reload, finalization, replay/repair helpers |
 | Review facade | `KISTI_DB_Manager/review.py` | compatibility imports for existing callers |
 | Review core | `KISTI_DB_Manager/_review/core.py` | `TableInfo`, DB introspection, table-info merge helpers |
 | Review plan | `KISTI_DB_Manager/_review/plan.py` | `review plan` orchestration |

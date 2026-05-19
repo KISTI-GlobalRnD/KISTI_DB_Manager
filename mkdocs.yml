@@ -41,6 +41,7 @@ nav:
   - Reference:
       - Reference Overview: reference/index.md
       - CLI Quick Reference: reference/cli.md
+      - CLI and Script Boundaries: reference/script-boundaries.md
       - JSON Modes: reference/modes.md
       - Artifacts Reference: reference/artifacts.md
       - Examples: reference/examples.md

@@ -6,6 +6,7 @@ While the manual is workflow-oriented, this section is optimized for finding com
 ## Contents
 
 - [CLI Quick Reference](cli.md)
+- [CLI and Script Boundaries](script-boundaries.md)
 - [JSON Modes](modes.md)
 - [Artifacts Reference](artifacts.md)
 - [Examples](examples.md)

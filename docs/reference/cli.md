@@ -1,5 +1,9 @@
 # CLI Quick Reference
 
+This page lists the supported `kisti-db-manager` command surface. Source-checkout
+scripts are compatibility or maintainer tools; see
+[CLI and Script Boundaries](script-boundaries.md) for the distinction.
+
 ## General
 
 ```bash
@@ -111,7 +115,8 @@ kisti-db-manager parquet finalize --plan runs/<run_dir>/plans/parquet_reload_pla
 
 `parquet inspect` validates the parquet artifact contract before DB work: `schema_manifest.json`, ID compaction provenance, `rules_hash`, selected table schemas, and mixed source/compacted ID columns. Add `--strict-schema-manifest` to fail on manifest/parquet mismatches.
 
-Source-checkout compatibility script wrappers are also available:
+Source-checkout compatibility script wrappers are also available, but new
+operator instructions should prefer the `kisti-db-manager` commands above:
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py runs/<openalex_parse_run_dir> --dotenv path/to/.env
