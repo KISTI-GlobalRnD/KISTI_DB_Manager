@@ -1,0 +1,448 @@
+from __future__ import annotations
+
+import json
+from typing import Any, Iterable, Mapping
+
+from ..namemap import load_namemap
+from ..naming import MYSQL_IDENTIFIER_MAX_LEN, truncate_table_name
+from ..review import TableInfo
+from .schema_graph import (
+    fallback_join_sql,
+    infer_table_role,
+    quote_mysql_identifier,
+    relationship_join_sql,
+    table_depth,
+    table_display_label,
+)
+
+
+def _human_bytes(value: int | None) -> str:
+    if value is None:
+        return "n/a"
+    try:
+        n = float(int(value))
+    except Exception:
+        return str(value)
+    units = ["B", "KB", "MB", "GB", "TB", "PB"]
+    idx = 0
+    while n >= 1024.0 and idx < len(units) - 1:
+        n /= 1024.0
+        idx += 1
+    if idx == 0:
+        return f"{int(n)} {units[idx]}"
+    return f"{n:.1f} {units[idx]}"
+
+
+def _qi(name: str) -> str:
+    return quote_mysql_identifier(name)
+
+
+def _collect_predicted_columns_by_sql(report: Mapping[str, Any] | None) -> dict[str, list[dict[str, Any]]]:
+    artifacts = (report or {}).get("artifacts") or {}
+    result: dict[str, list[dict[str, Any]]] = {}
+    name_maps_json = artifacts.get("name_maps_json")
+    if isinstance(name_maps_json, Mapping):
+        for _table_original, nm_dict in name_maps_json.items():
+            nm = load_namemap(nm_dict)
+            if nm is None:
+                continue
+            cols = []
+            for col in nm.columns_sql:
+                cols.append(
+                    {
+                        "name": str(col),
+                        "data_type": "longtext",
+                        "column_type": "LONGTEXT",
+                        "is_nullable": "YES",
+                        "column_key": "PRI" if str(col) == "id" else "",
+                        "extra": "",
+                    }
+                )
+            result[nm.table_sql] = cols
+    else:
+        nm = load_namemap(artifacts.get("name_map"))
+        if nm is not None:
+            result[nm.table_sql] = [
+                {
+                    "name": str(col),
+                    "data_type": "longtext",
+                    "column_type": "LONGTEXT",
+                    "is_nullable": "YES",
+                    "column_key": "PRI" if str(col) == "id" else "",
+                    "extra": "",
+                }
+                for col in nm.columns_sql
+            ]
+    return result
+
+
+def _apply_predicted_columns(
+    table_infos: list[TableInfo],
+    predicted_by_sql: Mapping[str, list[dict[str, Any]]],
+) -> list[TableInfo]:
+    out: list[TableInfo] = []
+    for ti in table_infos:
+        cols = ti.columns if ti.columns else predicted_by_sql.get(ti.name_sql)
+        out.append(
+            TableInfo(
+                name_sql=ti.name_sql,
+                name_original=ti.name_original,
+                row_count=ti.row_count,
+                row_count_exact=ti.row_count_exact,
+                table_rows_estimate=ti.table_rows_estimate,
+                data_length=ti.data_length,
+                index_length=ti.index_length,
+                engine=ti.engine,
+                collation=ti.collation,
+                columns=cols,
+                indexes=ti.indexes,
+            )
+        )
+    return out
+
+
+def prepare_schema_table_infos(
+    *,
+    report: Mapping[str, Any] | None,
+    table_infos: list[TableInfo],
+) -> list[TableInfo]:
+    predicted_columns = _collect_predicted_columns_by_sql(report)
+    ordered = sorted(table_infos, key=lambda ti: ti.name_sql)
+    return _apply_predicted_columns(ordered, predicted_columns)
+
+
+def collect_schema_ddls_by_sql(
+    *,
+    report: Mapping[str, Any] | None,
+    table_infos: Iterable[TableInfo],
+) -> dict[str, str]:
+    artifacts = (report or {}).get("artifacts") or {}
+    ddls: dict[str, str] = {}
+    raw = artifacts.get("create_table_sql_json")
+    if isinstance(raw, Mapping):
+        for key, value in raw.items():
+            if isinstance(value, str) and value.strip():
+                ddls[str(key)] = value
+    single = artifacts.get("create_table_sql")
+    if isinstance(single, str) and single.strip():
+        for ti in table_infos:
+            if ti.name_sql not in ddls:
+                ddls[ti.name_sql] = single
+                break
+    if ddls:
+        return ddls
+
+    synthesized: dict[str, str] = {}
+    for ti in table_infos:
+        if not ti.columns:
+            continue
+        lines: list[str] = []
+        pk_cols: list[str] = []
+        for col in ti.columns:
+            name = str(col.get("name") or "").strip()
+            if not name:
+                continue
+            column_type = str(col.get("column_type") or col.get("data_type") or "LONGTEXT")
+            nullable = str(col.get("is_nullable") or "YES").upper() == "YES"
+            extra = str(col.get("extra") or "").strip()
+            if str(col.get("column_key") or "").upper() == "PRI":
+                pk_cols.append(name)
+            part = f"  `{_qi(name)}` {column_type}"
+            if not nullable:
+                part += " NOT NULL"
+            if extra:
+                part += f" {extra}"
+            lines.append(part)
+        if pk_cols:
+            cols_sql = ", ".join(f"`{_qi(col)}`" for col in pk_cols)
+            lines.append(f"  PRIMARY KEY ({cols_sql})")
+        if not lines:
+            continue
+        synthesized[ti.name_sql] = (
+            f"CREATE TABLE `{_qi(ti.name_sql)}` (\n"
+            + ",\n".join(lines)
+            + "\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n"
+        )
+    return synthesized
+
+
+def _collect_issue_counts_by_sql(
+    *,
+    issues: list[dict[str, Any]] | None,
+    table_infos: Iterable[TableInfo],
+) -> dict[str, dict[str, int]]:
+    known_sql = {ti.name_sql for ti in table_infos}
+    by_original = {ti.name_original: ti.name_sql for ti in table_infos if ti.name_original}
+    counts: dict[str, dict[str, int]] = {}
+    for issue in issues or []:
+        if not isinstance(issue, Mapping):
+            continue
+        level = str(issue.get("level") or "").strip().lower()
+        if not level:
+            continue
+        context = issue.get("context") or {}
+        table = None
+        if isinstance(context, Mapping):
+            for key in ("table", "table_name", "table_sql"):
+                value = context.get(key)
+                if value:
+                    table = str(value)
+                    break
+        if not table:
+            continue
+        table_sql = table
+        if table_sql not in known_sql:
+            table_sql = by_original.get(table) or truncate_table_name(table, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+        if table_sql not in known_sql:
+            continue
+        bucket = counts.setdefault(table_sql, {"error": 0, "warning": 0})
+        bucket[level] = int(bucket.get(level, 0)) + 1
+    return counts
+
+
+def _collect_quarantine_counts_by_sql(
+    *,
+    quarantine_path: str | None,
+    report: Mapping[str, Any] | None,
+    table_infos: Iterable[TableInfo],
+) -> tuple[dict[str, int], int, str | None]:
+    if not quarantine_path:
+        return {}, 0, None
+    known_sql = {ti.name_sql for ti in table_infos}
+    sql_by_original: dict[str, str] = {}
+    try:
+        artifacts = (report or {}).get("artifacts") or {}
+        nm_by_table = artifacts.get("name_maps_json") or {}
+        if isinstance(nm_by_table, Mapping):
+            for _k, nm in nm_by_table.items():
+                if isinstance(nm, Mapping) and nm.get("table_original") and nm.get("table_sql"):
+                    sql_by_original[str(nm.get("table_original"))] = str(nm.get("table_sql"))
+    except Exception:
+        sql_by_original = {}
+
+    counts: dict[str, int] = {}
+    total = 0
+    error: str | None = None
+    try:
+        with open(quarantine_path, encoding="utf-8") as handle:
+            for line in handle:
+                raw = line.strip()
+                if not raw:
+                    continue
+                try:
+                    entry = json.loads(raw)
+                except Exception:
+                    continue
+                total += 1
+                context = entry.get("context") or {}
+                record = entry.get("record") or {}
+                table = None
+                if isinstance(context, Mapping):
+                    for key in ("table", "table_name", "table_sql"):
+                        value = context.get(key)
+                        if value:
+                            table = str(value)
+                            break
+                if table is None and isinstance(record, Mapping):
+                    for key in ("table", "table_name", "table_sql"):
+                        value = record.get(key)
+                        if value:
+                            table = str(value)
+                            break
+                if not table:
+                    continue
+                table_sql = table
+                if table_sql not in known_sql:
+                    table_sql = sql_by_original.get(table) or truncate_table_name(
+                        table,
+                        max_len=MYSQL_IDENTIFIER_MAX_LEN,
+                    )
+                if table_sql not in known_sql:
+                    continue
+                counts[table_sql] = int(counts.get(table_sql, 0)) + 1
+    except Exception as exc:
+        error = str(exc)
+    return counts, total, error
+
+
+def build_schema_viewer_payload(
+    *,
+    config_path: str,
+    report_path: str | None,
+    quarantine_path: str | None,
+    report: Mapping[str, Any] | None,
+    issues: list[dict[str, Any]] | None,
+    table_infos: list[TableInfo],
+    base_table: str,
+    base_table_sql: str,
+    base_table_graph: str,
+    key_sep: str,
+    db_config: Mapping[str, Any],
+    db_masked: Mapping[str, Any] | None,
+    db_enabled: bool,
+    db_error: str | None,
+    samples_by_table: Mapping[str, list[dict[str, Any]]],
+    edges: list[tuple[str, str, str]],
+    generated_at: str,
+) -> dict[str, Any]:
+    ddls_by_sql = collect_schema_ddls_by_sql(report=report, table_infos=table_infos)
+    issue_counts_by_sql = _collect_issue_counts_by_sql(issues=issues, table_infos=table_infos)
+    quarantine_counts_by_sql, quarantine_total, quarantine_error = _collect_quarantine_counts_by_sql(
+        quarantine_path=quarantine_path,
+        report=report,
+        table_infos=table_infos,
+    )
+
+    info_by_graph_name = {ti.name_original or ti.name_sql: ti for ti in table_infos}
+    edges_payload: list[dict[str, Any]] = []
+    parent_edges_by_child_sql: dict[str, list[dict[str, Any]]] = {}
+    child_edges_by_parent_sql: dict[str, list[dict[str, Any]]] = {}
+    for parent, child, label in edges:
+        parent_info = info_by_graph_name.get(parent)
+        child_info = info_by_graph_name.get(child)
+        parent_sql = (
+            parent_info.name_sql
+            if parent_info is not None
+            else truncate_table_name(parent, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+        )
+        child_sql = (
+            child_info.name_sql
+            if child_info is not None
+            else truncate_table_name(child, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+        )
+        item = {
+            "parent": parent,
+            "child": child,
+            "label": label,
+            "parent_sql": parent_sql,
+            "child_sql": child_sql,
+            "parent_display": table_display_label(base_table_graph, key_sep, parent),
+            "child_display": table_display_label(base_table_graph, key_sep, child),
+            "join_sql": relationship_join_sql(parent_sql=parent_sql, child_sql=child_sql),
+        }
+        edges_payload.append(item)
+        parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
+        child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
+
+    table_payloads: list[dict[str, Any]] = []
+    totals = {"rows": 0, "columns": 0, "size_bytes": 0}
+    depth_groups: dict[int, list[str]] = {}
+    issue_tables = 0
+    for ti in table_infos:
+        graph_name = ti.name_original or ti.name_sql
+        depth = table_depth(base_table_graph, key_sep, graph_name)
+        is_base = str(graph_name) == str(base_table_graph)
+        role = infer_table_role(depth, is_base=is_base)
+        cols = list(ti.columns or [])
+        idxs = list(ti.indexes or [])
+        rows_sort = ti.row_count if ti.row_count is not None else ti.table_rows_estimate
+        size_bytes = int((ti.data_length or 0) + (ti.index_length or 0)) if (
+            ti.data_length is not None or ti.index_length is not None
+        ) else 0
+        issue_counts = issue_counts_by_sql.get(ti.name_sql) or {}
+        quarantine_count = int(quarantine_counts_by_sql.get(ti.name_sql) or 0)
+        if issue_counts or quarantine_count:
+            issue_tables += 1
+        totals["rows"] += int(rows_sort or 0)
+        totals["columns"] += len(cols)
+        totals["size_bytes"] += int(size_bytes or 0)
+        depth_groups.setdefault(depth, []).append(ti.name_sql)
+        display_short = table_display_label(base_table_graph, key_sep, graph_name)
+        parent_edges = parent_edges_by_child_sql.get(ti.name_sql) or []
+        child_edges = child_edges_by_parent_sql.get(ti.name_sql) or []
+        if parent_edges:
+            join_sql = str(parent_edges[0].get("join_sql") or "")
+        elif ti.name_sql != base_table_sql:
+            join_sql = fallback_join_sql(base_table_sql=base_table_sql, table_sql=ti.name_sql)
+        else:
+            join_sql = fallback_join_sql(base_table_sql=base_table_sql, table_sql=base_table_sql)
+        ddl = ddls_by_sql.get(ti.name_sql) or ddls_by_sql.get(graph_name) or ""
+        payload = {
+            "name_sql": ti.name_sql,
+            "name_original": ti.name_original,
+            "display_short": display_short,
+            "display_full": graph_name,
+            "role": role,
+            "role_label": "BASE" if role == "base" else ("SUB" if role == "sub" else "NESTED"),
+            "depth": depth,
+            "rows_sort": int(rows_sort or 0),
+            "rows_label": ti.rows_label(),
+            "column_count": len(cols),
+            "index_count": len(idxs),
+            "size_bytes": int(size_bytes or 0),
+            "size_label": _human_bytes(size_bytes),
+            "engine": ti.engine,
+            "collation": ti.collation,
+            "columns": cols,
+            "indexes": idxs,
+            "samples": samples_by_table.get(ti.name_sql) or [],
+            "sample_count": len(samples_by_table.get(ti.name_sql) or []),
+            "ddl": ddl,
+            "join_sql": join_sql,
+            "parent_edges": parent_edges,
+            "child_edges": child_edges,
+            "relationship_count": len(parent_edges) + len(child_edges),
+            "issue_error_count": int(issue_counts.get("error") or 0),
+            "issue_warning_count": int(issue_counts.get("warning") or 0),
+            "quarantine_count": quarantine_count,
+        }
+        payload["search_blob"] = " ".join(
+            [
+                str(payload.get("name_sql") or ""),
+                str(payload.get("name_original") or ""),
+                str(payload.get("display_short") or ""),
+                ddl,
+                " ".join(str(col.get("name") or "") for col in cols),
+                " ".join(str(ix.get("index_name") or "") for ix in idxs),
+            ]
+        ).lower()
+        table_payloads.append(payload)
+
+    groups = []
+    for depth in sorted(depth_groups):
+        if depth == 0:
+            label = "Depth 0 · Base"
+            description = "메인 테이블"
+        elif depth == 1:
+            label = "Depth 1 · First-level subtables"
+            description = "base 바로 아래에서 분기된 첫 번째 subtable"
+        else:
+            label = f"Depth {depth} · Nested subtables"
+            description = f"경로 깊이 {depth} 단계의 nested subtable"
+        groups.append(
+            {
+                "depth": depth,
+                "label": label,
+                "description": description,
+                "table_sqls": sorted(depth_groups[depth]),
+            }
+        )
+
+    return {
+        "meta": {
+            "generated_at": generated_at,
+            "config": config_path,
+            "report": report_path or "",
+            "database": db_masked.get("database") if db_masked else db_config.get("database"),
+            "db_enabled": bool(db_enabled),
+            "db_error": db_error,
+            "quarantine": quarantine_path or "",
+            "quarantine_entries": quarantine_total,
+            "quarantine_error": quarantine_error,
+            "base_table": base_table,
+            "base_table_sql": base_table_sql,
+            "key_sep": key_sep,
+            "mode": "schema-viewer",
+        },
+        "summary": {
+            "table_count": len(table_payloads),
+            "rows_total": int(totals["rows"]),
+            "columns_total": int(totals["columns"]),
+            "size_bytes_total": int(totals["size_bytes"]),
+            "flagged_table_count": int(issue_tables),
+            "edge_count": len(edges),
+        },
+        "tables": table_payloads,
+        "groups": groups,
+        "edges": edges_payload,
+    }

@@ -9,9 +9,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from KISTI_DB_Manager._review.schema_html import render_schema_viewer_html
+from KISTI_DB_Manager._review.schema_payload import collect_schema_ddls_by_sql
 from KISTI_DB_Manager.review import TableInfo, _utc_now_iso, _write_text, build_table_edges, render_mermaid, render_simple_svg
 from KISTI_DB_Manager.review_preview import write_review_preview_report
-from KISTI_DB_Manager.review_schema import _collect_ddls_by_sql, _render_schema_viewer_html
 from KISTI_DB_Manager.naming import truncate_table_name
 
 
@@ -168,7 +169,7 @@ def _generate_folder_schema_viewer(*, job: ErdJob, out_dir: Path) -> dict[str, A
     mermaid = render_mermaid(base_table=base_sql, table_infos=table_infos, key_sep="__")
     svg_text = render_simple_svg(base_table=base_sql, table_infos=table_infos, key_sep="__")
     edges = build_table_edges(base_table=base_sql, tables=[ti.name_sql for ti in table_infos], key_sep="__")
-    ddls_by_sql = _collect_ddls_by_sql(report=None, table_infos=table_infos)
+    ddls_by_sql = collect_schema_ddls_by_sql(report=None, table_infos=table_infos)
 
     payload_tables: list[dict[str, Any]] = []
     total_rows = 0
@@ -254,7 +255,7 @@ def _generate_folder_schema_viewer(*, job: ErdJob, out_dir: Path) -> dict[str, A
     _write_text(out_dir / "schema_viewer.json", json.dumps(payload, ensure_ascii=False, indent=2))
     _write_text(
         out_dir / "schema_viewer.html",
-        _render_schema_viewer_html(
+        render_schema_viewer_html(
             title=f"Schema Viewer: {base_sql}",
             base_table=base_sql,
             meta=payload["meta"],
