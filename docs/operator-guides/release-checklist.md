@@ -12,6 +12,23 @@ That workflow blocks on:
 - Rust `fmt`, `check`, and `test`
 - wheel/sdist build plus a built-wheel CLI smoke test
 
+The CI workflow also includes an optional `workflow_dispatch` input,
+`db-smoke`, for the MariaDB-backed Rust DB load smoke test. Use it before
+cutting a release when Rust DB load behavior, DB dependencies, or OpenAlex
+parquet load paths changed.
+
+## Version and Changelog
+
+Before a release tag:
+
+1. Update `pyproject.toml` and `KISTI_DB_Manager/__init__.py` to the same
+   package version.
+2. Add a dated `CHANGELOG.md` entry that separates added, changed, fixed, and
+   removed behavior where relevant.
+3. Build the docs and package locally, then confirm the built wheel reports the
+   intended version through `kisti-db-manager version`.
+4. Create the git tag only after CI is green on the release commit.
+
 ## Documentation
 
 ```bash
@@ -57,6 +74,10 @@ Run the DB smoke test only against a disposable or development MariaDB target:
 ```bash
 kisti-db-manager smoke rust-db-load --dotenv .env
 ```
+
+For GitHub-hosted validation, run the `ci` workflow manually and enable
+`db-smoke`. That job provisions a temporary MariaDB service and exercises the
+installed CLI path.
 
 ## Operator-Facing Changes
 

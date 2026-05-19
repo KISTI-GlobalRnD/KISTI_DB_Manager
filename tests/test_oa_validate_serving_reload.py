@@ -4,10 +4,17 @@ from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from KISTI_DB_Manager._cli.openalex_reload_validate import build_parser
 from KISTI_DB_Manager import openalex_reload_validate as oa_validate
 
 
 class TestOaValidateServingReload(unittest.TestCase):
+    def test_reload_validator_parser_keeps_safe_prefix_sample_default(self):
+        args = build_parser(key_pattern_default=oa_validate.DEFAULT_KEY_PATTERN).parse_args(["runs/example"])
+
+        self.assertTrue(args.skip_prefix_collision_sample)
+        self.assertEqual(args.key_pattern, oa_validate.DEFAULT_KEY_PATTERN)
+
     def _base_args(self, **overrides):
         values = {
             "table": ["works"],

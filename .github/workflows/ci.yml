@@ -6,6 +6,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      db-smoke:
+        description: Run optional MariaDB Rust DB smoke
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -97,3 +103,55 @@ jobs:
           python -m pip install "$WHEEL"
           kisti-db-manager version
           kisti-db-manager --help
+
+  db-smoke:
+    name: optional-mariadb-rust-smoke
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs['db-smoke'] }}
+    runs-on: ubuntu-latest
+
+    services:
+      mariadb:
+        image: mariadb:11
+        env:
+          MARIADB_ROOT_PASSWORD: rootpass
+          MARIADB_DATABASE: kisti_smoke
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="healthcheck.sh --connect --innodb_initialized"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install package and Rust backend
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[json,db,rust]"
+          python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+
+      - name: Run Rust DB smoke
+        env:
+          MARIADB_ROOT_PASSWORD: rootpass
+          KISTI_SMOKE_DB_HOST: 127.0.0.1
+          KISTI_SMOKE_DB_PORT: 3306
+          KISTI_SMOKE_DB_NAME: kisti_smoke
+        run: |
+          kisti-db-manager smoke rust-db-load \
+            --database kisti_smoke \
+            --records 4 \
+            --chunk-size 2
