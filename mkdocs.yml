@@ -1,5 +1,5 @@
 site_name: KISTI_DB_Manager Docs
-site_description: MariaDB/MySQL ingest, flattening, and review manual
+site_description: MariaDB/MySQL ingest, flattening, parquet, and review documentation
 site_url: https://kisti-globalrnd.github.io/KISTI_DB_Manager/
 repo_url: https://github.com/KISTI-GlobalRnD/KISTI_DB_Manager
 repo_name: KISTI-GlobalRnD/KISTI_DB_Manager
@@ -17,6 +17,9 @@ theme:
 plugins:
   - search
 
+not_in_nav: |
+  manual/*.md
+
 markdown_extensions:
   - admonition
   - attr_list
@@ -26,21 +29,37 @@ markdown_extensions:
 
 nav:
   - Home: index.md
-  - Manual:
-      - Manual Overview: manual/index.md
-      - Chapter 1. Package Overview: manual/package-overview.md
-      - Chapter 2. Getting Started: manual/getting-started.md
-      - Chapter 3. JSON Modes: manual/json-modes.md
-      - Chapter 4. Rust Backend and Profiling: manual/json-rust-backend.md
-      - Chapter 5. OpenAlex Example Workflow: manual/openalex-workflow.md
-      - Chapter 6. Review and Visualization: manual/review-visualization.md
-      - Chapter 7. Restart & Recovery: manual/restart-recovery.md
+  - Getting Started:
+      - Overview: getting-started/index.md
+  - Operator Guides:
+      - Overview: operator-guides/index.md
+      - OpenAlex Runbook: operator-guides/openalex-runbook.md
+      - Parquet-First Workflow: operator-guides/parquet-first-workflow.md
+      - Restart and Recovery: operator-guides/restart-recovery.md
+      - Troubleshooting: operator-guides/troubleshooting.md
+      - Release Checklist: operator-guides/release-checklist.md
   - Reference:
       - Reference Overview: reference/index.md
       - CLI Quick Reference: reference/cli.md
+      - JSON Modes: reference/modes.md
+      - Artifacts Reference: reference/artifacts.md
       - Examples: reference/examples.md
       - Overton Validation Queries: reference/overton-validation.md
-  - Design Notes:
+  - Architecture:
+      - Architecture Overview: architecture/index.md
+      - Package Layout: architecture/package-layout.md
+      - JSON Pipeline: architecture/json-pipeline.md
+      - Rust Backend and Profiling: architecture/rust-backend.md
+      - Review and Visualization: architecture/review-visualization.md
+  - Korean Runbooks:
+      - 한국어 운영 문서: ko/index.md
+      - OpenAlex 운영 절차: ko/openalex-runbook.md
+      - 재시작 및 복구: ko/recovery.md
+      - 릴리스 체크리스트: ko/release-checklist.md
+  - Decisions:
+      - Decisions Overview: decisions/index.md
+      - ADR 0001 Docs Source of Truth: decisions/adr-0001-docs-source-of-truth.md
+  - Design and Performance:
       - Design Notes Overview: design/index.md
       - Scenario-Based Parquet Jobs: design/parquet_job_scenarios.md
       - 2026-02-09 Historical Ingest Tuning: performance/2026-02-09_ingest_tuning.md

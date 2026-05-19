@@ -2,7 +2,7 @@
 
 !!! note "Historical status"
     This benchmark records the February 2026 streaming/LOAD DATA tuning pass.
-    Use [JSON Modes](../manual/json-modes.md) and [Rust Backend and Profiling](../manual/json-rust-backend.md)
+    Use [JSON Modes](../reference/modes.md) and [Rust Backend and Profiling](../architecture/rust-backend.md)
     for current backend and profiling guidance.
 
 - Focus: reducing end-to-end wall time for JSON flattening (= TSV generation) plus `LOAD DATA LOCAL INFILE`

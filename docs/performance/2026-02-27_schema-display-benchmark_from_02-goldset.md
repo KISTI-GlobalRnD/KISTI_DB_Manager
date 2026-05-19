@@ -3,7 +3,7 @@
 !!! note "Historical status"
     This page is retained as UI/design background for schema display work.
     Current review commands and outputs are documented in
-    [Review and Visualization](../manual/review-visualization.md).
+    [Review and Visualization](../architecture/review-visualization.md).
 
 ## Reference implementation
 - A separate standalone schema-contract viewer implementation used as the UI/UX benchmark.

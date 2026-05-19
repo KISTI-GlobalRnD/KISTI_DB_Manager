@@ -1,28 +1,21 @@
-# Manual Overview
+# Legacy Manual Paths
 
-This section is the operational manual.
-The goal is to help you decide quickly which data to run, which mode to choose, and in what order to execute the workflow.
+The old `manual/` section has been split into purpose-specific sections.
+This page is kept as a compatibility pointer for existing links.
 
-## Recommended reading order
+## Current Structure
 
-1. [Chapter 1. Package Overview](package-overview.md)
-2. [Chapter 2. Getting Started](getting-started.md)
-3. [Chapter 3. JSON Modes](json-modes.md)
-4. [Chapter 4. Rust Backend and Profiling](json-rust-backend.md)
-5. [Chapter 5. OpenAlex Example Workflow](openalex-workflow.md)
-6. [Chapter 6. Review and Visualization](review-visualization.md)
-7. [Chapter 7. Restart & Recovery](restart-recovery.md)
+- [Getting Started](../getting-started/index.md)
+- [Operator Guides](../operator-guides/index.md)
+- [Reference](../reference/index.md)
+- [Architecture](../architecture/index.md)
+- [Korean Runbooks](../ko/index.md)
 
-## Audience
+## Moved Pages
 
-- New operators: installation, mode selection, and the base execution flow
-- Large-scale operators: restart/resume behavior and the split between parquet generation and materialization
-- Downstream pipeline owners: OpenAlex examples and review artifact flow
-
-## Decision map
-
-- If DB completion speed is the priority, start with `ingest-fast*`
-- If local artifacts and reuse are the priority, start with `parse-parquet*`
-- If you are deciding between Python and Rust parsing, run `json profile-parallel` before changing production settings
-- For OpenAlex, the default recommendation is `parse-parquet-safe -> materialize`
-- If schema inspection is the goal, use `review plan / pack / preview / schema-viewer`
+- [Package Layout and Architecture](../architecture/package-layout.md)
+- [JSON Modes](../reference/modes.md)
+- [Rust Backend and Profiling](../architecture/rust-backend.md)
+- [OpenAlex Runbook](../operator-guides/openalex-runbook.md)
+- [Review and Visualization](../architecture/review-visualization.md)
+- [Restart and Recovery](../operator-guides/restart-recovery.md)

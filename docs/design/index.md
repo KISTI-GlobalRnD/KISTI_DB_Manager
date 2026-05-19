@@ -1,6 +1,6 @@
 # Design Notes Overview
 
-This section contains design and performance notes that sit one level below the operational manual.
+This section contains design and performance notes that sit one level below the operator guides and architecture pages.
 It focuses less on how to run the package and more on why the package is structured this way and where the real bottlenecks were found.
 
 ## Current note groups
@@ -11,9 +11,11 @@ It focuses less on how to run the package and more on why the package is structu
 - scenario-based large parquet jobs
 - dataset-specific operational notes
 
+Durable maintenance decisions live in [Decisions](../decisions/index.md).
+
 ## Reading rule
 
-- Read the Manual first
+- Read the Operator Guides first
 - Come here when you need implementation rationale or performance evidence
 
 ## Maintenance rule

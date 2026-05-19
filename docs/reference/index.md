@@ -6,9 +6,11 @@ While the manual is workflow-oriented, this section is optimized for finding com
 ## Contents
 
 - [CLI Quick Reference](cli.md)
+- [JSON Modes](modes.md)
+- [Artifacts Reference](artifacts.md)
 - [Examples](examples.md)
 - [Overton Validation Queries](overton-validation.md)
-- [Rust Backend and Profiling](../manual/json-rust-backend.md)
+- [Rust Backend and Profiling](../architecture/rust-backend.md)
 
 ## Use this section when
 

@@ -39,7 +39,7 @@ Current public review examples:
 - OpenAlex raw-vs-flatten preview JSON: [`../examples/openalex_preview/preview.json`](../examples/openalex_preview/preview.json)
 - OpenAlex predicted schema SVG: [`../assets/openalex_schema_example.svg`](../assets/openalex_schema_example.svg)
 
-For the maintainer refresh command, see [Review and Visualization](../manual/review-visualization.md#regenerating-the-checked-in-openalex-schema-svg).
+For the maintainer refresh command, see [Review and Visualization](../architecture/review-visualization.md#regenerating-the-checked-in-openalex-schema-svg).
 
 Generated run-specific review artifacts should usually stay outside `docs/`.
 Copy or link them into `docs/examples/` only when the artifact is intentionally part of the public documentation.

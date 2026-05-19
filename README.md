@@ -2,65 +2,20 @@
 
 ![Logo](Image/KISTI_DB_Manager.svg)
 
-MariaDB/MySQL handling utilities for preprocessing, import/export, and management.
+MariaDB/MySQL ingest, flattening, parquet artifact, and review tooling for large tabular and nested JSON/XML datasets.
 
-## Versioning note (0.7.0+)
+## Documentation
 
-Starting from **0.7.0**, this repository keeps one maintained package implementation.
-The pre-refactor implementation is no longer present in the working tree and is only available from git history.
+The maintained documentation lives in `docs/` and is published through MkDocs.
 
-## Goals
+- Start here: [docs/index.md](docs/index.md)
+- Install and first run: [docs/getting-started/index.md](docs/getting-started/index.md)
+- OpenAlex operations: [docs/operator-guides/openalex-runbook.md](docs/operator-guides/openalex-runbook.md)
+- CLI reference: [docs/reference/cli.md](docs/reference/cli.md)
+- Architecture notes: [docs/architecture/index.md](docs/architecture/index.md)
+- Korean operator notes: [docs/ko/index.md](docs/ko/index.md)
 
-- Keep the “never fail the whole run” philosophy for messy/heterogeneous data
-- Make table/column naming constraints consistent across create/load/index steps
-- Make large JSON/XML ingestion fast (bulk load + streaming) and observable (RunReport timings)
-
-## What’s in the box
-
-- **One-shot pipelines**
-  - `tabular run`: Description → CREATE → LOAD → INDEX → OPTIMIZE
-  - `json run`: records → flatten(main+subs) → CREATE/ALTER → LOAD → INDEX → OPTIMIZE
-- **Schema drift handling**
-  - New columns: best-effort `ALTER TABLE ADD COLUMN`
-  - Insert failures: best-effort widen/add failing column (default `LONGTEXT`) and retry
-  - Optional **schema freeze**: keep base schema stable and store unknown fields into `__extra__`
-  - Excepted branches: preserve raw payload in excepted tables (`value`, `__except_raw_json__`, `__except_path__`, source context columns)
-  - Optional **auto-except preflight**: random sample detects high-cardinality dict paths and appends them to `except_keys`
-- **Performance**
-  - `LOAD DATA LOCAL INFILE` fast path for bulk ingest (tabular + JSON streaming rows)
-  - Chunk/batch controls, parallel JSON flattening, and stage timings/throughput in `RunReport`
-- **Operational safety**
-  - `RunReport` JSON + `Quarantine` JSONL for continue-on-error ingestion
-- **Review/visualization**
-  - Review pack generation (md/html/svg) and schema diagrams (optional extras)
-  - HTML UI (search/depth/focus + SVG/PNG export) for `review pack` and `review diff`
-  - Self-contained schema viewer HTML (`review schema-viewer`) with summary cards, logical groups, relationship hints, DDL preview, and searchable table catalog
-
-## Maintainer module map
-
-The public compatibility surface is intentionally small:
-
-- `KISTI_DB_Manager.review` is a compatibility facade for review-related imports.
-- `KISTI_DB_Manager.cli` is a compatibility facade for CLI parser construction.
-
-Most implementation code now lives in smaller internal modules:
-
-- `KISTI_DB_Manager/_cli/`: command registration and command handlers
-- `KISTI_DB_Manager/_pipeline/`: pipeline runtime and JSON source helpers
-- `KISTI_DB_Manager/_review/common.py`: review utility helpers
-- `KISTI_DB_Manager/_review/core.py`: `TableInfo`, DB introspection, table-info collection
-- `KISTI_DB_Manager/_review/plan.py`: `review plan` orchestration
-- `KISTI_DB_Manager/_review/pack.py`: `review pack` orchestration
-- `KISTI_DB_Manager/_review/report_html.py`: review-pack HTML renderer
-- `KISTI_DB_Manager/_review/report_markdown.py`: review-pack and review-plan Markdown renderers
-- `KISTI_DB_Manager/_review/schema_render.py`: Mermaid/SVG schema rendering
-- `KISTI_DB_Manager/_review/schema_payload.py` and `schema_html.py`: self-contained schema viewer payload/HTML
-
-## Schema visualization (Data_Sample)
-
-Representative schema graph generated from `Data_Sample/`:
-
-![WoS sample schema](Image/Schema_WoS_Sample.png)
+README is intentionally only a portal. Detailed workflows, benchmarks, and maintainer notes belong in the MkDocs pages so they are versioned and checked by `mkdocs build --strict`.
 
 ## Install
 
@@ -68,94 +23,31 @@ Representative schema graph generated from `Data_Sample/`:
 pip install -e .
 ```
 
-Optional extras:
+Recommended extras:
 
 ```bash
-pip install -e ".[tabular]"
-pip install -e ".[json]"
-pip install -e ".[db]"
-pip install -e ".[viz]"
-pip install -e ".[review]"
+pip install -e ".[tabular,db]"
 pip install -e ".[json,db]"
 pip install -e ".[json,db,viz,review]"
 ```
 
-Recommended:
-- Ingest only (tabular): `pip install -e ".[tabular,db]"`
-- Ingest only (json/xml): `pip install -e ".[json,db]"`
-- Full review/visualization: `pip install -e ".[json,db,viz,review]"`
-
-If an extra is missing, CLI prints an install hint instead of a traceback.
-
-## CLI
+For the optional Rust backend:
 
 ```bash
-kisti-db-manager version
-kisti-db-manager modes
-kisti-db-manager report summary path/to/run_report.json
-kisti-db-manager report diff path/to/before.json path/to/after.json --out diff.md
-kisti-db-manager report profile path/to/run_report.json --top 10
-kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_out
-kisti-db-manager review pack --config path/to/config.json --report run_report.json --out review_out
-kisti-db-manager review schema-viewer --config path/to/config.json --report run_report.json --out schema_viewer_out
-kisti-db-manager review diff path/to/before_review.json path/to/after_review.json --out-dir review_diff_out
-kisti-db-manager review preview --config path/to/config.json --out preview_out  # raw vs flatten + union exceptions + OpenAlex abstract spotlight
-kisti-db-manager tabular run --config path/to/config.json --report run_report.json --quarantine quarantine.jsonl
-kisti-db-manager json run --config path/to/json_config.json --report json_report.json --quarantine quarantine.jsonl
+pip install -e ".[json,db,rust]"
+python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
 ```
 
-Schema viewer notes:
-- `review schema-viewer` writes `schema_viewer.html`, `schema_viewer.json`, `schema.svg`, and `schema.mmd`.
-- With DB access it uses real table metadata; with `--no-db` it falls back to config/report-derived predicted schema.
-- The HTML is self-contained and keeps the standalone schema-contract viewer pattern: sticky nav, summary cards, inline SVG, logical depth groups, searchable table catalog, parent/child relationship hints, and DDL preview.
+## Quick Start
 
-### Quick Start (JSON, large data)
-
-Recommended 2-step flow:
+DB-first ingest:
 
 ```bash
-# 1) ingest only (skip index/optimize)
 kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast
-
-# 2) build indexes + optimize after ingest
 kisti-db-manager json run --config path/to/openalex_config.json --mode finalize
 ```
 
-If your goal is local parquet generation first, use an explicit parquet mode instead of relying on `default`:
-
-```bash
-# parquet-first with config-driven batch size/workers
-kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet
-
-# parquet-first with conservative settings for large nested sources
-kisti-db-manager json run --config path/to/openalex_config.json --mode parse-parquet-safe
-```
-
-`json run` defaults to `flatten_backend=auto`. The optional Rust Arrow backend can accelerate supported parquet artifact runs while keeping Python in charge of table creation, schema mapping, reports, indexes, and fallbacks. To force a backend:
-
-```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --mode parse-parquet-safe \
-  --flatten-backend rust-arrow
-```
-
-For explicit Rust parquet runs over JSONL/NDJSON/GZ JSONL, raw line decoding now moves into Rust by default when the run is eligible:
-
-```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --mode parse-parquet-safe \
-  --flatten-backend rust-arrow
-```
-
-Use `--no-rust-raw-jsonl-parse` to force the older Python JSON decoding path for comparison.
-
-Add `--rust-raw-jsonl-file-parse` to also let Rust read plain JSONL/NDJSON source files directly. This removes the Python line-reading loop for supported parse/parquet-only runs.
-
-Use `--rust-columnar-accumulator` as a profiled opt-in for Rust parquet runs when you want to avoid materializing full row maps before Arrow arrays are built. Keep it disabled for ID compaction runs until that path has dedicated manifest/accounting support.
-
-For OpenAlex `rust-arrow` parquet-first runs with ID compaction, prefer `--chunk-size 10000` as the operational starting point:
+Parquet-first OpenAlex-style run:
 
 ```bash
 kisti-db-manager json run \
@@ -166,289 +58,26 @@ kisti-db-manager json run \
   --chunk-size 10000
 ```
 
-The 100k source check kept runtime essentially flat versus `5000` while reducing parquet files from `194` to `100`; `20000` was slower, and `--rust-parallel-table-writes` did not materially improve this path.
-
-For direct Rust JSONL file parsing, combine a small `--chunk-size` with `--rust-parquet-flush-records` to keep parser/flatten batches cache-friendly without writing a parquet file for every micro-batch.
-
-Rust reports include detailed timing keys such as `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.table_assemble`, `rust_arrow.id_compaction`, `rust_arrow.table_write`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms` so profile runs can separate parser, flatten, table assembly, ID compaction, table write dispatch, Arrow build, parquet output, Python result conversion, and remaining unattributed overhead.
-
-Use `--rust-parallel-table-writes` only as a profiled opt-in; it can lower parquet write time but may increase total runtime on I/O-bound runs.
-
-For an experimental Rust-driven DB load after Rust parquet creation:
+Review before a large nested run:
 
 ```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --mode ingest-safe \
-  --flatten-backend rust-arrow \
-  --rust-db-load
-```
-
-Leave `--rust-db-load` disabled when you need Python's mature per-row fallback behavior. The Rust loader runs each parquet batch in a DB transaction by default.
-
-Smoke-test the full Rust parquet + Rust DB path against a local MariaDB config:
-
-```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
-```
-
-Compare DB load-only throughput from existing parquet artifacts:
-
-```bash
-python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
-  --config runs/example/config.json \
-  --loader rust-mysql \
-  --report runs/example/rust_mysql_load_benchmark.json
-```
-
-Build the optional extension for local development with:
-
-```bash
-pip install -e '.[json,rust]'
-python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
-```
-
-Choose `parallel_workers` and backend from evidence instead of a one-off guess:
-
-```bash
-kisti-db-manager json profile-parallel \
-  --config path/to/openalex_config.json \
-  --flatten-backends python,rust-arrow \
-  --workers 0,2,4,8 \
-  --max-records 20000 \
-  --chunk-size 5000 \
-  --repeat 3 \
-  --out runs/profile_parallel_test
-```
-
-Rust raw JSONL/GZ decoding is enabled by default for eligible `rust-arrow` profile runs. For explicit `rust-arrow` parquet-first runs with OpenAlex ID compaction, omitted `parallel_workers` now defaults to `8` based on the retained OpenAlex source profiles; pass `--parallel-workers 0` or another value to override it. Add `--rust-raw-jsonl-file-parse` to include direct file reading for plain JSONL/NDJSON inputs, or `--no-rust-raw-jsonl-parse` to compare against the older Python JSON decoding path. Add `--rust-columnar-accumulator` to profile the opt-in columnar Rust accumulator against the default row accumulator. Add `--rust-parquet-flush-records` when testing small chunk sizes without keeping thousands of parquet files.
-
-For production-like OpenAlex ID-compaction validation, compare around the operational setting instead of the tiny smoke setting:
-
-```bash
-kisti-db-manager json profile-parallel \
-  --config path/to/openalex_config.json \
-  --flatten-backends rust-arrow \
-  --workers 4,8 \
-  --max-records 100000 \
-  --chunk-size 10000 \
-  --repeat 2 \
-  --id-compaction \
-  --out runs/profile_openalex_idcompact_100k
-```
-
-Detailed Rust backend, profile, smoke-test, benchmark, and limitation notes are in [docs/manual/json-rust-backend.md](docs/manual/json-rust-backend.md).
-
-If schema drift is heavy and ALTER is too expensive:
-
-```bash
-kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast-freeze
-```
-
-If you want to capture most columns early, then cap ALTER churn later (hybrid):
-
-```bash
-kisti-db-manager json run --config path/to/openalex_config.json --mode ingest-fast-hybrid
-```
-
-For high-cardinality dict branches (for example OpenAlex `abstract_inverted_index`), run a preflight plan first and then ingest with `--auto-except`:
-
-```bash
-# 1) preflight: predicted schema + sample profile + auto-except candidates + ETA estimate
 kisti-db-manager review plan \
   --config path/to/openalex_config.json \
   --auto-except \
   --auto-except-sample-records 5000 \
   --auto-except-sample-max-sources 64 \
   --out plan_out
-
-# 2) ingest with auto-except enabled
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --mode ingest-fast \
-  --auto-except
 ```
 
-Notes:
-- `excepted_expand_dict=false` (default) prevents excepted-table column explosion by storing nested payloads as JSON strings in `value`/`__except_raw_json__`.
-- Tune detection thresholds if needed: `--auto-except-unique-key-threshold`, `--auto-except-min-observations`, `--auto-except-novelty-threshold`.
-- Default JSON path is parquet-first: flattened batch files are saved under `runs/<table>_<run_id>/parquet` before DB load.
-- Prefer explicit `parse-parquet*` or `ingest-fast*` modes for production runs; avoid relying on `default`.
-- `ingest-fast*` modes remain direct insert-first/streaming modes for maximum throughput.
-- `persist_parquet_files=true` and `json_streaming_load=true` are mutually exclusive and now fail fast at CLI validation time.
-- OpenAlex-scale ID compaction is opt-in: `--id-compaction` strips repeated URL prefixes from known ID fields, renames semantic ID columns such as `author_id` to `author_openalex_id` even when values are null or already bare IDs, and writes the rules/descriptions into the run report plus `schema_manifest.json`. It is compatible with `--parallel-workers`; explicit `rust-arrow` parquet-first runs default omitted `parallel_workers` to `8`, and `--chunk-size 10000` is the current OpenAlex artifact recommendation for fewer parquet files without the `20000` slowdown. Conflicting nonblank source values fail fast by default. Policy flags can switch collisions or namespace conflicts to `preserve` for review workflows.
-- Before a long OpenAlex run, use `kisti-db-manager json id-compaction-preflight --config ... --report id_compaction_preflight.json` to scan for compacted-column collisions, namespace conflicts, and ambiguous URL-like columns.
-
-### Local Parquet Artifacts (default)
-
-Default run behavior keeps flattened parquet artifacts on local disk before DB load:
+Build docs locally:
 
 ```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json
+mkdocs build --strict
 ```
 
-Change the parquet artifact directory explicitly:
+## Smoke Test
 
-```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --persist-parquet-dir /path/to/local_parquet
-```
-
-Disable parquet persistence explicitly:
-
-```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --no-persist-parquet-files
-```
-
-Materialize persisted parquet artifacts into DB later:
-
-```bash
-python scripts/oa_materialize_parquet_to_db.py \
-  runs/<openalex_parse_run_dir> \
-  --dotenv path/to/.env \
-  --materialize-preset openalex-idcompact-fast
-```
-
-Notes:
-- This is a separate post-parse materialization step for `parse-parquet*` runs.
-- Before loading, inspect the parquet contract with `kisti-db-manager parquet inspect --parquet-root <parquet_root> --require-schema-manifest --require-id-compaction` when ID compaction is expected.
-- It resumes from `runs/<openalex_parse_run_dir>/parquet_materialize/progress.json`.
-- `--file-chunk-rows N` checkpoints large parquet files in smaller row chunks so a restart can resume within a file instead of replaying the whole parquet batch.
-- `--db-name target_openalex_db` overrides the target database without editing the original parse config.
-- `--parallel-tables N` lets independent parquet table directories load in parallel.
-- `--parallel-files-per-table N` lets a single large parquet table load multiple parquet batches concurrently.
-- `--materialize-preset openalex-idcompact-fast` applies the current measured OpenAlex ID-compacted materializer starting point: `--staging-writer duckdb`, `--load-method load_data`, `--parallel-tables 6`, `--parallel-files-per-table 2`, `--require-schema-manifest`, and `--require-id-compaction`.
-- Default materializer staging is `--staging-writer duckdb`, which stages into `/dev/shm` when available and then uses `LOAD DATA LOCAL INFILE`.
-- For stable parquet schemas, the materializer can bypass pandas and stage directly from parquet via DuckDB; schema-drift cases fall back to the DataFrame path.
-- Direct materialization reports now include `parquet_artifact_contract` with schema manifest provenance, ID compaction status, rule hash, compacted column counts, and mixed source/compacted column warnings.
-
-### Local TSV Artifacts (fast/streaming path only)
-
-Keep generated TSV files for audit/replay:
-
-```bash
-# direct insert-first fast mode + keep TSV artifacts
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --mode ingest-fast \
-  --persist-tsv-files \
-  --persist-tsv-dir /path/to/local_tsv
-```
-
-Parse only (no DB insert), keep TSV artifacts for later table-wise loading:
-
-```bash
-kisti-db-manager json run \
-  --config path/to/openalex_config.json \
-  --mode ingest-fast \
-  --no-load --no-index --no-optimize \
-  --persist-tsv-files \
-  --persist-tsv-dir /path/to/local_tsv
-```
-
-Notes:
-- Parquet persistence is the normalized default; TSV persistence is optional and only applies to the streaming `LOAD DATA` path.
-- If `persist_tsv_dir` is omitted, artifacts are saved under `runs/<table>_<run_id>/tsv`.
-- Current implementation favors artifact safety over peak ingest speed; persisted TSVs disable overlapped batches and parallel table loading.
-
-### Mode Defaults (important)
-
-`json run` precedence is: `config < mode preset < explicit CLI option`.
-
-| mode | create/load/index/optimize | schema_mode | parallel_workers | chunk_size |
-|---|---|---|---:|---:|
-| `default` | on/on/on/on | `evolve` | `0` | config or `1000` |
-| `ingest-fast` | on/on/off/off | `evolve` | `4` | `20000` |
-| `ingest-fast-freeze` | on/on/off/off | `freeze` | `4` | `20000` |
-| `ingest-fast-hybrid` | on/on/off/off | `hybrid` | `4` | `20000` |
-| `ingest-safe` | on/on/off/off | `evolve` | `0` | `1000` |
-| `finalize` | off/off/on/on | (n/a) | (n/a) | (n/a) |
-
-Notes:
-- If you want forced single-worker flattening, pass `--parallel-workers 0` (even in `ingest-fast*`).
-- `--id-compaction` can run with `--parallel-workers`; compaction is applied after each worker flattens its slice, and compaction errors are not hidden by sequential fallback.
-- If you need to override the mode chunk size, pass `--chunk-size N` explicitly.
-- `ingest-fast-hybrid` evolves only during warmup batches (`schema_hybrid_warmup_batches`, default: 1), then behaves like freeze.
-
-### Profile One RunReport
-
-Use this to classify bottlenecks quickly (`flatten` vs `db.load` vs `db.alter`):
-
-```bash
-kisti-db-manager report profile path/to/run_report.json --top 10
-```
-
-Machine-readable output:
-
-```bash
-kisti-db-manager report profile path/to/run_report.json --as-json --out profile.json
-```
-
-Korean ops guide (decision rules + checklist):
-- `KISTI_DB_Manager/GUIDE_KO.md`
-
-### JSON Multi-Input Config
-
-`json run` can read from multiple files without a pre-merge step.
-
-```json
-{
-  "data_config": {
-    "PATH": "path/to/input_dir",
-    "table_name": "kisti_json_base",
-    "file_names": ["part-0001.jsonl", "part-0002.jsonl"]
-  }
-}
-```
-
-Glob input is also supported:
-
-```json
-{
-  "data_config": {
-    "PATH": "path/to/input_dir",
-    "table_name": "kisti_json_base",
-    "file_glob": "**/*.jsonl"
-  }
-}
-```
-
-For ZIP sources, multiple members can be selected with `json_file_names`:
-
-```json
-{
-  "data_config": {
-    "PATH": "path/to/input_dir",
-    "file_name": "bundle.zip",
-    "file_type": "zip",
-    "json_file_names": ["part-a.jsonl", "part-b.json"]
-  }
-}
-```
-
-## Python API (compatibility usage)
-
-Existing notebooks that import package modules directly can keep the same import style:
-
-```python
-from KISTI_DB_Manager import manage, preview
-
-flist = sorted([x for x in os.listdir(data_config["PATH"]) if x.endswith(".csv")])
-for f in flist:
-    data_config = preview.update_data_config(f, data_config)
-    manage.create_table(data_config, db_config)
-    manage.fill_table_from_file(data_config, db_config)
-    manage.set_index(db_config, data_config)
-    manage.optimize_table(db_config, data_config)
-```
-
-## Smoke test (Docker MariaDB)
-
-We ship a reproducible smoke test under `examples/`.
+Docker MariaDB smoke:
 
 ```bash
 cd examples
@@ -456,17 +85,8 @@ docker compose up --build --abort-on-container-exit smoke
 docker compose down
 ```
 
-Or on host (requires deps installed):
+Host smoke:
 
 ```bash
 bash examples/smoke.sh
 ```
-
-Output previews:
-- `examples/README.md`
-
-Real DB integration smoke-run templates and guide:
-- `examples/configs/tabular_config_realdb.template.json`
-- `examples/configs/json_config_realdb.template.json`
-- `examples/configs/json_config_multifile_realdb.template.json`
-- `examples/smoke_real_db.sh`

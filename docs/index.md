@@ -1,56 +1,74 @@
 # KISTI_DB_Manager
 
-`KISTI_DB_Manager` is the repository for high-volume MariaDB/MySQL ingest, flattening, and review workflows.
+`KISTI_DB_Manager` supports high-volume MariaDB/MySQL ingest, nested JSON/XML flattening, parquet-first workflows, and review artifacts for large operational datasets.
 
-This documentation site is intentionally manual-first.
-The priority is operational guidance for large, messy datasets rather than auto-generated API pages.
+This documentation is the source of truth for maintained workflows.
+GitHub Wiki should be treated as scratch space; durable runbooks and reference pages belong here.
 
-## Chapter Map
+## Documentation Map
 
-### Manual
+### Getting Started
 
-- [Manual Overview](manual/index.md)
-- [Chapter 1. Package Overview](manual/package-overview.md)
-- [Chapter 2. Getting Started](manual/getting-started.md)
-- [Chapter 3. JSON Modes](manual/json-modes.md)
-- [Chapter 4. Rust Backend and Profiling](manual/json-rust-backend.md)
-- [Chapter 5. OpenAlex Example Workflow](manual/openalex-workflow.md)
-- [Chapter 6. Review and Visualization](manual/review-visualization.md)
-- [Chapter 7. Restart & Recovery](manual/restart-recovery.md)
+- [Install and first run](getting-started/index.md)
+
+Use this when you are new to the repository or deciding between DB-first and parquet-first operation.
+
+### Operator Guides
+
+- [OpenAlex Runbook](operator-guides/openalex-runbook.md)
+- [Parquet-First Workflow](operator-guides/parquet-first-workflow.md)
+- [Restart and Recovery](operator-guides/restart-recovery.md)
+- [Troubleshooting](operator-guides/troubleshooting.md)
+- [Release Checklist](operator-guides/release-checklist.md)
+
+Use these pages when you need command sequences and operational stop signals.
 
 ### Reference
 
-- [Reference Overview](reference/index.md)
 - [CLI Quick Reference](reference/cli.md)
+- [JSON Modes](reference/modes.md)
+- [Artifacts Reference](reference/artifacts.md)
 - [Examples](reference/examples.md)
 - [Overton Validation Queries](reference/overton-validation.md)
 
-### Design Notes
+Use these pages when you need option names, artifacts, or examples quickly.
+
+### Architecture
+
+- [Package Layout and Architecture](architecture/package-layout.md)
+- [JSON Pipeline Architecture](architecture/json-pipeline.md)
+- [Rust Backend and Profiling](architecture/rust-backend.md)
+- [Review and Visualization](architecture/review-visualization.md)
+
+Use these pages when you need implementation context or maintainer-facing structure.
+
+### Korean Runbooks
+
+- [한국어 운영 문서](ko/index.md)
+
+Korean pages summarize day-to-day operator procedures. The English pages remain the canonical technical reference.
+
+### Decisions
+
+- [ADR 0001: MkDocs is the documentation source of truth](decisions/adr-0001-docs-source-of-truth.md)
+
+Use decisions when a maintenance policy should survive beyond one cleanup pass.
+
+### Design and Performance Notes
 
 - [Design Notes Overview](design/index.md)
 - [Scenario-Based Parquet Jobs](design/parquet_job_scenarios.md)
 - historical performance and benchmark notes under `docs/performance/`
 
-## Recommended reading order
+## Recommended Reading Order
 
-1. Start with [Manual Overview](manual/index.md)
-2. Read [Chapter 1. Package Overview](manual/package-overview.md)
-3. Read [Chapter 2. Getting Started](manual/getting-started.md)
-4. Read [Chapter 3. JSON Modes](manual/json-modes.md)
-5. If you are choosing Python vs Rust parsing, read [Chapter 4. Rust Backend and Profiling](manual/json-rust-backend.md)
-6. If you are working with OpenAlex, go to [Chapter 5. OpenAlex Example Workflow](manual/openalex-workflow.md)
-7. Review package-side inspection outputs in [Chapter 6. Review and Visualization](manual/review-visualization.md)
-8. For operational interruptions and restart policy, read [Chapter 7. Restart & Recovery](manual/restart-recovery.md)
+1. [Getting Started](getting-started/index.md)
+2. [OpenAlex Runbook](operator-guides/openalex-runbook.md) if you are running OpenAlex
+3. [JSON Modes](reference/modes.md) when choosing execution mode
+4. [Rust Backend and Profiling](architecture/rust-backend.md) when choosing Python vs Rust
+5. [Restart and Recovery](operator-guides/restart-recovery.md) before long operational runs
 
 ## Scope
 
-This site does not try to replace every repository document.
-Instead, it organizes the operationally important public parts and links the design notes that are safe to expose.
-
 Commercial dataset runbooks and generated local artifacts are intentionally kept out of the public docs surface.
-
-## Detailed ops guide
-
-A more detailed Korean operations guide remains in the repository at:
-
-- [`KISTI_DB_Manager/GUIDE_KO.md`](https://github.com/KISTI-GlobalRnD/KISTI_DB_Manager/blob/main/KISTI_DB_Manager/GUIDE_KO.md)
+Generated artifacts should be checked in only when explicitly selected as public examples.

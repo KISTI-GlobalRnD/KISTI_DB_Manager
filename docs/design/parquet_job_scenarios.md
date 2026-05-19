@@ -2,7 +2,7 @@
 
 !!! note "Design status"
     This is a scenario design note for large parquet jobs. It is useful background for shared execution engines,
-    but current operator-facing commands remain in [OpenAlex Example Workflow](../manual/openalex-workflow.md)
+    but current operator-facing commands remain in [OpenAlex Runbook](../operator-guides/openalex-runbook.md)
     and [CLI Quick Reference](../reference/cli.md).
 
 This note defines the execution model we want for large parquet processing jobs in this repository.
