@@ -317,6 +317,15 @@ def _collect_quarantine_counts_by_sql(
     return counts, total, error
 
 
+def _relationship_join_sql(*, parent_sql: str, child_sql: str) -> str:
+    return (
+        "SELECT p.`id` AS parent_id, c.*\n"
+        f"FROM `{_qi(parent_sql)}` p\n"
+        f"LEFT JOIN `{_qi(child_sql)}` c ON p.`id` = c.`id`\n"
+        "LIMIT 5;"
+    )
+
+
 SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
 <html lang=\"en\">
 <head>
@@ -549,6 +558,25 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       color: var(--muted);
       font-size: 12px;
     }
+    .relationship-grid { display: grid; gap: 10px; }
+    .relationship-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: #f8fbfa;
+      padding: 12px;
+    }
+    .relationship-title {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      margin-bottom: 8px;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .relationship-title code { overflow-wrap: anywhere; }
+    .relationship-label { color: var(--muted); font-size: 12px; }
+    .relationship-card pre { margin-top: 8px; }
     details.block {
       margin-top: 14px;
       border: 1px solid var(--line);
@@ -887,6 +915,34 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       return '<pre class="code">' + escHtml(JSON.stringify(samples, null, 2)) + '</pre>';
     }
 
+    function renderRelationshipEdges(edges, direction) {
+      if (!Array.isArray(edges) || !edges.length) return '';
+      return edges.map((edge) => {
+        const counterpartSql = direction === 'parent' ? edge.parent_sql : edge.child_sql;
+        const counterpartDisplay = direction === 'parent' ? edge.parent_display : edge.child_display;
+        const prefix = direction === 'parent' ? 'Parent' : 'Child';
+        return (
+          '<div class="relationship-card">' +
+            '<div class="relationship-title">' +
+              '<span>' + escHtml(prefix) + ': <code>' + escHtml(counterpartSql || counterpartDisplay || '') + '</code></span>' +
+              '<span class="relationship-label">' + escHtml(edge.label || '') + '</span>' +
+            '</div>' +
+            '<pre class="code">' + escHtml(edge.join_sql || '') + '</pre>' +
+          '</div>'
+        );
+      }).join('');
+    }
+
+    function renderRelationships(table) {
+      const parents = Array.isArray(table.parent_edges) ? table.parent_edges : [];
+      const children = Array.isArray(table.child_edges) ? table.child_edges : [];
+      if (!parents.length && !children.length) return '<div class="empty">No inferred parent/child edges.</div>';
+      const blocks = [];
+      if (parents.length) blocks.push(renderRelationshipEdges(parents, 'parent'));
+      if (children.length) blocks.push(renderRelationshipEdges(children, 'child'));
+      return '<div class="relationship-grid">' + blocks.join('') + '</div>';
+    }
+
     function renderCatalog(filtered) {
       catalogGrid.innerHTML = filtered.map((table) => (
         '<article class="table-card" id="table-' + escHtml(table.name_sql) + '" data-table-sql="' + escHtml(table.name_sql) + '">' +
@@ -902,9 +958,14 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
             '<span class="metric-pill">rows ' + escHtml(table.rows_label) + '</span>' +
             '<span class="metric-pill">cols ' + formatInt(table.column_count) + '</span>' +
             '<span class="metric-pill">indexes ' + formatInt(table.index_count) + '</span>' +
+            '<span class="metric-pill">relations ' + formatInt(table.relationship_count) + '</span>' +
             '<span class="metric-pill">size ' + escHtml(table.size_label) + '</span>' +
             '<span class="metric-pill">engine ' + escHtml(table.engine || 'n/a') + '</span>' +
           '</div>' +
+          '<details class="block" open>' +
+            '<summary>Relationships (' + formatInt(table.relationship_count) + ')</summary>' +
+            '<div class="block-body">' + renderRelationships(table) + '</div>' +
+          '</details>' +
           '<details class="block" open>' +
             '<summary>DDL preview</summary>' +
             '<div class="block-body"><pre class="code">' + escHtml(table.ddl || '-- no ddl available') + '</pre></div>' +
@@ -1128,6 +1189,28 @@ def generate_schema_viewer(
         tables=[ti.name_original or ti.name_sql for ti in table_infos],
         key_sep=key_sep,
     )
+    info_by_graph_name = {ti.name_original or ti.name_sql: ti for ti in table_infos}
+    edges_payload: list[dict[str, Any]] = []
+    parent_edges_by_child_sql: dict[str, list[dict[str, Any]]] = {}
+    child_edges_by_parent_sql: dict[str, list[dict[str, Any]]] = {}
+    for parent, child, label in edges:
+        parent_info = info_by_graph_name.get(parent)
+        child_info = info_by_graph_name.get(child)
+        parent_sql = parent_info.name_sql if parent_info is not None else truncate_table_name(parent, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+        child_sql = child_info.name_sql if child_info is not None else truncate_table_name(child, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+        item = {
+            "parent": parent,
+            "child": child,
+            "label": label,
+            "parent_sql": parent_sql,
+            "child_sql": child_sql,
+            "parent_display": _table_display_label(base_table_graph, key_sep, parent),
+            "child_display": _table_display_label(base_table_graph, key_sep, child),
+            "join_sql": _relationship_join_sql(parent_sql=parent_sql, child_sql=child_sql),
+        }
+        edges_payload.append(item)
+        parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
+        child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
 
     table_payloads: list[dict[str, Any]] = []
     totals = {"rows": 0, "columns": 0, "size_bytes": 0}
@@ -1151,14 +1234,19 @@ def generate_schema_viewer(
         totals["size_bytes"] += int(size_bytes or 0)
         depth_groups.setdefault(depth, []).append(ti.name_sql)
         display_short = _table_display_label(base_table_graph, key_sep, graph_name)
-        join_sql = (
-            f"SELECT b.*, s.*\n"
-            f"FROM `{_qi(base_table_sql)}` b\n"
-            f"LEFT JOIN `{_qi(ti.name_sql)}` s ON b.id = s.id\n"
-            f"LIMIT 5;"
-            if ti.name_sql != base_table_sql
-            else f"SELECT *\nFROM `{_qi(base_table_sql)}`\nLIMIT 5;"
-        )
+        parent_edges = parent_edges_by_child_sql.get(ti.name_sql) or []
+        child_edges = child_edges_by_parent_sql.get(ti.name_sql) or []
+        if parent_edges:
+            join_sql = str(parent_edges[0].get("join_sql") or "")
+        elif ti.name_sql != base_table_sql:
+            join_sql = (
+                "SELECT b.*, s.*\n"
+                f"FROM `{_qi(base_table_sql)}` b\n"
+                f"LEFT JOIN `{_qi(ti.name_sql)}` s ON b.`id` = s.`id`\n"
+                "LIMIT 5;"
+            )
+        else:
+            join_sql = f"SELECT *\nFROM `{_qi(base_table_sql)}`\nLIMIT 5;"
         ddl = ddls_by_sql.get(ti.name_sql) or ddls_by_sql.get(graph_name) or ""
         payload = {
             "name_sql": ti.name_sql,
@@ -1182,6 +1270,9 @@ def generate_schema_viewer(
             "sample_count": len(samples_by_table.get(ti.name_sql) or []),
             "ddl": ddl,
             "join_sql": join_sql,
+            "parent_edges": parent_edges,
+            "child_edges": child_edges,
+            "relationship_count": len(parent_edges) + len(child_edges),
             "issue_error_count": int(issue_counts.get("error") or 0),
             "issue_warning_count": int(issue_counts.get("warning") or 0),
             "quarantine_count": quarantine_count,
@@ -1237,7 +1328,7 @@ def generate_schema_viewer(
         },
         "tables": table_payloads,
         "groups": groups,
-        "edges": [{"parent": parent, "child": child, "label": label} for parent, child, label in edges],
+        "edges": edges_payload,
     }
 
     out_path = Path(out_dir)

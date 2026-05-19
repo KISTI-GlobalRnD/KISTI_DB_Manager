@@ -83,11 +83,10 @@ python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \
-  --staging-writer duckdb \
-  --parallel-tables 4 \
-  --parallel-files-per-table 4 \
-  --file-chunk-rows 5000
+  --materialize-preset openalex-idcompact-fast
 ```
+
+`--materialize-preset openalex-idcompact-fast` expands to the measured OpenAlex ID-compacted starting point: DuckDB staging, `LOAD DATA LOCAL INFILE`, `--parallel-tables 6`, `--parallel-files-per-table 2`, `--require-schema-manifest`, and `--require-id-compaction`. Explicit CLI options still override the preset's load/staging/parallel values.
 
 ## Parquet reload plan
 

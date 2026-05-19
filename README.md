@@ -34,7 +34,7 @@ The pre-refactor implementation is no longer present in the working tree and is 
 - **Review/visualization**
   - Review pack generation (md/html/svg) and schema diagrams (optional extras)
   - HTML UI (search/depth/focus + SVG/PNG export) for `review pack` and `review diff`
-  - Self-contained schema viewer HTML (`review schema-viewer`) with summary cards, logical groups, DDL preview, and searchable table catalog
+  - Self-contained schema viewer HTML (`review schema-viewer`) with summary cards, logical groups, relationship hints, DDL preview, and searchable table catalog
 
 ## Schema visualization (Data_Sample)
 
@@ -87,7 +87,7 @@ kisti-db-manager json run --config path/to/json_config.json --report json_report
 Schema viewer notes:
 - `review schema-viewer` writes `schema_viewer.html`, `schema_viewer.json`, `schema.svg`, and `schema.mmd`.
 - With DB access it uses real table metadata; with `--no-db` it falls back to config/report-derived predicted schema.
-- The HTML is self-contained and keeps the standalone schema-contract viewer pattern: sticky nav, summary cards, inline SVG, logical depth groups, searchable table catalog, and DDL preview.
+- The HTML is self-contained and keeps the standalone schema-contract viewer pattern: sticky nav, summary cards, inline SVG, logical depth groups, searchable table catalog, parent/child relationship hints, and DDL preview.
 
 ### Quick Start (JSON, large data)
 
@@ -289,7 +289,8 @@ Materialize persisted parquet artifacts into DB later:
 ```bash
 python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
-  --dotenv path/to/.env
+  --dotenv path/to/.env \
+  --materialize-preset openalex-idcompact-fast
 ```
 
 Notes:
@@ -300,6 +301,7 @@ Notes:
 - `--db-name target_openalex_db` overrides the target database without editing the original parse config.
 - `--parallel-tables N` lets independent parquet table directories load in parallel.
 - `--parallel-files-per-table N` lets a single large parquet table load multiple parquet batches concurrently.
+- `--materialize-preset openalex-idcompact-fast` applies the current measured OpenAlex ID-compacted materializer starting point: `--staging-writer duckdb`, `--load-method load_data`, `--parallel-tables 6`, `--parallel-files-per-table 2`, `--require-schema-manifest`, and `--require-id-compaction`.
 - Default materializer staging is `--staging-writer duckdb`, which stages into `/dev/shm` when available and then uses `LOAD DATA LOCAL INFILE`.
 - For stable parquet schemas, the materializer can bypass pandas and stage directly from parquet via DuckDB; schema-drift cases fall back to the DataFrame path.
 - Direct materialization reports now include `parquet_artifact_contract` with schema manifest provenance, ID compaction status, rule hash, compacted column counts, and mixed source/compacted column warnings.

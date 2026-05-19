@@ -65,8 +65,11 @@ kisti-db-manager json run --config path/to/config.json --mode parse-parquet-safe
 python scripts/oa_materialize_parquet_to_db.py \
   runs/<parse_run_dir> \
   --dotenv path/to/.env \
-  --db-name target_db
+  --db-name target_db \
+  --materialize-preset openalex-idcompact-fast
 ```
+
+OpenAlex ID-compacted parquet artifact를 DB로 적재할 때 현재 운영 시작값은 `--materialize-preset openalex-idcompact-fast`입니다. 이 preset은 DuckDB staging, `LOAD DATA LOCAL INFILE`, `parallel_tables=6`, `parallel_files_per_table=2`, schema manifest/id-compaction contract check를 명시적으로 적용합니다. 전역 기본값은 아니며, 공유 DB나 작은 DB에서는 별도 profile 후 조정합니다.
 
 또는 plan 기반 reload를 사용합니다.
 

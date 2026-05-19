@@ -34,6 +34,19 @@ from KISTI_DB_Manager.namemap import NameMap
 from KISTI_DB_Manager.report import RunReport
 
 
+MATERIALIZE_PRESETS: dict[str, dict[str, Any]] = {
+    "openalex-idcompact-fast": {
+        "description": "Benchmarked OpenAlex ID-compacted parquet materialization path",
+        "load_method": "load_data",
+        "staging_writer": "duckdb",
+        "parallel_tables": 6,
+        "parallel_files_per_table": 2,
+        "require_schema_manifest": True,
+        "require_id_compaction": True,
+    },
+}
+
+
 def _iso_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -332,6 +345,33 @@ def _should_run_load_data_preflight(*, load_method: str, staging_writer: str, sk
         and str(load_method) in {"auto", "load_data"}
         and str(staging_writer) == "duckdb"
     )
+
+
+def _apply_materialize_preset(args) -> dict[str, Any]:
+    preset_name = str(getattr(args, "materialize_preset", None) or "")
+    preset = dict(MATERIALIZE_PRESETS.get(preset_name, {}))
+
+    def resolve(name: str, default: Any) -> Any:
+        value = getattr(args, name)
+        if value is not None:
+            return value
+        return preset.get(name, default)
+
+    args.load_method = str(resolve("load_method", "load_data"))
+    args.staging_writer = str(resolve("staging_writer", "duckdb"))
+    args.parallel_tables = int(resolve("parallel_tables", 1))
+    args.parallel_files_per_table = int(resolve("parallel_files_per_table", 1))
+    args.require_schema_manifest = bool(
+        getattr(args, "require_schema_manifest", False) or preset.get("require_schema_manifest", False)
+    )
+    args.require_id_compaction = bool(
+        getattr(args, "require_id_compaction", False) or preset.get("require_id_compaction", False)
+    )
+    return {
+        "name": preset_name or None,
+        "applied": bool(preset),
+        "settings": preset,
+    }
 
 
 def _run_duckdb_load_data_preflight_on_conn(*, conn, staging_dir: str, report: RunReport | None = None) -> None:
@@ -1290,11 +1330,17 @@ def main() -> int:
     ap.add_argument("--latest-first", action="store_true")
     ap.add_argument("--limit-rows-per-file", type=int, default=0)
     ap.add_argument("--table-prefix", default="", help="Optional target table prefix")
-    ap.add_argument("--load-method", choices=["auto", "load_data", "to_sql"], default="load_data")
-    ap.add_argument("--parallel-tables", type=int, default=1, help="Number of tables to materialize in parallel")
-    ap.add_argument("--parallel-files-per-table", type=int, default=1, help="Number of parquet files to load in parallel within a table")
+    ap.add_argument(
+        "--materialize-preset",
+        choices=sorted(MATERIALIZE_PRESETS),
+        default=None,
+        help="Apply a measured materialization preset while preserving explicit option overrides",
+    )
+    ap.add_argument("--load-method", choices=["auto", "load_data", "to_sql"], default=None)
+    ap.add_argument("--parallel-tables", type=int, default=None, help="Number of tables to materialize in parallel")
+    ap.add_argument("--parallel-files-per-table", type=int, default=None, help="Number of parquet files to load in parallel within a table")
     ap.add_argument("--file-chunk-rows", type=int, default=0, help="Chunk rows within a parquet file for finer-grained resume (0 disables)")
-    ap.add_argument("--staging-writer", choices=["python", "duckdb"], default="duckdb")
+    ap.add_argument("--staging-writer", choices=["python", "duckdb"], default=None)
     ap.add_argument("--staging-dir", default=None, help="Temp staging directory for LOAD DATA files")
     ap.add_argument(
         "--skip-load-data-preflight",
@@ -1316,6 +1362,7 @@ def main() -> int:
     ap.add_argument("--strict-schema-manifest", action="store_true", help="Fail on manifest/parquet schema mismatches")
     ap.add_argument("--keep-going", action="store_true", help="Continue with next file on error")
     args = ap.parse_args()
+    preset_info = _apply_materialize_preset(args)
 
     run_dir = Path(args.run_dir).expanduser().resolve()
     cfg = _read_json(run_dir / "config.json")
@@ -1354,6 +1401,9 @@ def main() -> int:
     report.set_artifact("parquet_root", str(parquet_root))
     report.set_artifact("db_name", str(db_config.get("database") or ""))
     report.set_artifact("selected_tables", selected_tables)
+    report.set_artifact("materialize_preset", preset_info.get("name"))
+    report.set_artifact("materialize_preset_applied", bool(preset_info.get("applied")))
+    report.set_artifact("materialize_preset_settings", preset_info.get("settings") or {})
     report.set_artifact("load_method", str(args.load_method))
     report.set_artifact("staging_writer", str(args.staging_writer))
     report.set_artifact("staging_dir", staging_dir)

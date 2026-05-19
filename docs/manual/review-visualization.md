@@ -47,6 +47,7 @@ Use this when you want a self-contained HTML schema catalog with:
 - inline SVG schema
 - logical depth groups
 - searchable table list
+- parent/child relationship hints and join SQL snippets
 - per-table DDL, columns, indexes, and sample rows
 
 ## Public OpenAlex examples

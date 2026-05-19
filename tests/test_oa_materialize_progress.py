@@ -1,6 +1,7 @@
 import importlib.util
 import threading
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -14,6 +15,70 @@ SPEC.loader.exec_module(oa_materialize)
 
 
 class TestOaMaterializeProgress(unittest.TestCase):
+    def test_openalex_fast_materialize_preset_applies_measured_defaults(self):
+        args = SimpleNamespace(
+            materialize_preset="openalex-idcompact-fast",
+            load_method=None,
+            staging_writer=None,
+            parallel_tables=None,
+            parallel_files_per_table=None,
+            require_schema_manifest=False,
+            require_id_compaction=False,
+        )
+
+        info = oa_materialize._apply_materialize_preset(args)
+
+        self.assertEqual(info["name"], "openalex-idcompact-fast")
+        self.assertTrue(info["applied"])
+        self.assertEqual(args.load_method, "load_data")
+        self.assertEqual(args.staging_writer, "duckdb")
+        self.assertEqual(args.parallel_tables, 6)
+        self.assertEqual(args.parallel_files_per_table, 2)
+        self.assertTrue(args.require_schema_manifest)
+        self.assertTrue(args.require_id_compaction)
+
+    def test_materialize_preset_keeps_explicit_overrides(self):
+        args = SimpleNamespace(
+            materialize_preset="openalex-idcompact-fast",
+            load_method="to_sql",
+            staging_writer="python",
+            parallel_tables=3,
+            parallel_files_per_table=1,
+            require_schema_manifest=False,
+            require_id_compaction=False,
+        )
+
+        oa_materialize._apply_materialize_preset(args)
+
+        self.assertEqual(args.load_method, "to_sql")
+        self.assertEqual(args.staging_writer, "python")
+        self.assertEqual(args.parallel_tables, 3)
+        self.assertEqual(args.parallel_files_per_table, 1)
+        self.assertTrue(args.require_schema_manifest)
+        self.assertTrue(args.require_id_compaction)
+
+    def test_materialize_defaults_without_preset_match_safe_serial_path(self):
+        args = SimpleNamespace(
+            materialize_preset=None,
+            load_method=None,
+            staging_writer=None,
+            parallel_tables=None,
+            parallel_files_per_table=None,
+            require_schema_manifest=False,
+            require_id_compaction=False,
+        )
+
+        info = oa_materialize._apply_materialize_preset(args)
+
+        self.assertIsNone(info["name"])
+        self.assertFalse(info["applied"])
+        self.assertEqual(args.load_method, "load_data")
+        self.assertEqual(args.staging_writer, "duckdb")
+        self.assertEqual(args.parallel_tables, 1)
+        self.assertEqual(args.parallel_files_per_table, 1)
+        self.assertFalse(args.require_schema_manifest)
+        self.assertFalse(args.require_id_compaction)
+
     def test_load_data_preflight_runs_only_for_duckdb_load_data_path(self):
         self.assertTrue(
             oa_materialize._should_run_load_data_preflight(

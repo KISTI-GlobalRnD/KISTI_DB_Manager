@@ -56,10 +56,7 @@ python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \
-  --staging-writer duckdb \
-  --parallel-tables 4 \
-  --parallel-files-per-table 4 \
-  --file-chunk-rows 5000
+  --materialize-preset openalex-idcompact-fast
 ```
 
 For repeated operational reloads, use the plan-driven wrapper instead of a one-off shell loop:
@@ -86,10 +83,13 @@ In this repository, the fastest practical materialization path is:
 
 Use:
 
+- `--materialize-preset openalex-idcompact-fast` for the current OpenAlex ID-compacted starting point
 - `--staging-writer duckdb`
 - `--parallel-tables N`
 - `--parallel-files-per-table N`
 - `--file-chunk-rows N` for finer restart granularity on large parquet files
+
+The retained 100k OpenAlex source materializer comparison loaded `4,733,457` rows across `194` parquet files. The serial materializer took `23.64s`; `--parallel-tables 6 --parallel-files-per-table 2` took `7.99s`; increasing file parallelism to `3` regressed to `8.63s`. Treat the preset as an operational starting point, not a universal DB default; shared or smaller DBs should still profile locally.
 
 ## Delta snapshot merge
 
