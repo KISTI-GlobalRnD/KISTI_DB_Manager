@@ -15,9 +15,16 @@ The maintained documentation lives in `docs/` and is published through MkDocs.
 - Architecture notes: [docs/architecture/index.md](docs/architecture/index.md)
 - Korean operator notes: [docs/ko/index.md](docs/ko/index.md)
 
-README is intentionally only a portal. Detailed workflows, benchmarks, and maintainer notes belong in the MkDocs pages so they are versioned and checked by `uv run mkdocs build --strict`.
+README is intentionally only a portal. Detailed workflows, benchmarks, and maintainer notes belong in the MkDocs pages so they are versioned and checked by `mkdocs build --strict`.
 
 ## Install
+
+Create and activate a Python environment first:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+```
 
 ```bash
 pip install -e .
@@ -29,13 +36,14 @@ Recommended extras:
 pip install -e ".[tabular,db]"
 pip install -e ".[json,db]"
 pip install -e ".[json,db,viz,review]"
+pip install -e ".[docs]"
 ```
 
 For the optional Rust backend:
 
 ```bash
 pip install -e ".[json,db,rust]"
-uv run python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
 ```
 
 ## Quick Start
@@ -72,7 +80,8 @@ kisti-db-manager review plan \
 Build docs locally:
 
 ```bash
-uv run mkdocs build --strict
+pip install -e ".[docs]"
+mkdocs build --strict
 ```
 
 ## Smoke Test

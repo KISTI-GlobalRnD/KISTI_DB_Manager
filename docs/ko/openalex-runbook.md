@@ -42,7 +42,7 @@ kisti-db-manager parquet inspect \
 ## DB 적재
 
 ```bash
-uv run python scripts/oa_materialize_parquet_to_db.py \
+python scripts/oa_materialize_parquet_to_db.py \
   runs/<run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \

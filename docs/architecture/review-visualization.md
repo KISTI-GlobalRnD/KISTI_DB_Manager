@@ -57,7 +57,7 @@ Use them to understand what the package produces before you run it on your own d
 
 ### Interactive raw-vs-flatten preview
 
-This example is generated from the latest OpenAlex preview output.
+This example is generated from the checked-in OpenAlex preview output.
 It shows the raw JSON structure, the flattened base/subtable view, union exceptions, and the OpenAlex abstract spotlight for `abstract_inverted_index`.
 
 - Open the interactive preview: [`openalex_preview/preview.html`](../examples/openalex_preview/preview.html)
@@ -65,7 +65,7 @@ It shows the raw JSON structure, the flattened base/subtable view, union excepti
 
 ### Predicted schema SVG
 
-This example is generated from the latest OpenAlex review-plan output, so it reflects the current predicted schema path rather than an older DB-backed artifact.
+This example is generated from the checked-in OpenAlex review-plan output, so it reflects the public predicted schema path rather than an older DB-backed artifact.
 The SVG is table-centric: each box is a split table, with visible columns and lightweight relationship/FK cues.
 
 Example schema SVG:
@@ -85,7 +85,7 @@ Use the direct Python call for this maintainer task because the public example s
 In particular, set `persist_parquet_files=False`; otherwise a docs refresh can accidentally take the heavy parquet-preservation path.
 
 ```bash
-uv run python - <<'PY'
+python - <<'PY'
 from KISTI_DB_Manager.review import generate_review_plan
 
 res = generate_review_plan(
@@ -106,7 +106,7 @@ PY
 
 cp tmp/openalex_schema_refresh/schema.svg docs/assets/openalex_schema_example.svg
 git diff --check
-uv run mkdocs build --strict
+mkdocs build --strict
 ```
 
 The refreshed SVG should still show `openalex_works_20260225`, the `abstract_inverted_index` excepted table, and the expected table/relationship structure.

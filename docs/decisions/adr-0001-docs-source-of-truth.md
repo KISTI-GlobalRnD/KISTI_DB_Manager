@@ -11,7 +11,7 @@ It is tempting to split English technical docs into MkDocs and Korean operator d
 
 That split would create two maintenance surfaces:
 
-- MkDocs pages that are versioned with code and checked by `uv run mkdocs build --strict`
+- MkDocs pages that are versioned with code and checked by `mkdocs build --strict`
 - Wiki pages that are easier to edit but not checked with the repository
 
 For this project, command sequences, OpenAlex defaults, artifact contracts, and benchmark-derived recommendations change with code.
@@ -27,7 +27,7 @@ Korean operator runbooks live under `docs/ko/` so they are versioned and validat
 
 ## Consequences
 
-- Documentation changes should pass `uv run mkdocs build --strict`.
+- Documentation changes should pass `mkdocs build --strict`.
 - Durable operator procedures belong in `docs/operator-guides/` or `docs/ko/`.
 - Maintainer-facing rationale belongs in `docs/architecture/`, `docs/design/`, `docs/performance/`, or `docs/decisions/`.
 - Generated run artifacts stay outside `docs/` unless explicitly selected as public examples.

@@ -21,7 +21,7 @@ row 단위 정확 재개가 아니라 source/batch 단위 재개로 이해해야
 큰 parquet 파일은 `--file-chunk-rows N`을 사용하면 파일 내부 offset 기준으로 재개할 수 있습니다.
 
 ```bash
-uv run python scripts/oa_materialize_parquet_to_db.py \
+python scripts/oa_materialize_parquet_to_db.py \
   runs/<run_dir> \
   --dotenv path/to/.env \
   --file-chunk-rows 5000

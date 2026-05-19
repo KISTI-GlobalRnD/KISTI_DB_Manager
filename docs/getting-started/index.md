@@ -6,8 +6,12 @@ This chapter covers install, base CLI, and the first decision point between DB-f
 
 Base install keeps only the lightweight commands.
 For real ingest work, install extras explicitly.
+The examples assume an activated Python environment.
 
 ```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
 pip install -e .
 pip install -e ".[json,db]"
 pip install -e ".[json,db,viz,review]"
@@ -48,7 +52,7 @@ kisti-db-manager json run --config path/to/openalex_config.json --mode parse-par
 Then materialize later:
 
 ```bash
-uv run python scripts/oa_materialize_parquet_to_db.py \
+python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env
 ```
