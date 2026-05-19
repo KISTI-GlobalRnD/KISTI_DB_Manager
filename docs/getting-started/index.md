@@ -48,7 +48,7 @@ kisti-db-manager json run --config path/to/openalex_config.json --mode parse-par
 Then materialize later:
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+uv run python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env
 ```

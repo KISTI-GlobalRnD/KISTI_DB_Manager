@@ -85,7 +85,7 @@ Use the direct Python call for this maintainer task because the public example s
 In particular, set `persist_parquet_files=False`; otherwise a docs refresh can accidentally take the heavy parquet-preservation path.
 
 ```bash
-python - <<'PY'
+uv run python - <<'PY'
 from KISTI_DB_Manager.review import generate_review_plan
 
 res = generate_review_plan(
@@ -106,7 +106,7 @@ PY
 
 cp tmp/openalex_schema_refresh/schema.svg docs/assets/openalex_schema_example.svg
 git diff --check
-mkdocs build --strict
+uv run mkdocs build --strict
 ```
 
 The refreshed SVG should still show `openalex_works_20260225`, the `abstract_inverted_index` excepted table, and the expected table/relationship structure.

@@ -6,7 +6,7 @@ Use this checklist before committing documentation or operator-facing workflow c
 
 ```bash
 git diff --check
-mkdocs build --strict
+uv run mkdocs build --strict
 ```
 
 Check that generated public examples are intentionally selected and reproducible.
@@ -17,7 +17,7 @@ Run-specific artifacts should stay outside `docs/` unless they are part of the p
 For code changes, run the unit suite:
 
 ```bash
-python -m unittest discover -s tests -q
+uv run python -m unittest discover -s tests -q
 ```
 
 ## Rust Backend Changes
@@ -33,7 +33,7 @@ cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
 Run the DB smoke test only against a disposable or development MariaDB target:
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
+uv run python scripts/smoke_rust_db_load.py --dotenv .env
 ```
 
 ## Operator-Facing Changes

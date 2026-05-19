@@ -4,13 +4,13 @@
 
 ```bash
 git diff --check
-mkdocs build --strict
+uv run mkdocs build --strict
 ```
 
 코드 변경이 있으면 Python 테스트를 실행합니다.
 
 ```bash
-python -m unittest discover -s tests -q
+uv run python -m unittest discover -s tests -q
 ```
 
 Rust backend 변경이 있으면 Rust 검증도 실행합니다.

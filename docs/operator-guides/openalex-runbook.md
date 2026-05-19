@@ -52,7 +52,7 @@ kisti-db-manager json run \
 ## Materialize into DB later
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+uv run python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \

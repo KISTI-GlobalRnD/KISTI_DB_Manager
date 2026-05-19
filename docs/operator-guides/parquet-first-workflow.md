@@ -35,7 +35,7 @@ Treat a failed contract check as a stop signal before DB work.
 ## Materialize Later
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+uv run python scripts/oa_materialize_parquet_to_db.py \
   runs/<run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \

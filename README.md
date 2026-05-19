@@ -15,7 +15,7 @@ The maintained documentation lives in `docs/` and is published through MkDocs.
 - Architecture notes: [docs/architecture/index.md](docs/architecture/index.md)
 - Korean operator notes: [docs/ko/index.md](docs/ko/index.md)
 
-README is intentionally only a portal. Detailed workflows, benchmarks, and maintainer notes belong in the MkDocs pages so they are versioned and checked by `mkdocs build --strict`.
+README is intentionally only a portal. Detailed workflows, benchmarks, and maintainer notes belong in the MkDocs pages so they are versioned and checked by `uv run mkdocs build --strict`.
 
 ## Install
 
@@ -35,7 +35,7 @@ For the optional Rust backend:
 
 ```bash
 pip install -e ".[json,db,rust]"
-python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+uv run python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
 ```
 
 ## Quick Start
@@ -72,7 +72,7 @@ kisti-db-manager review plan \
 Build docs locally:
 
 ```bash
-mkdocs build --strict
+uv run mkdocs build --strict
 ```
 
 ## Smoke Test

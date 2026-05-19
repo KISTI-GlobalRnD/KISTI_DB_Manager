@@ -58,13 +58,13 @@ kisti-db-manager json profile-parallel \
 kisti-db-manager json id-compaction-preflight --config path/to/openalex_config.json --report id_compaction_preflight.json
 ```
 
-`json run --flatten-backend auto|python|rust-arrow` selects the JSON parse/parquet backend. `auto` is the default: it uses the optional Rust Arrow/Parquet extension for supported parquet artifact runs when installed and falls back to Python otherwise. Explicit `rust-arrow` parse/parquet-only runs now use the Rust raw JSONL/GZ parser by default when the input is eligible; use `--no-rust-raw-jsonl-parse` to compare against the older Python JSON decoding path. For explicit `rust-arrow` parquet-first runs with `--id-compaction`, omitted `parallel_workers` defaults to `8`; pass `--parallel-workers 0` or another count to override it. For OpenAlex ID-compacted artifact runs, `--chunk-size 10000` is the current runbook recommendation because it halves parquet file count versus `5000` with essentially unchanged runtime in the retained 100k check. Add `--rust-raw-jsonl-file-parse` to let Rust read source JSONL/NDJSON files directly when supported. `--rust-parser-backend serde-json|simd-json` is an experimental parser selector for Rust raw JSONL paths; the default stays `serde-json`, and `simd-json` requires rebuilding with `python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release --features simd-json`. `--rust-columnar-accumulator` tests the opt-in Rust columnar accumulator, which avoids materializing full row maps before Arrow arrays are built; keep it profile-driven and disabled for ID compaction runs. `--rust-parquet-flush-records` lets direct Rust JSONL runs use a small `--chunk-size` for parser/flatten cache locality while writing parquet files after a larger record count. `--rust-parallel-table-writes` explicitly tests per-table parquet write parallelism; keep it evidence-based because it can trade lower parquet write time for more I/O contention. `--rust-db-load` opts into the experimental Rust MySQL insert path for Rust parquet artifacts while keeping table creation/schema mapping/index/optimize in Python. Build the optional extension with `pip install -e '.[json,rust]'` and `python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release`. For backend policy, limitations, smoke tests, and benchmarks, see [Rust Backend and Profiling](../architecture/rust-backend.md).
+`json run --flatten-backend auto|python|rust-arrow` selects the JSON parse/parquet backend. `auto` is the default: it uses the optional Rust Arrow/Parquet extension for supported parquet artifact runs when installed and falls back to Python otherwise. Explicit `rust-arrow` parse/parquet-only runs now use the Rust raw JSONL/GZ parser by default when the input is eligible; use `--no-rust-raw-jsonl-parse` to compare against the older Python JSON decoding path. For explicit `rust-arrow` parquet-first runs with `--id-compaction`, omitted `parallel_workers` defaults to `8`; pass `--parallel-workers 0` or another count to override it. For OpenAlex ID-compacted artifact runs, `--chunk-size 10000` is the current runbook recommendation because it halves parquet file count versus `5000` with essentially unchanged runtime in the retained 100k check. Add `--rust-raw-jsonl-file-parse` to let Rust read source JSONL/NDJSON files directly when supported. `--rust-parser-backend serde-json|simd-json` is an experimental parser selector for Rust raw JSONL paths; the default stays `serde-json`, and `simd-json` requires rebuilding with `uv run python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release --features simd-json`. `--rust-columnar-accumulator` tests the opt-in Rust columnar accumulator, which avoids materializing full row maps before Arrow arrays are built; keep it profile-driven and disabled for ID compaction runs. `--rust-parquet-flush-records` lets direct Rust JSONL runs use a small `--chunk-size` for parser/flatten cache locality while writing parquet files after a larger record count. `--rust-parallel-table-writes` explicitly tests per-table parquet write parallelism; keep it evidence-based because it can trade lower parquet write time for more I/O contention. `--rust-db-load` opts into the experimental Rust MySQL insert path for Rust parquet artifacts while keeping table creation/schema mapping/index/optimize in Python. Build the optional extension with `pip install -e '.[json,rust]'` and `uv run python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release`. For backend policy, limitations, smoke tests, and benchmarks, see [Rust Backend and Profiling](../architecture/rust-backend.md).
 
 Operational Rust DB checks:
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
-python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
+uv run python scripts/smoke_rust_db_load.py --dotenv .env
+uv run python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
   --config runs/example/config.json \
   --loader rust-mysql \
   --report runs/example/rust_mysql_load_benchmark.json
@@ -79,7 +79,7 @@ python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
 ## Parquet materialize helper
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+uv run python scripts/oa_materialize_parquet_to_db.py \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \
@@ -110,9 +110,9 @@ kisti-db-manager parquet finalize --plan runs/<run_dir>/plans/parquet_reload_pla
 Equivalent script wrappers are available:
 
 ```bash
-python scripts/parquet_reload_plan.py run --plan runs/<run_dir>/plans/parquet_reload_plan.json
-python scripts/parquet_preflight_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json
-python scripts/parquet_finalize_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json
+uv run python scripts/parquet_reload_plan.py run --plan runs/<run_dir>/plans/parquet_reload_plan.json
+uv run python scripts/parquet_preflight_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json
+uv run python scripts/parquet_finalize_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json
 ```
 
 `parquet reload` runs target DB preflight by default. Use `--skip-preflight` only after separately reviewing a clean preflight report.
