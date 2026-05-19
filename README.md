@@ -36,6 +36,26 @@ The pre-refactor implementation is no longer present in the working tree and is 
   - HTML UI (search/depth/focus + SVG/PNG export) for `review pack` and `review diff`
   - Self-contained schema viewer HTML (`review schema-viewer`) with summary cards, logical groups, relationship hints, DDL preview, and searchable table catalog
 
+## Maintainer module map
+
+The public compatibility surface is intentionally small:
+
+- `KISTI_DB_Manager.review` is a compatibility facade for review-related imports.
+- `KISTI_DB_Manager.cli` is a compatibility facade for CLI parser construction.
+
+Most implementation code now lives in smaller internal modules:
+
+- `KISTI_DB_Manager/_cli/`: command registration and command handlers
+- `KISTI_DB_Manager/_pipeline/`: pipeline runtime and JSON source helpers
+- `KISTI_DB_Manager/_review/common.py`: review utility helpers
+- `KISTI_DB_Manager/_review/core.py`: `TableInfo`, DB introspection, table-info collection
+- `KISTI_DB_Manager/_review/plan.py`: `review plan` orchestration
+- `KISTI_DB_Manager/_review/pack.py`: `review pack` orchestration
+- `KISTI_DB_Manager/_review/report_html.py`: review-pack HTML renderer
+- `KISTI_DB_Manager/_review/report_markdown.py`: review-pack and review-plan Markdown renderers
+- `KISTI_DB_Manager/_review/schema_render.py`: Mermaid/SVG schema rendering
+- `KISTI_DB_Manager/_review/schema_payload.py` and `schema_html.py`: self-contained schema viewer payload/HTML
+
 ## Schema visualization (Data_Sample)
 
 Representative schema graph generated from `Data_Sample/`:

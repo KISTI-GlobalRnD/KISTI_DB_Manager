@@ -66,7 +66,7 @@ It shows the raw JSON structure, the flattened base/subtable view, union excepti
 ### Predicted schema SVG
 
 This example is generated from the latest OpenAlex review-plan output, so it reflects the current predicted schema path rather than an older DB-backed artifact.
-The SVG is table-centric: each box is a split table, with visible columns and lightweight PK/FK cues.
+The SVG is table-centric: each box is a split table, with visible columns and lightweight relationship/FK cues.
 
 Example schema SVG:
 
@@ -75,6 +75,41 @@ Example schema SVG:
 - Download the raw SVG: [`openalex_schema_example.svg`](../assets/openalex_schema_example.svg)
 - Generate your own schema viewer locally with `review schema-viewer` when you need a run-specific artifact.
 - Generate your own raw-vs-flatten preview locally with `review preview` when you need a run-specific artifact.
+
+### Regenerating the checked-in OpenAlex schema SVG
+
+The checked-in SVG is a public docs artifact, not an automatic by-product of every OpenAlex run.
+When refreshing it, generate into an ignored local directory first and copy only the final SVG into `docs/assets/`.
+
+Use the direct Python call for this maintainer task because the public example should not inherit large-run artifact persistence settings from the saved OpenAlex config.
+In particular, set `persist_parquet_files=False`; otherwise a docs refresh can accidentally take the heavy parquet-preservation path.
+
+```bash
+python - <<'PY'
+from KISTI_DB_Manager.review import generate_review_plan
+
+res = generate_review_plan(
+    config_path="runs/<openalex_run>/config.json",
+    out_dir="tmp/openalex_schema_refresh",
+    formats="md,html,svg,mmd",
+    max_records=5000,
+    data_overrides={
+        "persist_parquet_files": False,
+        "persist_tsv_files": False,
+        "auto_except": True,
+        "auto_except_sample_records": 5000,
+        "auto_except_sample_max_sources": 64,
+    },
+)
+print(res["schema_svg"])
+PY
+
+cp tmp/openalex_schema_refresh/schema.svg docs/assets/openalex_schema_example.svg
+git diff --check
+mkdocs build --strict
+```
+
+The refreshed SVG should still show `openalex_works_20260225`, the `abstract_inverted_index` excepted table, and the expected table/relationship structure.
 
 ## Public docs vs generated artifacts
 
@@ -94,3 +129,17 @@ Recommended local artifact convention:
 
 OpenAlex is appropriate as a public-facing example because the source data is open and reproducible.
 Commercial datasets should stay in internal docs or internal runbooks, not in the public documentation site.
+
+## Implementation map
+
+Review commands are still imported through `KISTI_DB_Manager.review` for compatibility, but the implementation is split by responsibility:
+
+- `KISTI_DB_Manager/_review/plan.py`: builds pre-load review plans.
+- `KISTI_DB_Manager/_review/pack.py`: builds post-run review packs.
+- `KISTI_DB_Manager/_review/core.py`: owns `TableInfo`, DB introspection, and table metadata merging.
+- `KISTI_DB_Manager/_review/report_markdown.py`: renders `PLAN.md` and `REVIEW.md`.
+- `KISTI_DB_Manager/_review/report_html.py`: renders the interactive review-pack HTML.
+- `KISTI_DB_Manager/_review/schema_render.py`: renders Mermaid and SVG schema diagrams.
+- `KISTI_DB_Manager/_review/schema_payload.py` and `schema_html.py`: build and render the standalone schema viewer.
+
+When updating review behavior, prefer changing the responsible `_review/*` module instead of adding logic to `review.py`.

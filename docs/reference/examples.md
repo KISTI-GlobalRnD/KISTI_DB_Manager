@@ -28,5 +28,18 @@ bash examples/smoke_real_db.sh \
 
 ## Preview outputs
 
-Representative screenshots and preview examples remain in `examples/README.md` and `examples/assets/`.
-Use those when you need visual validation of review output or raw-vs-flatten preview behavior.
+There are two example surfaces:
+
+- `examples/`: smoke-test fixtures, sample configs, and historical screenshot assets.
+- `docs/examples/` and `docs/assets/`: public documentation examples published by MkDocs.
+
+Current public review examples:
+
+- OpenAlex raw-vs-flatten preview HTML: [`../examples/openalex_preview/preview.html`](../examples/openalex_preview/preview.html)
+- OpenAlex raw-vs-flatten preview JSON: [`../examples/openalex_preview/preview.json`](../examples/openalex_preview/preview.json)
+- OpenAlex predicted schema SVG: [`../assets/openalex_schema_example.svg`](../assets/openalex_schema_example.svg)
+
+For the maintainer refresh command, see [Review and Visualization](../manual/review-visualization.md#regenerating-the-checked-in-openalex-schema-svg).
+
+Generated run-specific review artifacts should usually stay outside `docs/`.
+Copy or link them into `docs/examples/` only when the artifact is intentionally part of the public documentation.

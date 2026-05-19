@@ -67,3 +67,23 @@ Think of the package in three layers:
 
 The public documentation should mostly explain these layers and when to use each one.
 OpenAlex is used as the representative public example because the data is open and reproducible.
+
+## Maintainer-facing package layout
+
+The public imports remain stable, but large implementation modules have been split into smaller internal packages.
+Use this map when changing code or tracing CLI behavior:
+
+| Area | Current location | Role |
+|---|---|---|
+| CLI facade | `KISTI_DB_Manager/cli.py` | compatibility entrypoint |
+| CLI implementation | `KISTI_DB_Manager/_cli/` | parser registration and command handlers |
+| Review facade | `KISTI_DB_Manager/review.py` | compatibility imports for existing callers |
+| Review core | `KISTI_DB_Manager/_review/core.py` | `TableInfo`, DB introspection, table-info merge helpers |
+| Review plan | `KISTI_DB_Manager/_review/plan.py` | `review plan` orchestration |
+| Review pack | `KISTI_DB_Manager/_review/pack.py` | `review pack` orchestration |
+| Review HTML/Markdown | `KISTI_DB_Manager/_review/report_html.py`, `report_markdown.py` | report rendering |
+| Schema viewer | `KISTI_DB_Manager/_review/schema_payload.py`, `schema_html.py` | self-contained viewer payload and HTML |
+| Schema graph/render | `KISTI_DB_Manager/_review/schema_graph.py`, `schema_render.py` | relationship hints, Mermaid, SVG |
+| Pipeline helpers | `KISTI_DB_Manager/_pipeline/` | runtime and JSON source utilities |
+
+`KISTI_DB_Manager.review` and `KISTI_DB_Manager.cli` should stay thin. Add new behavior in the internal modules first, then re-export only when compatibility requires it.

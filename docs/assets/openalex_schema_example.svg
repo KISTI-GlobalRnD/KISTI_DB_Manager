@@ -196,7 +196,6 @@
 <text class="meta" x="40" y="89">rows: n/a · cols: 98</text>
 <text class="col-name" x="42" y="108">id</text>
 <text class="col-type" x="332" y="108" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="378" y="108" text-anchor="end">PK</text>
 <text class="col-name" x="42" y="126">doi</text>
 <text class="col-type" x="332" y="126" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="42" y="144">title</text>
@@ -252,7 +251,7 @@
 <text class="meta" x="460" y="89">rows: n/a · cols: 12</text>
 <text class="col-name" x="462" y="108">id</text>
 <text class="col-type" x="752" y="108" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="108" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="108" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="126">authorships…hor_position</text>
 <text class="col-type" x="752" y="126" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="144">authorships…affiliations</text>
@@ -281,7 +280,7 @@
 <text class="meta" x="1300" y="89">rows: n/a · cols: 3</text>
 <text class="col-name" x="1302" y="108">id</text>
 <text class="col-type" x="1592" y="108" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1638" y="108" text-anchor="end">PK</text>
+<text class="col-key" x="1638" y="108" text-anchor="end">FK</text>
 <text class="col-name" x="1302" y="126">best_oa_loc…tion_lineage</text>
 <text class="col-type" x="1592" y="126" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="1302" y="144">__extra__</text>
@@ -296,7 +295,7 @@
 <text class="meta" x="1300" y="283">rows: n/a · cols: 3</text>
 <text class="col-name" x="1302" y="302">id</text>
 <text class="col-type" x="1592" y="302" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1638" y="302" text-anchor="end">PK</text>
+<text class="col-key" x="1638" y="302" text-anchor="end">FK</text>
 <text class="col-name" x="1302" y="320">best_oa_loc…ineage_names</text>
 <text class="col-type" x="1592" y="320" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="1302" y="338">__extra__</text>
@@ -311,7 +310,7 @@
 <text class="meta" x="1300" y="477">rows: n/a · cols: 3</text>
 <text class="col-name" x="1302" y="496">id</text>
 <text class="col-type" x="1592" y="496" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1638" y="496" text-anchor="end">PK</text>
+<text class="col-key" x="1638" y="496" text-anchor="end">FK</text>
 <text class="col-name" x="1302" y="514">best_oa_loc…source__issn</text>
 <text class="col-type" x="1592" y="514" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="1302" y="532">__extra__</text>
@@ -326,7 +325,7 @@
 <text class="meta" x="460" y="421">rows: n/a · cols: 7</text>
 <text class="col-name" x="462" y="440">id</text>
 <text class="col-type" x="752" y="440" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="440" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="440" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="458">concepts__id</text>
 <text class="col-type" x="752" y="458" text-anchor="end">LONGTEXT</text>
 <text class="col-key" x="798" y="458" text-anchor="end">FK</text>
@@ -350,7 +349,7 @@
 <text class="meta" x="460" y="695">rows: n/a · cols: 3</text>
 <text class="col-name" x="462" y="714">id</text>
 <text class="col-type" x="752" y="714" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="714" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="714" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="732">corresponding_author_ids</text>
 <text class="col-type" x="752" y="732" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="750">__extra__</text>
@@ -365,7 +364,7 @@
 <text class="meta" x="460" y="889">rows: n/a · cols: 3</text>
 <text class="col-name" x="462" y="908">id</text>
 <text class="col-type" x="752" y="908" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="908" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="908" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="926">correspondi…titution_ids</text>
 <text class="col-type" x="752" y="926" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="944">__extra__</text>
@@ -380,7 +379,7 @@
 <text class="meta" x="460" y="1083">rows: n/a · cols: 4</text>
 <text class="col-name" x="462" y="1102">id</text>
 <text class="col-type" x="752" y="1102" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="1102" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="1102" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="1120">counts_by_year__year</text>
 <text class="col-type" x="752" y="1120" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="1138">counts_by_y…ted_by_count</text>
@@ -399,7 +398,7 @@
 <text class="col-type" x="1172" y="108" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="882" y="126">id</text>
 <text class="col-type" x="1172" y="126" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1218" y="126" text-anchor="end">PK</text>
+<text class="col-key" x="1218" y="126" text-anchor="end">FK</text>
 <text class="col-name" x="882" y="144">__except_path__</text>
 <text class="col-type" x="1172" y="144" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="882" y="162">__except_raw_type__</text>
@@ -423,7 +422,7 @@
 <text class="meta" x="460" y="1297">rows: n/a · cols: 5</text>
 <text class="col-name" x="462" y="1316">id</text>
 <text class="col-type" x="752" y="1316" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="1316" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="1316" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="1334">funders__id</text>
 <text class="col-type" x="752" y="1334" text-anchor="end">LONGTEXT</text>
 <text class="col-key" x="798" y="1334" text-anchor="end">FK</text>
@@ -443,7 +442,7 @@
 <text class="meta" x="460" y="1531">rows: n/a · cols: 3</text>
 <text class="col-name" x="462" y="1550">id</text>
 <text class="col-type" x="752" y="1550" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="1550" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="1550" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="1568">indexed_in</text>
 <text class="col-type" x="752" y="1568" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="1586">__extra__</text>
@@ -458,7 +457,7 @@
 <text class="meta" x="460" y="1725">rows: n/a · cols: 5</text>
 <text class="col-name" x="462" y="1744">id</text>
 <text class="col-type" x="752" y="1744" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="1744" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="1744" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="1762">keywords__id</text>
 <text class="col-type" x="752" y="1762" text-anchor="end">LONGTEXT</text>
 <text class="col-key" x="798" y="1762" text-anchor="end">FK</text>
@@ -478,7 +477,7 @@
 <text class="meta" x="460" y="1959">rows: n/a · cols: 26</text>
 <text class="col-name" x="462" y="1978">id</text>
 <text class="col-type" x="752" y="1978" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="1978" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="1978" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="1996">locations__id</text>
 <text class="col-type" x="752" y="1996" text-anchor="end">LONGTEXT</text>
 <text class="col-key" x="798" y="1996" text-anchor="end">FK</text>
@@ -511,7 +510,7 @@
 <text class="meta" x="460" y="2311">rows: n/a · cols: 7</text>
 <text class="col-name" x="462" y="2330">id</text>
 <text class="col-type" x="752" y="2330" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="2330" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="2330" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="2348">mesh__descriptor_ui</text>
 <text class="col-type" x="752" y="2348" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="2366">mesh__descriptor_name</text>
@@ -534,7 +533,7 @@
 <text class="meta" x="1300" y="671">rows: n/a · cols: 3</text>
 <text class="col-name" x="1302" y="690">id</text>
 <text class="col-type" x="1592" y="690" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1638" y="690" text-anchor="end">PK</text>
+<text class="col-key" x="1638" y="690" text-anchor="end">FK</text>
 <text class="col-name" x="1302" y="708">primary_loc…tion_lineage</text>
 <text class="col-type" x="1592" y="708" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="1302" y="726">__extra__</text>
@@ -549,7 +548,7 @@
 <text class="meta" x="1300" y="865">rows: n/a · cols: 3</text>
 <text class="col-name" x="1302" y="884">id</text>
 <text class="col-type" x="1592" y="884" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1638" y="884" text-anchor="end">PK</text>
+<text class="col-key" x="1638" y="884" text-anchor="end">FK</text>
 <text class="col-name" x="1302" y="902">primary_loc…ineage_names</text>
 <text class="col-type" x="1592" y="902" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="1302" y="920">__extra__</text>
@@ -564,7 +563,7 @@
 <text class="meta" x="1300" y="1059">rows: n/a · cols: 3</text>
 <text class="col-name" x="1302" y="1078">id</text>
 <text class="col-type" x="1592" y="1078" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="1638" y="1078" text-anchor="end">PK</text>
+<text class="col-key" x="1638" y="1078" text-anchor="end">FK</text>
 <text class="col-name" x="1302" y="1096">primary_loc…source__issn</text>
 <text class="col-type" x="1592" y="1096" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="1302" y="1114">__extra__</text>
@@ -579,7 +578,7 @@
 <text class="meta" x="460" y="2585">rows: n/a · cols: 3</text>
 <text class="col-name" x="462" y="2604">id</text>
 <text class="col-type" x="752" y="2604" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="2604" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="2604" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="2622">referenced_works</text>
 <text class="col-type" x="752" y="2622" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="2640">__extra__</text>
@@ -594,7 +593,7 @@
 <text class="meta" x="460" y="2779">rows: n/a · cols: 3</text>
 <text class="col-name" x="462" y="2798">id</text>
 <text class="col-type" x="752" y="2798" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="2798" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="2798" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="2816">related_works</text>
 <text class="col-type" x="752" y="2816" text-anchor="end">LONGTEXT</text>
 <text class="col-name" x="462" y="2834">__extra__</text>
@@ -609,7 +608,7 @@
 <text class="meta" x="460" y="2973">rows: n/a · cols: 5</text>
 <text class="col-name" x="462" y="2992">id</text>
 <text class="col-type" x="752" y="2992" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="2992" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="2992" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="3010">sustainable…nt_goals__id</text>
 <text class="col-type" x="752" y="3010" text-anchor="end">LONGTEXT</text>
 <text class="col-key" x="798" y="3010" text-anchor="end">FK</text>
@@ -629,7 +628,7 @@
 <text class="meta" x="460" y="3207">rows: n/a · cols: 11</text>
 <text class="col-name" x="462" y="3226">id</text>
 <text class="col-type" x="752" y="3226" text-anchor="end">LONGTEXT</text>
-<text class="col-key" x="798" y="3226" text-anchor="end">PK</text>
+<text class="col-key" x="798" y="3226" text-anchor="end">FK</text>
 <text class="col-name" x="462" y="3244">topics__id</text>
 <text class="col-type" x="752" y="3244" text-anchor="end">LONGTEXT</text>
 <text class="col-key" x="798" y="3244" text-anchor="end">FK</text>
