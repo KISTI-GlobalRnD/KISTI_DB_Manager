@@ -7,6 +7,42 @@ from ..modes import MODES as _MODES
 
 from .common import _ensure_optional_deps, _resolve_bool
 
+
+def _cmd_tabular_describe(args: argparse.Namespace) -> int:
+    cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
+    data_config = cfg.get("data_config") or cfg.get("data") or {}
+    desc_params = cfg.get("desc_params") or {}
+
+    _ensure_optional_deps("tabular describe", ["numpy", "pandas"], extras=["tabular"])
+
+    from ..description_profile import write_description_profile
+
+    res = write_description_profile(
+        data_config,
+        params=desc_params,
+        backend=str(args.backend or "auto"),
+        desc_csv_path=args.out_desc,
+        profile_json_path=args.out_profile,
+    )
+    print(
+        json.dumps(
+            {
+                "status": "done",
+                "backend": res.profile.get("backend"),
+                "schema_version": res.profile.get("schema_version"),
+                "desc_csv": str(res.desc_csv_path),
+                "profile_json": str(res.profile_json_path),
+                "row_count": res.profile.get("source", {}).get("row_count"),
+                "column_count": len(res.profile.get("columns", [])),
+                "warnings": res.profile.get("warnings", []),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
 def _cmd_tabular_run(args: argparse.Namespace) -> int:
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     data_config = cfg.get("data_config") or cfg.get("data") or {}
@@ -82,6 +118,22 @@ def _cmd_tabular_run(args: argparse.Namespace) -> int:
 def register_tabular_parser(sub) -> None:
     p_tabular = sub.add_parser("tabular", help="Tabular -> DB pipeline helpers")
     tabular_sub = p_tabular.add_subparsers(dest="tabular_cmd", required=True)
+
+    p_tabular_describe = tabular_sub.add_parser(
+        "describe",
+        help="Generate a v2 tabular description CSV and profile JSON",
+    )
+    p_tabular_describe.add_argument("--config", required=True, help="JSON config file containing data_config")
+    p_tabular_describe.add_argument("--out-desc", help="Output v2 Desc CSV path; defaults to <PATH>/<table_name>_Desc.csv")
+    p_tabular_describe.add_argument("--out-profile", help="Output profile JSON path; defaults to <PATH>/<table_name>_profile.json")
+    p_tabular_describe.add_argument(
+        "--backend",
+        choices=["auto", "python"],
+        default="auto",
+        help="Description profiler backend (default: auto; currently resolves to python)",
+    )
+    p_tabular_describe.set_defaults(func=_cmd_tabular_describe)
+
     p_tabular_run = tabular_sub.add_parser("run", help="Run create/load/index/optimize for a tabular file")
     p_tabular_run.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")
     p_tabular_run.add_argument("--generate-desc", action="store_true", help="Generate a new description CSV first")

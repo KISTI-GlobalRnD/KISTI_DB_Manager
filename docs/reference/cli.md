@@ -30,16 +30,29 @@ kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_ou
 ```bash
 kisti-db-manager review pack --config path/to/config.json --report run_report.json --out review_out
 kisti-db-manager review schema-viewer --config path/to/config.json --report run_report.json --out schema_viewer_out
+kisti-db-manager review schema-viewer --config path/to/config.json --description-profile path/to/table_profile.json --out schema_viewer_out
 kisti-db-manager review diff before_review.json after_review.json --out-dir review_diff_out
 kisti-db-manager review preview --config path/to/config.json --out preview_out
 kisti-db-manager review plan --config path/to/openalex_config.json --out plan_out
 ```
 
+`review schema-viewer` automatically reads `<PATH>/<table_name>_profile.json`
+when present, or accepts `--description-profile` explicitly. The profile
+enriches column metadata with type confidence, null/unique ratios,
+key/index recommendations, and warning badges.
+
 ## Tabular
 
 ```bash
+kisti-db-manager tabular describe --config path/to/config.json
 kisti-db-manager tabular run --config path/to/config.json --report run_report.json
 ```
+
+`tabular describe` writes a v2 `*_Desc.csv` plus `*_profile.json`. The CSV keeps
+the compatibility fields used by tabular DB creation while adding type
+confidence, null/empty ratios, length statistics, uniqueness, key/index
+recommendations, and warnings. The JSON profile keeps source metadata, NameMap,
+and detailed evidence for review and future RDB visualization.
 
 ## JSON
 

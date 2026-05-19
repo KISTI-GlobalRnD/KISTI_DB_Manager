@@ -123,6 +123,7 @@ def _cmd_review_schema_viewer(args: argparse.Namespace) -> int:
         exact_counts=bool(args.exact_counts),
         sample_rows=int(args.sample_rows) if args.sample_rows is not None else None,
         sample_max_tables=int(args.sample_max_tables),
+        description_profile_path=args.description_profile,
     )
 
     print(f"out_dir: {res['out_dir']}")
@@ -223,6 +224,10 @@ def register_review_parser(sub) -> None:
     p_schema.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")
     p_schema.add_argument("--report", help="Optional RunReport JSON to enrich table mapping/DDL/issues")
     p_schema.add_argument("--quarantine", help="Optional Quarantine JSONL to overlay per-table counts")
+    p_schema.add_argument(
+        "--description-profile",
+        help="Optional v2 tabular profile JSON; defaults to <PATH>/<table_name>_profile.json when present",
+    )
     p_schema.add_argument("--out", help="Output directory (default: <config>_schema_viewer)")
     p_schema.add_argument(
         "--formats",

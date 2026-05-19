@@ -62,6 +62,7 @@ nav:
       - ADR 0001 Docs Source of Truth: decisions/adr-0001-docs-source-of-truth.md
   - Design and Performance:
       - Design Notes Overview: design/index.md
+      - Description Profile v2: design/description-profile-v2.md
       - Scenario-Based Parquet Jobs: design/parquet_job_scenarios.md
       - 2026-02-09 Historical Ingest Tuning: performance/2026-02-09_ingest_tuning.md
       - 2026-02-27 Historical Schema Display Benchmark: performance/2026-02-27_schema-display-benchmark_from_02-goldset.md

@@ -101,6 +101,112 @@ def _apply_predicted_columns(
     return out
 
 
+def _description_profile_table_sql(profile: Mapping[str, Any] | None) -> str:
+    if not isinstance(profile, Mapping):
+        return ""
+    nm = load_namemap(profile.get("name_map"))
+    if nm is not None:
+        return nm.table_sql
+    source = profile.get("source") if isinstance(profile.get("source"), Mapping) else {}
+    return str(source.get("table_name") or "")
+
+
+def _compact_column_profile(row: Mapping[str, Any]) -> dict[str, Any]:
+    keys = [
+        "source_column",
+        "sql_column",
+        "suggested_type",
+        "type_family",
+        "type_confidence",
+        "type_reason",
+        "null_ratio",
+        "empty_string_ratio",
+        "unique_ratio",
+        "top_freq_ratio",
+        "is_key_candidate",
+        "index_recommended",
+        "warnings",
+    ]
+    return {key: row.get(key) for key in keys if key in row}
+
+
+def _description_profile_columns_by_sql(profile: Mapping[str, Any] | None) -> dict[str, dict[str, Any]]:
+    if not isinstance(profile, Mapping):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for raw in profile.get("columns") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        sql_col = str(raw.get("sql_column") or raw.get("source_column") or raw.get("name") or "").strip()
+        if not sql_col:
+            continue
+        out[sql_col] = _compact_column_profile(raw)
+    return out
+
+
+def _columns_from_description_profile(profile: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(profile, Mapping):
+        return []
+    cols: list[dict[str, Any]] = []
+    for raw in profile.get("columns") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        name = str(raw.get("sql_column") or raw.get("source_column") or "").strip()
+        if not name:
+            continue
+        suggested_type = str(raw.get("suggested_type") or raw.get("Type") or "LONGTEXT")
+        null_ratio = raw.get("null_ratio")
+        try:
+            nullable = float(null_ratio) > 0
+        except Exception:
+            nullable = True
+        column_key = str(raw.get("column_key") or "").strip().upper()
+        if column_key not in {"PRI", "UNI", "MUL"}:
+            column_key = "MUL" if bool(raw.get("index_recommended") or raw.get("is_key_candidate") or raw.get("is_key")) else ""
+        cols.append(
+            {
+                "name": name,
+                "data_type": suggested_type.lower(),
+                "column_type": suggested_type,
+                "is_nullable": "YES" if nullable else "NO",
+                "column_key": column_key,
+                "extra": "",
+                "description_profile": _compact_column_profile(raw),
+            }
+        )
+    return cols
+
+
+def _merge_description_profile_columns(
+    columns: list[dict[str, Any]],
+    profile_by_sql: Mapping[str, dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged: list[dict[str, Any]] = []
+    for col in columns:
+        item = dict(col)
+        name = str(item.get("name") or "").strip()
+        profile = profile_by_sql.get(name)
+        if profile:
+            item["description_profile"] = profile
+        merged.append(item)
+    return merged
+
+
+def _description_profile_summary(profile: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(profile, Mapping):
+        return None
+    source = profile.get("source") if isinstance(profile.get("source"), Mapping) else {}
+    return {
+        "schema_version": profile.get("schema_version"),
+        "backend": profile.get("backend"),
+        "table_sql": _description_profile_table_sql(profile),
+        "source_file": source.get("file"),
+        "source_row_count": source.get("row_count"),
+        "column_count": len(profile.get("columns") or []),
+        "warnings": profile.get("warnings") or [],
+    }
+
+
 def prepare_schema_table_infos(
     *,
     report: Mapping[str, Any] | None,
@@ -284,6 +390,7 @@ def build_schema_viewer_payload(
     samples_by_table: Mapping[str, list[dict[str, Any]]],
     edges: list[tuple[str, str, str]],
     generated_at: str,
+    description_profile: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     ddls_by_sql = collect_schema_ddls_by_sql(report=report, table_infos=table_infos)
     issue_counts_by_sql = _collect_issue_counts_by_sql(issues=issues, table_infos=table_infos)
@@ -328,12 +435,22 @@ def build_schema_viewer_payload(
     totals = {"rows": 0, "columns": 0, "size_bytes": 0}
     depth_groups: dict[int, list[str]] = {}
     issue_tables = 0
+    profile_table_sql = _description_profile_table_sql(description_profile)
+    profile_columns_by_sql = _description_profile_columns_by_sql(description_profile)
+    description_profile_summary = _description_profile_summary(description_profile)
     for ti in table_infos:
         graph_name = ti.name_original or ti.name_sql
         depth = table_depth(base_table_graph, key_sep, graph_name)
         is_base = str(graph_name) == str(base_table_graph)
         role = infer_table_role(depth, is_base=is_base)
         cols = list(ti.columns or [])
+        table_profile = None
+        if profile_table_sql and ti.name_sql == profile_table_sql:
+            table_profile = description_profile_summary
+            if not cols:
+                cols = _columns_from_description_profile(description_profile)
+            else:
+                cols = _merge_description_profile_columns(cols, profile_columns_by_sql)
         idxs = list(ti.indexes or [])
         rows_sort = ti.row_count if ti.row_count is not None else ti.table_rows_estimate
         size_bytes = int((ti.data_length or 0) + (ti.index_length or 0)) if (
@@ -374,6 +491,7 @@ def build_schema_viewer_payload(
             "engine": ti.engine,
             "collation": ti.collation,
             "columns": cols,
+            "description_profile": table_profile,
             "indexes": idxs,
             "samples": samples_by_table.get(ti.name_sql) or [],
             "sample_count": len(samples_by_table.get(ti.name_sql) or []),
@@ -393,6 +511,11 @@ def build_schema_viewer_payload(
                 str(payload.get("display_short") or ""),
                 ddl,
                 " ".join(str(col.get("name") or "") for col in cols),
+                " ".join(
+                    str((col.get("description_profile") or {}).get("warnings") or "")
+                    for col in cols
+                    if isinstance(col.get("description_profile"), Mapping)
+                ),
                 " ".join(str(ix.get("index_name") or "") for ix in idxs),
             ]
         ).lower()
@@ -433,6 +556,7 @@ def build_schema_viewer_payload(
             "base_table_sql": base_table_sql,
             "key_sep": key_sep,
             "mode": "schema-viewer",
+            "description_profile": description_profile_summary,
         },
         "summary": {
             "table_count": len(table_payloads),
@@ -445,4 +569,5 @@ def build_schema_viewer_payload(
         "tables": table_payloads,
         "groups": groups,
         "edges": edges_payload,
+        "description_profile": description_profile_summary,
     }

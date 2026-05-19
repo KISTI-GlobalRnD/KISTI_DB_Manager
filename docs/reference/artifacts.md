@@ -20,6 +20,29 @@ kisti-db-manager report profile path/to/run_report.json --top 20
 kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_out
 ```
 
+## Tabular Description Profiles
+
+`tabular describe` writes two related artifacts:
+
+- `*_Desc.csv`: a v2 column-level DB design table with compatibility fields
+  (`Type`, `Null_ratio`, `is_key`, `Description`) plus type confidence,
+  null/empty ratios, length statistics, uniqueness, key/index recommendations,
+  and warning flags.
+- `*_profile.json`: richer evidence for review and future RDB visualization,
+  including schema version, source file metadata, backend, sampling policy,
+  NameMap, per-column evidence, and warnings.
+
+```bash
+kisti-db-manager tabular describe --config path/to/config.json
+```
+
+The CSV is intentionally compact and loader-compatible. Multi-table
+relationship candidates belong in a future dataset-level profile rather than in
+each table's `*_Desc.csv`.
+
+`review schema-viewer` can overlay this profile through `--description-profile`
+or auto-detect `<PATH>/<table_name>_profile.json` when that file exists.
+
 ## Parquet Artifacts
 
 Parquet-first runs produce table directories under a run-specific parquet root.

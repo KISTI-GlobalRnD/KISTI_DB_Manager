@@ -37,6 +37,7 @@ def generate_schema_viewer(
     exact_counts: bool = False,
     sample_rows: int | None = None,
     sample_max_tables: int = 20,
+    description_profile_path: str | None = None,
 ) -> dict[str, Any]:
     cfg = _load_json(config_path)
     data_config = coerce_data_config(cfg.get("data_config") or cfg.get("data") or {})
@@ -51,6 +52,13 @@ def generate_schema_viewer(
     report = _load_json(report_path) if report_path else None
     issues = (report.get("issues") if isinstance(report, Mapping) else None) or None
     fmt = _parse_formats(formats) if formats is not None else {"html", "svg", "mmd"}
+    description_profile = None
+    if description_profile_path:
+        description_profile = _load_json(description_profile_path)
+    else:
+        profile_path = Path(data_config["PATH"]) / f"{data_config['table_name']}_profile.json"
+        if profile_path.exists():
+            description_profile = _load_json(str(profile_path))
 
     table_infos = (
         _collect_table_infos_from_report(base_table=base_table, report=report)
@@ -120,6 +128,7 @@ def generate_schema_viewer(
         samples_by_table=samples_by_table,
         edges=edges,
         generated_at=_utc_now_iso(),
+        description_profile=description_profile if isinstance(description_profile, Mapping) else None,
     )
 
     out_path = Path(out_dir)

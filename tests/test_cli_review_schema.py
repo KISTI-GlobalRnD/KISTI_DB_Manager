@@ -96,6 +96,95 @@ class TestCLIReviewSchema(unittest.TestCase):
             html = (out_dir / "schema_viewer.html").read_text(encoding="utf-8")
             self.assertIn("Relationships (", html)
 
+    def test_review_schema_viewer_can_overlay_description_profile(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            cfg_path = root / "config.json"
+            profile_path = root / "sample_profile.json"
+            out_dir = root / "out"
+
+            cfg = {
+                "data_config": {
+                    "PATH": str(root),
+                    "file_name": "sample.csv",
+                    "file_type": "csv",
+                    "table_name": "sample",
+                    "KEY_SEP": "__",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+            nm = NameMap.build(table_name="sample", columns=["id", "name"], key_sep="__")
+            profile_path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": "2.0",
+                        "backend": "python",
+                        "source": {"file": str(root / "sample.csv"), "row_count": 3, "table_name": "sample"},
+                        "name_map": nm.to_dict(),
+                        "columns": [
+                            {
+                                "source_column": "id",
+                                "sql_column": "id",
+                                "suggested_type": "TINYINT UNSIGNED",
+                                "type_family": "integer",
+                                "type_confidence": 1.0,
+                                "type_reason": "all_non_empty_values_parse_as_integer",
+                                "null_ratio": 0.0,
+                                "unique_ratio": 1.0,
+                                "is_key_candidate": True,
+                                "index_recommended": True,
+                                "warnings": "",
+                            },
+                            {
+                                "source_column": "name",
+                                "sql_column": "name",
+                                "suggested_type": "VARCHAR(16)",
+                                "type_family": "string",
+                                "type_confidence": 1.0,
+                                "type_reason": "fallback_string_type",
+                                "null_ratio": 0.333333,
+                                "unique_ratio": 0.666667,
+                                "is_key_candidate": False,
+                                "index_recommended": False,
+                                "warnings": "contains_nulls",
+                            },
+                        ],
+                        "warnings": ["contains_nulls"],
+                    },
+                    ensure_ascii=False,
+                ),
+                encoding="utf-8",
+            )
+
+            rc = main(
+                [
+                    "review",
+                    "schema-viewer",
+                    "--config",
+                    str(cfg_path),
+                    "--description-profile",
+                    str(profile_path),
+                    "--out",
+                    str(out_dir),
+                    "--no-db",
+                ]
+            )
+
+            self.assertEqual(rc, 0)
+            payload = json.loads((out_dir / "schema_viewer.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["description_profile"]["schema_version"], "2.0")
+            table = payload["tables"][0]
+            self.assertEqual(table["description_profile"]["column_count"], 2)
+            self.assertEqual([col["name"] for col in table["columns"]], ["id", "name"])
+            self.assertEqual(table["columns"][0]["column_key"], "MUL")
+            self.assertTrue(table["columns"][0]["description_profile"]["index_recommended"])
+            self.assertEqual(table["columns"][1]["description_profile"]["warnings"], "contains_nulls")
+            html = (out_dir / "schema_viewer.html").read_text(encoding="utf-8")
+            self.assertIn("renderColumnProfile", html)
+            self.assertIn("description_profile", html)
+            self.assertIn("contains_nulls", html)
+
 
 if __name__ == "__main__":
     unittest.main()

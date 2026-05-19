@@ -178,6 +178,21 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     .badge.warn { background: var(--warn-soft); border-color: #fed7aa; color: var(--warn); }
     .badge.error { background: var(--error-soft); border-color: #fecaca; color: var(--error); }
     .badge.quarantine { background: #f5f3ff; border-color: #ddd6fe; color: #6d28d9; }
+    .mini-badges { display: flex; gap: 5px; flex-wrap: wrap; }
+    .mini-badge {
+      display: inline-flex;
+      align-items: center;
+      border-radius: 999px;
+      padding: 2px 6px;
+      font-size: 11px;
+      font-weight: 700;
+      border: 1px solid var(--line);
+      background: #f7faf8;
+      color: var(--muted);
+      white-space: nowrap;
+    }
+    .mini-badge.good { background: #ecfdf5; border-color: #99f6e4; color: var(--accent-strong); }
+    .mini-badge.warn { background: var(--warn-soft); border-color: #fed7aa; color: var(--warn); }
     .main { display: grid; gap: 22px; }
     .section { scroll-margin-top: 120px; }
     .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
@@ -563,16 +578,54 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
 
     function renderColumnsTable(columns) {
       if (!Array.isArray(columns) || !columns.length) return '<div class="empty">No column metadata.</div>';
-      const rows = columns.map((col) => (
+      const rows = columns.map((col) => {
+        const profile = col.description_profile && typeof col.description_profile === 'object' ? col.description_profile : null;
+        const suggested = profile && profile.suggested_type ? String(profile.suggested_type) : '';
+        const actualType = String(col.column_type || col.data_type || '');
+        const typeHint = suggested && suggested !== actualType
+          ? '<div class="muted">suggested <code>' + escHtml(suggested) + '</code></div>'
+          : '';
+        const warnings = profile && profile.warnings ? String(profile.warnings) : '';
+        return (
         '<tr>' +
           '<td><code>' + escHtml(col.name || '') + '</code></td>' +
-          '<td><code>' + escHtml(col.column_type || col.data_type || '') + '</code></td>' +
+          '<td><code>' + escHtml(actualType) + '</code>' + typeHint + '</td>' +
           '<td>' + escHtml(col.is_nullable || '') + '</td>' +
           '<td><code>' + escHtml(col.column_key || '') + '</code></td>' +
-          '<td><code>' + escHtml(col.extra || '') + '</code></td>' +
+          '<td>' + renderColumnProfile(profile) + '</td>' +
+          '<td>' + (warnings ? '<span class="mini-badge warn">' + escHtml(warnings) + '</span>' : '') + '</td>' +
         '</tr>'
-      )).join('');
-      return '<table class="grid"><thead><tr><th>name</th><th>type</th><th>nullable</th><th>key</th><th>extra</th></tr></thead><tbody>' + rows + '</tbody></table>';
+        );
+      }).join('');
+      return '<table class="grid"><thead><tr><th>name</th><th>type</th><th>nullable</th><th>key</th><th>profile</th><th>warnings</th></tr></thead><tbody>' + rows + '</tbody></table>';
+    }
+
+    function ratioLabel(value) {
+      if (value === null || value === undefined || value === '') return '';
+      const n = Number(value);
+      if (!Number.isFinite(n)) return String(value);
+      return (n * 100).toFixed(n < 0.01 ? 2 : 1) + '%';
+    }
+
+    function renderColumnProfile(profile) {
+      if (!profile) return '<span class="muted">n/a</span>';
+      const badges = [];
+      if (profile.type_confidence !== undefined && profile.type_confidence !== null) {
+        badges.push('<span class="mini-badge">type ' + escHtml(ratioLabel(profile.type_confidence)) + '</span>');
+      }
+      if (profile.null_ratio !== undefined && profile.null_ratio !== null) {
+        badges.push('<span class="mini-badge">null ' + escHtml(ratioLabel(profile.null_ratio)) + '</span>');
+      }
+      if (profile.unique_ratio !== undefined && profile.unique_ratio !== null) {
+        badges.push('<span class="mini-badge">uniq ' + escHtml(ratioLabel(profile.unique_ratio)) + '</span>');
+      }
+      if (profile.index_recommended) {
+        badges.push('<span class="mini-badge good">index</span>');
+      }
+      if (profile.type_reason) {
+        badges.push('<span class="mini-badge">' + escHtml(profile.type_reason) + '</span>');
+      }
+      return '<div class="mini-badges">' + badges.join('') + '</div>';
     }
 
     function renderIndexesTable(indexes) {
@@ -790,4 +843,3 @@ def render_schema_viewer_html(
         .replace("__SVG_INLINE__", svg_inline)
         .replace("__PAYLOAD__", json.dumps(payload, ensure_ascii=False).replace("<", "\\u003c"))
     )
-

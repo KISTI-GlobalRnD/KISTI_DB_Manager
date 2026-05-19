@@ -7,6 +7,7 @@ It focuses less on how to run the package and more on why the package is structu
 
 - ingest tuning
 - schema display / review UX benchmark
+- description profile v2 and future RDB visualization inputs
 - parquet materializer design
 - scenario-based large parquet jobs
 - dataset-specific operational notes
