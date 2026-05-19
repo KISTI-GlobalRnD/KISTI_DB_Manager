@@ -120,23 +120,37 @@ kisti-db-manager json run \
   --flatten-backend rust-arrow
 ```
 
-For explicit Rust parquet runs over plain JSONL/NDJSON, `--rust-raw-jsonl-parse` also moves JSON line decoding into Rust:
+For explicit Rust parquet runs over JSONL/NDJSON/GZ JSONL, raw line decoding now moves into Rust by default when the run is eligible:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/openalex_config.json \
+  --mode parse-parquet-safe \
+  --flatten-backend rust-arrow
+```
+
+Use `--no-rust-raw-jsonl-parse` to force the older Python JSON decoding path for comparison.
+
+Add `--rust-raw-jsonl-file-parse` to also let Rust read plain JSONL/NDJSON source files directly. This removes the Python line-reading loop for supported parse/parquet-only runs.
+
+Use `--rust-columnar-accumulator` as a profiled opt-in for Rust parquet runs when you want to avoid materializing full row maps before Arrow arrays are built. Keep it disabled for ID compaction runs until that path has dedicated manifest/accounting support.
+
+For OpenAlex `rust-arrow` parquet-first runs with ID compaction, prefer `--chunk-size 10000` as the operational starting point:
 
 ```bash
 kisti-db-manager json run \
   --config path/to/openalex_config.json \
   --mode parse-parquet-safe \
   --flatten-backend rust-arrow \
-  --rust-raw-jsonl-parse
+  --id-compaction \
+  --chunk-size 10000
 ```
 
-Add `--rust-raw-jsonl-file-parse` to also let Rust read plain JSONL/NDJSON source files directly. This removes the Python line-reading loop for supported parse/parquet-only runs.
-
-Use `--rust-columnar-accumulator` as a profiled opt-in for Rust parquet runs when you want to avoid materializing full row maps before Arrow arrays are built. Keep it disabled for ID compaction runs until that path has dedicated manifest/accounting support.
+The 100k source check kept runtime essentially flat versus `5000` while reducing parquet files from `194` to `100`; `20000` was slower, and `--rust-parallel-table-writes` did not materially improve this path.
 
 For direct Rust JSONL file parsing, combine a small `--chunk-size` with `--rust-parquet-flush-records` to keep parser/flatten batches cache-friendly without writing a parquet file for every micro-batch.
 
-Rust reports include detailed timing keys such as `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms` so profile runs can separate parser, flatten, Arrow build, parquet output, Python result conversion, and remaining unattributed overhead.
+Rust reports include detailed timing keys such as `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.table_assemble`, `rust_arrow.id_compaction`, `rust_arrow.table_write`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms` so profile runs can separate parser, flatten, table assembly, ID compaction, table write dispatch, Arrow build, parquet output, Python result conversion, and remaining unattributed overhead.
 
 Use `--rust-parallel-table-writes` only as a profiled opt-in; it can lower parquet write time but may increase total runtime on I/O-bound runs.
 
@@ -187,7 +201,21 @@ kisti-db-manager json profile-parallel \
   --out runs/profile_parallel_test
 ```
 
-Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` to include Rust-side JSONL decoding and direct file reading in the `rust-arrow` profile runs. Add `--rust-columnar-accumulator` to profile the opt-in columnar Rust accumulator against the default row accumulator. Add `--rust-parquet-flush-records` when testing small chunk sizes without keeping thousands of parquet files.
+Rust raw JSONL/GZ decoding is enabled by default for eligible `rust-arrow` profile runs. For explicit `rust-arrow` parquet-first runs with OpenAlex ID compaction, omitted `parallel_workers` now defaults to `8` based on the retained OpenAlex source profiles; pass `--parallel-workers 0` or another value to override it. Add `--rust-raw-jsonl-file-parse` to include direct file reading for plain JSONL/NDJSON inputs, or `--no-rust-raw-jsonl-parse` to compare against the older Python JSON decoding path. Add `--rust-columnar-accumulator` to profile the opt-in columnar Rust accumulator against the default row accumulator. Add `--rust-parquet-flush-records` when testing small chunk sizes without keeping thousands of parquet files.
+
+For production-like OpenAlex ID-compaction validation, compare around the operational setting instead of the tiny smoke setting:
+
+```bash
+kisti-db-manager json profile-parallel \
+  --config path/to/openalex_config.json \
+  --flatten-backends rust-arrow \
+  --workers 4,8 \
+  --max-records 100000 \
+  --chunk-size 10000 \
+  --repeat 2 \
+  --id-compaction \
+  --out runs/profile_openalex_idcompact_100k
+```
 
 Detailed Rust backend, profile, smoke-test, benchmark, and limitation notes are in [docs/manual/json-rust-backend.md](docs/manual/json-rust-backend.md).
 
@@ -228,7 +256,7 @@ Notes:
 - Prefer explicit `parse-parquet*` or `ingest-fast*` modes for production runs; avoid relying on `default`.
 - `ingest-fast*` modes remain direct insert-first/streaming modes for maximum throughput.
 - `persist_parquet_files=true` and `json_streaming_load=true` are mutually exclusive and now fail fast at CLI validation time.
-- OpenAlex-scale ID compaction is opt-in: `--id-compaction` strips repeated URL prefixes from known ID fields, renames semantic ID columns such as `author_id` to `author_openalex_id` even when values are null or already bare IDs, and writes the rules/descriptions into the run report plus `schema_manifest.json`. It is compatible with `--parallel-workers`; conflicting nonblank source values fail fast by default, and policy flags can switch collisions or namespace conflicts to `preserve` for review workflows.
+- OpenAlex-scale ID compaction is opt-in: `--id-compaction` strips repeated URL prefixes from known ID fields, renames semantic ID columns such as `author_id` to `author_openalex_id` even when values are null or already bare IDs, and writes the rules/descriptions into the run report plus `schema_manifest.json`. It is compatible with `--parallel-workers`; explicit `rust-arrow` parquet-first runs default omitted `parallel_workers` to `8`, and `--chunk-size 10000` is the current OpenAlex artifact recommendation for fewer parquet files without the `20000` slowdown. Conflicting nonblank source values fail fast by default. Policy flags can switch collisions or namespace conflicts to `preserve` for review workflows.
 - Before a long OpenAlex run, use `kisti-db-manager json id-compaction-preflight --config ... --report id_compaction_preflight.json` to scan for compacted-column collisions, namespace conflicts, and ambiguous URL-like columns.
 
 ### Local Parquet Artifacts (default)

@@ -111,11 +111,19 @@ struct IdColumnMeta {
 
 #[derive(Default)]
 struct IdCompactionState {
-    columns: BTreeMap<String, IdColumnMeta>,
-    counts: BTreeMap<String, usize>,
+    columns: Vec<IdColumnMeta>,
+    column_meta_indices: HashMap<String, HashMap<String, HashMap<String, usize>>>,
     ambiguous_counts: BTreeMap<String, usize>,
     collision_counts: BTreeMap<String, usize>,
     namespace_conflict_counts: BTreeMap<String, usize>,
+    column_rule_cache: HashMap<String, ColumnNamespaceRule>,
+}
+
+#[derive(Clone, Debug)]
+struct ColumnNamespaceRule {
+    semantic_column: Option<String>,
+    expected_namespace: Option<&'static str>,
+    entity: Option<String>,
 }
 
 #[derive(Clone)]
@@ -210,8 +218,15 @@ struct ColumnarWriteOutput {
     table_meta: Vec<TableMeta>,
     file_count: usize,
     row_count: usize,
+    table_write_ns: u128,
     arrow_build_ns: u128,
     parquet_write_ns: u128,
+}
+
+struct CompactedTableAccumulator {
+    table: String,
+    accumulator: TableAccumulator,
+    id_compaction_state: IdCompactionState,
 }
 
 struct TableWriteOutput {
@@ -1396,7 +1411,7 @@ fn value_as_i64(value: &Value) -> Option<i64> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, PartialEq)]
 enum CellValue {
     Null,
     Bool(bool),
@@ -1732,10 +1747,9 @@ fn strip_prefix_case_insensitive(
     value: &str,
     prefixes: &[&'static str],
 ) -> Option<(&'static str, String)> {
-    let lower = value.to_lowercase();
     for prefix in prefixes {
-        if lower.starts_with(prefix) {
-            let tail = value[prefix.len()..].to_string();
+        if starts_with_ascii_case_insensitive(value, prefix) {
+            let tail = value.get(prefix.len()..).unwrap_or("").to_string();
             if !tail.is_empty() {
                 return Some((*prefix, tail));
             }
@@ -1744,12 +1758,26 @@ fn strip_prefix_case_insensitive(
     None
 }
 
+fn starts_with_ascii_case_insensitive(value: &str, prefix: &str) -> bool {
+    value
+        .get(..prefix.len())
+        .is_some_and(|head| head.eq_ignore_ascii_case(prefix))
+}
+
+fn looks_like_http_url(value: &str) -> bool {
+    starts_with_ascii_case_insensitive(value, "http://")
+        || starts_with_ascii_case_insensitive(value, "https://")
+}
+
 fn namespace_for_value(
     value: &Value,
 ) -> (Option<&'static str>, Option<&'static str>, Option<String>) {
     let Value::String(text) = value else {
         return (None, None, None);
     };
+    if !looks_like_http_url(text) {
+        return (None, None, None);
+    }
     for (namespace, prefixes) in [
         (
             "openalex",
@@ -1822,46 +1850,129 @@ fn id_description(namespace: &str, entity: Option<&str>, removed_prefix: &str) -
     }
 }
 
-fn is_blank_id_value(value: &Value) -> bool {
-    matches!(value, Value::Null) || matches!(value, Value::String(s) if s.is_empty())
+fn is_blank_id_cell_value(value: &CellValue) -> bool {
+    matches!(value, CellValue::Null) || matches!(value, CellValue::String(s) if s.is_empty())
 }
 
 impl IdCompactionState {
-    fn record(&mut self, meta: IdColumnMeta) {
-        let count_key = format!("{}.{}", meta.table, meta.new_column);
-        *self.counts.entry(count_key).or_insert(0) += 1;
-        let entry_key = format!(
-            "{}\0{}\0{}\0{}",
-            meta.table, meta.original_column, meta.new_column, meta.removed_prefix
-        );
-        self.columns
-            .entry(entry_key)
-            .and_modify(|entry| entry.count += 1)
-            .or_insert_with(|| {
-                let mut entry = meta;
-                entry.count = 1;
-                entry
-            });
+    fn column_rule(&mut self, options: &Options, column: &str) -> ColumnNamespaceRule {
+        if let Some(rule) = self.column_rule_cache.get(column) {
+            return rule.clone();
+        }
+
+        let (semantic_column, expected_namespace, entity) =
+            column_namespace_mapping(column, &options.index_key, &options.sep);
+        let rule = ColumnNamespaceRule {
+            semantic_column,
+            expected_namespace,
+            entity,
+        };
+        self.column_rule_cache
+            .insert(column.to_string(), rule.clone());
+        rule
     }
 
-    fn compact_field(
+    fn record_meta(
+        &mut self,
+        table: &str,
+        original_column: &str,
+        new_column: &str,
+        namespace: &str,
+        entity: Option<&str>,
+        removed_prefix: &str,
+    ) {
+        if let Some(index) = self
+            .column_meta_indices
+            .get(table)
+            .and_then(|table_entries| table_entries.get(original_column))
+            .and_then(|column_entries| column_entries.get(removed_prefix))
+            .copied()
+        {
+            self.columns[index].count += 1;
+            return;
+        }
+
+        let index = self.columns.len();
+        let description = id_description(namespace, entity, removed_prefix);
+        self.columns.push(IdColumnMeta {
+            table: table.to_string(),
+            original_column: original_column.to_string(),
+            new_column: new_column.to_string(),
+            namespace: namespace.to_string(),
+            entity: entity.map(str::to_string),
+            removed_prefix: removed_prefix.to_string(),
+            description,
+            count: 1,
+        });
+        self.column_meta_indices
+            .entry(table.to_string())
+            .or_default()
+            .entry(original_column.to_string())
+            .or_default()
+            .insert(removed_prefix.to_string(), index);
+    }
+
+    fn merge_meta(&mut self, meta: IdColumnMeta) {
+        if let Some(index) = self
+            .column_meta_indices
+            .get(&meta.table)
+            .and_then(|table_entries| table_entries.get(&meta.original_column))
+            .and_then(|column_entries| column_entries.get(&meta.removed_prefix))
+            .copied()
+        {
+            self.columns[index].count += meta.count;
+            return;
+        }
+
+        let index = self.columns.len();
+        self.column_meta_indices
+            .entry(meta.table.clone())
+            .or_default()
+            .entry(meta.original_column.clone())
+            .or_default()
+            .insert(meta.removed_prefix.clone(), index);
+        self.columns.push(meta);
+    }
+
+    fn merge_counts(target: &mut BTreeMap<String, usize>, source: BTreeMap<String, usize>) {
+        for (key, value) in source {
+            *target.entry(key).or_insert(0) += value;
+        }
+    }
+
+    fn merge_from(&mut self, other: IdCompactionState) {
+        for meta in other.columns {
+            self.merge_meta(meta);
+        }
+        Self::merge_counts(&mut self.ambiguous_counts, other.ambiguous_counts);
+        Self::merge_counts(&mut self.collision_counts, other.collision_counts);
+        Self::merge_counts(
+            &mut self.namespace_conflict_counts,
+            other.namespace_conflict_counts,
+        );
+    }
+
+    fn compact_field_cell(
         &mut self,
         options: &Options,
         table_name: &str,
         column: &str,
         value: &Value,
-    ) -> PyResult<(String, Value, Option<IdColumnMeta>)> {
+    ) -> PyResult<(String, CellValue)> {
         if column == "__except_raw_json__" && !options.id_compaction.apply_to_excepted_raw_json {
-            return Ok((column.to_string(), value.clone(), None));
+            return Ok((column.to_string(), cell_from_value(value)));
         }
         if options.id_compaction.preset.as_str() != "openalex"
             || options.id_compaction.mode.as_str() != "semantic_column_strip"
         {
-            return Ok((column.to_string(), value.clone(), None));
+            return Ok((column.to_string(), cell_from_value(value)));
         }
 
-        let (semantic_column, expected_namespace, entity) =
-            column_namespace_mapping(column, &options.index_key, &options.sep);
+        let ColumnNamespaceRule {
+            semantic_column,
+            expected_namespace,
+            entity,
+        } = self.column_rule(options, column);
         let (namespace, removed_prefix, tail) = namespace_for_value(value);
 
         let Some(expected_namespace) = expected_namespace else {
@@ -1869,7 +1980,7 @@ impl IdCompactionState {
                 let key = format!("{table_name}.{column}");
                 *self.ambiguous_counts.entry(key).or_insert(0) += 1;
             }
-            return Ok((column.to_string(), value.clone(), None));
+            return Ok((column.to_string(), cell_from_value(value)));
         };
 
         let Some(semantic_column) = semantic_column else {
@@ -1877,7 +1988,7 @@ impl IdCompactionState {
                 let key = format!("{table_name}.{column}");
                 *self.ambiguous_counts.entry(key).or_insert(0) += 1;
             }
-            return Ok((column.to_string(), value.clone(), None));
+            return Ok((column.to_string(), cell_from_value(value)));
         };
 
         if let Some(namespace) = namespace {
@@ -1892,68 +2003,63 @@ impl IdCompactionState {
                         "id compaction namespace conflict at {conflict_key}: column expects {expected_namespace:?}, value uses {namespace:?}"
                     )));
                 }
-                return Ok((column.to_string(), value.clone(), None));
+                return Ok((column.to_string(), cell_from_value(value)));
             }
         }
 
         if namespace.is_none() || removed_prefix.is_none() || tail.is_none() {
             if semantic_column == column {
-                return Ok((column.to_string(), value.clone(), None));
+                return Ok((column.to_string(), cell_from_value(value)));
             }
-            let removed_prefix_default = default_prefix(expected_namespace).to_string();
-            let description = id_description(
+            let removed_prefix_default = default_prefix(expected_namespace);
+            self.record_meta(
+                table_name,
+                column,
+                &semantic_column,
                 expected_namespace,
                 entity.as_deref(),
-                &removed_prefix_default,
+                removed_prefix_default,
             );
-            let meta = IdColumnMeta {
-                table: table_name.to_string(),
-                original_column: column.to_string(),
-                new_column: semantic_column.clone(),
-                namespace: expected_namespace.to_string(),
-                entity,
-                removed_prefix: removed_prefix_default,
-                description,
-                count: 0,
-            };
-            return Ok((semantic_column, value.clone(), Some(meta)));
+            return Ok((semantic_column, cell_from_value(value)));
         }
 
-        let removed_prefix = removed_prefix.unwrap_or_default().to_string();
+        let removed_prefix = removed_prefix.unwrap_or_default();
         let tail = tail.unwrap_or_default();
-        let description = id_description(expected_namespace, entity.as_deref(), &removed_prefix);
-        let meta = IdColumnMeta {
-            table: table_name.to_string(),
-            original_column: column.to_string(),
-            new_column: semantic_column.clone(),
-            namespace: expected_namespace.to_string(),
-            entity,
+        self.record_meta(
+            table_name,
+            column,
+            &semantic_column,
+            expected_namespace,
+            entity.as_deref(),
             removed_prefix,
-            description,
-            count: 0,
-        };
-        Ok((semantic_column, Value::String(tail), Some(meta)))
+        );
+        Ok((semantic_column, CellValue::String(tail)))
     }
 
-    fn compact_row(&mut self, options: &Options, table_name: &str, row: &Row) -> PyResult<Row> {
+    fn compact_row_to_cell_row(
+        &mut self,
+        options: &Options,
+        table_name: &str,
+        row: &Row,
+    ) -> PyResult<CellRow> {
         if !options.id_compaction.enabled {
-            return Ok(row.clone());
+            return Ok(row
+                .iter()
+                .map(|(column, value)| (column.clone(), cell_from_value(value)))
+                .collect());
         }
 
-        let mut out = Row::new();
+        let mut out = CellRow::new();
         let mut origins: HashMap<String, String> = HashMap::new();
 
         for (key, value) in row.iter() {
-            let (new_key, new_value, meta) = self.compact_field(options, table_name, key, value)?;
-            if let Some(meta) = meta {
-                self.record(meta);
-            }
+            let (new_key, new_value) = self.compact_field_cell(options, table_name, key, value)?;
 
             if out.contains_key(&new_key) {
-                if is_blank_id_value(&new_value) {
+                if is_blank_id_cell_value(&new_value) {
                     continue;
                 }
-                if out.get(&new_key).is_some_and(is_blank_id_value) {
+                if out.get(&new_key).is_some_and(is_blank_id_cell_value) {
                     out.insert(new_key.clone(), new_value);
                     origins.insert(new_key, key.clone());
                 } else if out.get(&new_key) != Some(&new_value) {
@@ -1968,7 +2074,7 @@ impl IdCompactionState {
                             "id compaction collision at {collision_key}: {key:?} and {previous_key:?} map to existing output column {new_key:?}"
                         )));
                     }
-                    out.insert(key.clone(), value.clone());
+                    out.insert(key.clone(), cell_from_value(value));
                 }
                 continue;
             }
@@ -1977,6 +2083,34 @@ impl IdCompactionState {
             origins.insert(new_key, key.clone());
         }
         Ok(out)
+    }
+
+    fn compact_rows_to_accumulator(
+        &mut self,
+        options: &Options,
+        table_name: &str,
+        rows: &[Row],
+    ) -> PyResult<TableAccumulator> {
+        let mut accumulator = TableAccumulator::new();
+        for row in rows {
+            accumulator.push_row(self.compact_row_to_cell_row(options, table_name, row)?);
+        }
+        Ok(accumulator)
+    }
+
+    fn compact_table_to_accumulator(
+        options: &Options,
+        table_name: &str,
+        rows: &[Row],
+    ) -> PyResult<CompactedTableAccumulator> {
+        let mut id_compaction_state = IdCompactionState::default();
+        let accumulator =
+            id_compaction_state.compact_rows_to_accumulator(options, table_name, rows)?;
+        Ok(CompactedTableAccumulator {
+            table: table_name.to_string(),
+            accumulator,
+            id_compaction_state,
+        })
     }
 
     fn set_count_map(
@@ -2005,7 +2139,7 @@ impl IdCompactionState {
         out.set_item("rules_version", &options.rules_version)?;
         out.set_item("rules_hash", &options.rules_hash)?;
 
-        let mut columns: Vec<&IdColumnMeta> = self.columns.values().collect();
+        let mut columns: Vec<&IdColumnMeta> = self.columns.iter().collect();
         columns.sort_by(|a, b| {
             (
                 a.table.as_str(),
@@ -2019,6 +2153,7 @@ impl IdCompactionState {
                 ))
         });
         let column_items = PyList::empty_bound(py);
+        let mut counts: BTreeMap<String, usize> = BTreeMap::new();
         for meta in columns {
             let item = PyDict::new_bound(py);
             item.set_item("table", &meta.table)?;
@@ -2032,10 +2167,12 @@ impl IdCompactionState {
             item.set_item("removed_prefix", &meta.removed_prefix)?;
             item.set_item("description", &meta.description)?;
             item.set_item("count", meta.count)?;
+            let count_key = format!("{}.{}", meta.table, meta.new_column);
+            *counts.entry(count_key).or_insert(0) += meta.count;
             column_items.append(item)?;
         }
         out.set_item("columns", column_items)?;
-        Self::set_count_map(py, &out, "counts", &self.counts)?;
+        Self::set_count_map(py, &out, "counts", &counts)?;
         Self::set_count_map(py, &out, "ambiguous_columns", &self.ambiguous_counts)?;
         Self::set_count_map(py, &out, "collisions", &self.collision_counts)?;
         Self::set_count_map(
@@ -2372,6 +2509,7 @@ fn write_columnar_tables(
     let mut table_meta = Vec::<TableMeta>::new();
     let mut file_count = 0usize;
     let mut row_count = 0usize;
+    let mut table_write_ns = 0u128;
     let mut arrow_build_ns = 0u128;
     let mut parquet_write_ns = 0u128;
     let table_entries: Vec<(&String, &TableAccumulator)> = tables
@@ -2382,6 +2520,7 @@ fn write_columnar_tables(
 
     if options.parallel_table_writes && options.parallel_workers >= 2 && table_entries.len() >= 2 {
         let pool = rayon_pool(options.parallel_workers)?;
+        let table_write_start = Instant::now();
         let results: Vec<PyResult<TableWriteOutput>> = pool.install(|| {
             table_entries
                 .par_iter()
@@ -2396,6 +2535,7 @@ fn write_columnar_tables(
                 })
                 .collect()
         });
+        table_write_ns += table_write_start.elapsed().as_nanos();
         for (idx, result) in results.into_iter().enumerate() {
             let written = result?;
             file_count += 1;
@@ -2411,6 +2551,7 @@ fn write_columnar_tables(
         }
     } else {
         for (table, accumulator) in table_entries {
+            let table_write_start = Instant::now();
             let written = write_columnar_table(
                 parquet_root,
                 table,
@@ -2418,6 +2559,7 @@ fn write_columnar_tables(
                 options.batch_idx,
                 &options.index_key,
             )?;
+            table_write_ns += table_write_start.elapsed().as_nanos();
             file_count += 1;
             row_count += written.rows;
             arrow_build_ns += written.arrow_build_ns;
@@ -2435,6 +2577,7 @@ fn write_columnar_tables(
         table_meta,
         file_count,
         row_count,
+        table_write_ns,
         arrow_build_ns,
         parquet_write_ns,
     })
@@ -3095,11 +3238,17 @@ fn persist_indexed_json_values_columnar_inner(
     let write_output = write_columnar_tables(&options, &parquet_root, &tables)?;
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
     timings_ms.push(("json.flatten", flatten_ms));
+    timings_ms.push(("rust_arrow.table_assemble", 0));
     timings_ms.push((
         "rust_arrow.columnar_merge",
         (columnar_merge_ns / 1_000_000) as u64,
     ));
     timings_ms.push(("json.parquet.persist", parquet_ms));
+    timings_ms.push(("rust_arrow.id_compaction", 0));
+    timings_ms.push((
+        "rust_arrow.table_write",
+        (write_output.table_write_ns / 1_000_000) as u64,
+    ));
     timings_ms.push((
         "rust_arrow.arrow_build",
         (write_output.arrow_build_ns / 1_000_000) as u64,
@@ -3182,6 +3331,7 @@ fn persist_indexed_json_values_inner(
     };
     let flatten_ms = flatten_start.elapsed().as_millis() as u64;
 
+    let table_assemble_start = Instant::now();
     let mut tables: TableRows = BTreeMap::new();
     let mut name_cache = NameCache::new();
     let mut records_ok = 0usize;
@@ -3215,35 +3365,60 @@ fn persist_indexed_json_values_inner(
             }
         }
     }
+    let table_assemble_ms = table_assemble_start.elapsed().as_millis() as u64;
 
     let parquet_start = Instant::now();
     let mut id_compaction_state = IdCompactionState::default();
     let mut table_meta = Vec::<TableMeta>::new();
     let mut file_count = 0usize;
     let mut row_count = 0usize;
+    let mut id_compaction_ns = 0u128;
+    let mut table_write_ns = 0u128;
     let mut arrow_build_ns = 0u128;
     let mut parquet_write_ns = 0u128;
     let table_entries: Vec<(&String, &Vec<Row>)> =
         tables.iter().filter(|(_, rows)| !rows.is_empty()).collect();
     if options.id_compaction.enabled {
-        for (table, rows) in table_entries {
-            let compacted_rows = rows
-                .iter()
-                .map(|row| id_compaction_state.compact_row(&options, table, row))
-                .collect::<PyResult<Vec<Row>>>()?;
-            let written = write_table(
+        let id_compaction_start = Instant::now();
+        let compacted_tables: Vec<PyResult<CompactedTableAccumulator>> =
+            if options.parallel_workers >= 2 && table_entries.len() >= 2 {
+                let pool = rayon_pool(options.parallel_workers)?;
+                pool.install(|| {
+                    table_entries
+                        .par_iter()
+                        .map(|(table, rows)| {
+                            IdCompactionState::compact_table_to_accumulator(&options, table, rows)
+                        })
+                        .collect()
+                })
+            } else {
+                table_entries
+                    .iter()
+                    .map(|(table, rows)| {
+                        IdCompactionState::compact_table_to_accumulator(&options, table, rows)
+                    })
+                    .collect()
+            };
+        id_compaction_ns += id_compaction_start.elapsed().as_nanos();
+
+        for compacted in compacted_tables {
+            let compacted = compacted?;
+            id_compaction_state.merge_from(compacted.id_compaction_state);
+            let table_write_start = Instant::now();
+            let written = write_columnar_table(
                 &parquet_root,
-                table,
-                &compacted_rows,
+                &compacted.table,
+                &compacted.accumulator,
                 options.batch_idx,
                 &options.index_key,
             )?;
+            table_write_ns += table_write_start.elapsed().as_nanos();
             file_count += 1;
             row_count += written.rows;
             arrow_build_ns += written.arrow_build_ns;
             parquet_write_ns += written.parquet_write_ns;
             table_meta.push(TableMeta {
-                table: table.clone(),
+                table: compacted.table,
                 path: written.path.to_string_lossy().to_string(),
                 columns: written.columns,
                 rows: written.rows,
@@ -3254,6 +3429,7 @@ fn persist_indexed_json_values_inner(
         && table_entries.len() >= 2
     {
         let pool = rayon_pool(options.parallel_workers)?;
+        let table_write_start = Instant::now();
         let results: Vec<PyResult<TableWriteOutput>> = pool.install(|| {
             table_entries
                 .par_iter()
@@ -3268,6 +3444,7 @@ fn persist_indexed_json_values_inner(
                 })
                 .collect()
         });
+        table_write_ns += table_write_start.elapsed().as_nanos();
         for (idx, result) in results.into_iter().enumerate() {
             let written = result?;
             file_count += 1;
@@ -3283,6 +3460,7 @@ fn persist_indexed_json_values_inner(
         }
     } else {
         for (table, rows) in table_entries {
+            let table_write_start = Instant::now();
             let written = write_table(
                 &parquet_root,
                 table,
@@ -3290,6 +3468,7 @@ fn persist_indexed_json_values_inner(
                 options.batch_idx,
                 &options.index_key,
             )?;
+            table_write_ns += table_write_start.elapsed().as_nanos();
             file_count += 1;
             row_count += written.rows;
             arrow_build_ns += written.arrow_build_ns;
@@ -3304,7 +3483,16 @@ fn persist_indexed_json_values_inner(
     }
     let parquet_ms = parquet_start.elapsed().as_millis() as u64;
     timings_ms.push(("json.flatten", flatten_ms));
+    timings_ms.push(("rust_arrow.table_assemble", table_assemble_ms));
     timings_ms.push(("json.parquet.persist", parquet_ms));
+    timings_ms.push((
+        "rust_arrow.id_compaction",
+        (id_compaction_ns / 1_000_000) as u64,
+    ));
+    timings_ms.push((
+        "rust_arrow.table_write",
+        (table_write_ns / 1_000_000) as u64,
+    ));
     timings_ms.push((
         "rust_arrow.arrow_build",
         (arrow_build_ns / 1_000_000) as u64,
@@ -3535,8 +3723,11 @@ fn merge_persist_outputs(target: &mut PersistOutput, output: PersistOutput) {
         if matches!(
             key,
             "json.flatten"
+                | "rust_arrow.table_assemble"
                 | "json.parquet.persist"
                 | "rust_arrow.columnar_merge"
+                | "rust_arrow.id_compaction"
+                | "rust_arrow.table_write"
                 | "rust_arrow.arrow_build"
                 | "rust_arrow.parquet_write"
         ) {
@@ -3691,6 +3882,11 @@ fn flush_pending_columnar_jsonl(
     let parquet_start = Instant::now();
     let output = write_columnar_tables(&write_options, parquet_root, &pending.tables)?;
     *parquet_ns += parquet_start.elapsed().as_nanos();
+    set_timing_ms(
+        &mut aggregate.timings_ms,
+        "rust_arrow.table_write",
+        (output.table_write_ns / 1_000_000) as u64,
+    );
     *arrow_build_ns += output.arrow_build_ns;
     *parquet_write_ns += output.parquet_write_ns;
 
@@ -3739,8 +3935,11 @@ fn persist_jsonl_sources_inner(
             ("rust_arrow.json_parse", 0),
             ("rust_arrow.number_validate", 0),
             ("json.flatten", 0),
+            ("rust_arrow.table_assemble", 0),
             ("rust_arrow.columnar_merge", 0),
             ("json.parquet.persist", 0),
+            ("rust_arrow.id_compaction", 0),
+            ("rust_arrow.table_write", 0),
             ("rust_arrow.arrow_build", 0),
             ("rust_arrow.parquet_write", 0),
         ],

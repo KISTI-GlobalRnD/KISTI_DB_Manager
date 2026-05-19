@@ -94,6 +94,20 @@ kisti-db-manager json profile-parallel \
   --out runs/profile_parallel_test
 ```
 
+OpenAlex ID-compaction 운영 전 검증은 작은 smoke 설정 대신 현재 권장값 주변에서 비교합니다.
+
+```bash
+kisti-db-manager json profile-parallel \
+  --config path/to/openalex_config.json \
+  --flatten-backends rust-arrow \
+  --workers 4,8 \
+  --max-records 100000 \
+  --chunk-size 10000 \
+  --repeat 2 \
+  --id-compaction \
+  --out runs/profile_openalex_idcompact_100k
+```
+
 Rust parquet backend를 강제하려면 다음처럼 실행합니다.
 
 ```bash
@@ -103,17 +117,20 @@ kisti-db-manager json run \
   --flatten-backend rust-arrow
 ```
 
-plain JSONL/NDJSON의 parse/parquet-only 실행에서는 JSON line decoding도 Rust로 넘길 수 있습니다.
+JSONL/NDJSON/GZ JSONL의 parse/parquet-only `rust-arrow` 실행에서는 JSON line decoding이 기본으로 Rust로 넘어갑니다.
 
 ```bash
 kisti-db-manager json run \
   --config path/to/config.json \
   --mode parse-parquet-safe \
-  --flatten-backend rust-arrow \
-  --rust-raw-jsonl-parse
+  --flatten-backend rust-arrow
 ```
 
-지원되는 경우 `--rust-raw-jsonl-file-parse`를 추가하면 Python line loop 없이 Rust가 JSONL/NDJSON 파일을 직접 읽습니다. ID compaction이 켜진 실행은 현재 batch raw parser 경로를 사용합니다.
+이전 Python JSON decoding 경로와 비교하려면 `--no-rust-raw-jsonl-parse`를 사용합니다. 지원되는 경우 `--rust-raw-jsonl-file-parse`를 추가하면 Python line loop 없이 Rust가 JSONL/NDJSON 파일을 직접 읽습니다. ID compaction이 켜진 실행은 현재 batch raw parser 경로를 사용합니다.
+
+명시적인 `rust-arrow` parquet-first 실행에서 ID compaction을 켜고 `parallel_workers`를 지정하지 않으면, 검증된 OpenAlex source profile 기준으로 `8`이 기본 적용됩니다. 단일 worker를 강제하려면 `--parallel-workers 0`을 명시합니다.
+
+OpenAlex ID-compaction artifact run의 현재 운영 시작값은 `--chunk-size 10000`입니다. 100k 검증에서 `5000` 대비 runtime은 거의 같고 parquet 파일 수가 `194 -> 100`으로 줄었으며, `20000`은 더 느렸습니다.
 
 `--rust-columnar-accumulator`는 Rust가 Arrow array를 만들기 전에 전체 row map을 쌓는 비용을 줄이기 위한 opt-in 경로입니다. profile에서 이득이 확인된 parse/parquet-only 실행에만 적용하고, ID compaction 실행은 현재 기본 row accumulator 경로를 유지합니다.
 
@@ -154,8 +171,14 @@ kisti-db-manager json id-compaction-preflight \
 kisti-db-manager json run \
   --config path/to/openalex_config.json \
   --mode parse-parquet-safe \
-  --id-compaction
+  --flatten-backend rust-arrow \
+  --id-compaction \
+  --chunk-size 10000
 ```
+
+`--flatten-backend rust-arrow`를 함께 쓰는 parquet-first 실행에서는 `parallel_workers`를 생략하면 `8`이 적용됩니다. 다른 값을 쓰려면 `--parallel-workers`를 명시합니다.
+
+운영 artifact 생성에서는 `--chunk-size 10000`을 같이 권장합니다. 이는 전역 기본값이 아니라 OpenAlex `rust-arrow + id-compaction` 경로의 runbook 권장값입니다.
 
 기본 policy는 충돌을 숨기지 않고 실패시키는 것입니다. 충돌을 보존해 검토하려는 경우에만 `preserve` 정책을 사용하세요.
 

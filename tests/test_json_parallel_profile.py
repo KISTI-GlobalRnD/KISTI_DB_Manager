@@ -473,6 +473,8 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertEqual(saved["runs"][0]["timings_ms"]["rust_arrow.unaccounted_ms"], 450)
             md = Path(out_dir, "parallel_profile.md").read_text(encoding="utf-8")
             self.assertIn("rust_arrow.py_to_json_ms", md)
+            self.assertIn("rust_arrow.table_assemble_ms", md)
+            self.assertIn("rust_arrow.table_write_ms", md)
             self.assertIn("rust_arrow.unaccounted_ms", md)
 
     def test_profile_parallel_compares_flatten_backends(self):
@@ -608,7 +610,6 @@ class TestJsonParallelProfile(unittest.TestCase):
                     config_path=cfg_path,
                     workers=[0],
                     flatten_backends=["python", "rust-arrow"],
-                    rust_raw_jsonl_parse=True,
                     rust_parser_backend="simd-json",
                     out_dir=out_dir,
                     shuffle_order=False,
@@ -963,8 +964,11 @@ class TestJsonParallelProfile(unittest.TestCase):
                 report.add_time_ms("rust_arrow.py_to_json", 5)
                 report.add_time_ms("rust_arrow.number_validate", 6)
                 report.add_time_ms("json.flatten", 20)
+                report.add_time_ms("rust_arrow.table_assemble", 12)
                 report.add_time_ms("rust_arrow.columnar_merge", 7)
                 report.add_time_ms("json.parquet.persist", 30)
+                report.add_time_ms("rust_arrow.id_compaction", 13)
+                report.add_time_ms("rust_arrow.table_write", 14)
                 report.add_time_ms("rust_arrow.arrow_build", 8)
                 report.add_time_ms("rust_arrow.parquet_write", 9)
                 report.add_time_ms("rust_arrow.py_result_convert", 11)
@@ -1038,8 +1042,11 @@ class TestJsonParallelProfile(unittest.TestCase):
                 report.add_time_ms("rust_arrow.py_to_json", 5)
                 report.add_time_ms("rust_arrow.number_validate", 6)
                 report.add_time_ms("json.flatten", 20)
+                report.add_time_ms("rust_arrow.table_assemble", 12)
                 report.add_time_ms("rust_arrow.columnar_merge", 7)
                 report.add_time_ms("json.parquet.persist", 30)
+                report.add_time_ms("rust_arrow.id_compaction", 13)
+                report.add_time_ms("rust_arrow.table_write", 14)
                 report.add_time_ms("rust_arrow.arrow_build", 8)
                 report.add_time_ms("rust_arrow.parquet_write", 9)
                 report.add_time_ms("rust_arrow.py_result_convert", 11)
@@ -1084,8 +1091,11 @@ class TestJsonParallelProfile(unittest.TestCase):
             self.assertEqual(row["timings_ms"]["rust_arrow.py_to_json"], 5)
             self.assertEqual(row["timings_ms"]["rust_arrow.number_validate"], 6)
             self.assertEqual(row["timings_ms"]["json.flatten"], 20)
+            self.assertEqual(row["timings_ms"]["rust_arrow.table_assemble"], 12)
             self.assertEqual(row["timings_ms"]["rust_arrow.columnar_merge"], 7)
             self.assertEqual(row["timings_ms"]["json.parquet.persist"], 30)
+            self.assertEqual(row["timings_ms"]["rust_arrow.id_compaction"], 13)
+            self.assertEqual(row["timings_ms"]["rust_arrow.table_write"], 14)
             self.assertEqual(row["timings_ms"]["rust_arrow.arrow_build"], 8)
             self.assertEqual(row["timings_ms"]["rust_arrow.parquet_write"], 9)
             self.assertEqual(row["timings_ms"]["rust_arrow.py_result_convert"], 11)

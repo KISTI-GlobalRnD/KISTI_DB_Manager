@@ -552,6 +552,7 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     cfg = json.loads(Path(args.config).read_text(encoding="utf-8"))
     data_config = cfg.get("data_config") or cfg.get("data") or {}
     db_config = cfg.get("db_config") or cfg.get("db") or {}
+    parallel_workers_in_config = bool(isinstance(data_config, dict) and "parallel_workers" in data_config)
     from .config import coerce_data_config, coerce_db_config
 
     from .modes import apply_mode, resolve_mode_name
@@ -560,6 +561,9 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
     db_config = coerce_db_config(db_config, inplace=isinstance(db_config, dict))
     mode_name = resolve_mode_name(getattr(args, "mode", None), data_config)
     mode_spec = apply_mode(mode_name, data_config)
+    parallel_workers_explicit = bool(
+        parallel_workers_in_config and "parallel_workers" not in (mode_spec.data_overrides or {})
+    )
 
     if getattr(args, "fast_load_session", None) is not None:
         data_config["fast_load_session"] = bool(args.fast_load_session)
@@ -575,6 +579,7 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
         data_config["rust_db_load"] = bool(args.rust_db_load)
     if getattr(args, "parallel_workers", None) is not None:
         data_config["parallel_workers"] = int(args.parallel_workers)
+        parallel_workers_explicit = True
     if getattr(args, "flatten_backend", None):
         data_config["flatten_backend"] = str(args.flatten_backend)
     if getattr(args, "rust_raw_jsonl_parse", None) is not None:
@@ -687,6 +692,7 @@ def _cmd_json_run(args: argparse.Namespace) -> int:
             data_config.setdefault("progress_interval_s", 10.0)
         except Exception:
             pass
+    data_config["_parallel_workers_explicit"] = bool(parallel_workers_explicit)
 
     res = run_json_pipeline(
         data_config,
@@ -1268,7 +1274,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rust-raw-jsonl-parse",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="Use Rust to parse raw JSONL lines in parse/parquet-only rust-arrow runs (default: config or false).",
+        help="Use Rust to parse raw JSONL/GZ lines in eligible parse/parquet-only rust-arrow runs (default: config or true).",
     )
     p_json_run.add_argument(
         "--rust-raw-jsonl-file-parse",
@@ -1505,7 +1511,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--rust-raw-jsonl-parse",
         action=argparse.BooleanOptionalAction,
         default=None,
-        help="For rust-arrow profile runs, parse raw JSONL/NDJSON lines inside Rust (default: config or false).",
+        help="For rust-arrow profile runs, parse raw JSONL/NDJSON/GZ lines inside Rust (default: config or true).",
     )
     p_json_profile_parallel.add_argument(
         "--rust-raw-jsonl-file-parse",

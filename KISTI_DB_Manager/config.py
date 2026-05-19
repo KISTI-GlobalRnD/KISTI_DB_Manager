@@ -51,7 +51,7 @@ def normalize_data_config(data_config: Mapping[str, Any]) -> dict[str, Any]:
     # JSON pipeline performance knobs
     cfg.setdefault("parallel_workers", 0)  # ProcessPool workers for JSON flatten (0/1 disables)
     cfg.setdefault("flatten_backend", "auto")  # auto|python|rust-arrow for parse/parquet path
-    cfg.setdefault("rust_raw_jsonl_parse", False)  # opt-in Rust JSONL parser for parse/parquet-only runs
+    cfg.setdefault("rust_raw_jsonl_parse", True)  # auto Rust JSONL parser for eligible rust-arrow parse/parquet runs
     cfg.setdefault("rust_raw_jsonl_file_parse", False)  # opt-in Rust direct JSONL file reader for supported runs
     cfg.setdefault("rust_parallel_table_writes", False)  # opt-in table-level parallel parquet writes in Rust
     cfg.setdefault("rust_columnar_accumulator", False)  # opt-in Rust columnar flatten/parquet accumulator
@@ -190,7 +190,7 @@ class DataConfig:
     rust_db_load: bool = False
     parallel_workers: int = 0
     flatten_backend: str = "auto"
-    rust_raw_jsonl_parse: bool = False
+    rust_raw_jsonl_parse: bool = True
     rust_raw_jsonl_file_parse: bool = False
     rust_parallel_table_writes: bool = False
     rust_columnar_accumulator: bool = False
@@ -241,7 +241,7 @@ class DataConfig:
             rust_db_load=bool(cfg.get("rust_db_load", False)),
             parallel_workers=int(cfg.get("parallel_workers", 0) or 0),
             flatten_backend=str(cfg.get("flatten_backend", "auto")),
-            rust_raw_jsonl_parse=bool(cfg.get("rust_raw_jsonl_parse", False)),
+            rust_raw_jsonl_parse=bool(cfg.get("rust_raw_jsonl_parse", True)),
             rust_raw_jsonl_file_parse=bool(cfg.get("rust_raw_jsonl_file_parse", False)),
             rust_parallel_table_writes=bool(cfg.get("rust_parallel_table_writes", False)),
             rust_columnar_accumulator=bool(cfg.get("rust_columnar_accumulator", False)),

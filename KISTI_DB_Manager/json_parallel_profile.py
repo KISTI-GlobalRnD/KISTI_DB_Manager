@@ -18,6 +18,7 @@ _RUST_ARROW_UNACCOUNTED_DETAIL_KEYS = (
     "rust_arrow.json_parse",
     "rust_arrow.number_validate",
     "json.flatten",
+    "rust_arrow.table_assemble",
     "rust_arrow.columnar_merge",
     "json.parquet.persist",
     "rust_arrow.arrow_build",
@@ -566,8 +567,11 @@ def _summarize_worker_run(
             "rust_arrow.number_validate": _as_int(timings.get("rust_arrow.number_validate"), 0),
             "rust_arrow.py_to_json": _as_int(timings.get("rust_arrow.py_to_json"), 0),
             "json.flatten": _as_int(timings.get("json.flatten"), 0),
+            "rust_arrow.table_assemble": _as_int(timings.get("rust_arrow.table_assemble"), 0),
             "rust_arrow.columnar_merge": _as_int(timings.get("rust_arrow.columnar_merge"), 0),
             "json.parquet.persist": _as_int(timings.get("json.parquet.persist"), 0),
+            "rust_arrow.id_compaction": _as_int(timings.get("rust_arrow.id_compaction"), 0),
+            "rust_arrow.table_write": _as_int(timings.get("rust_arrow.table_write"), 0),
             "rust_arrow.arrow_build": _as_int(timings.get("rust_arrow.arrow_build"), 0),
             "rust_arrow.parquet_write": _as_int(timings.get("rust_arrow.parquet_write"), 0),
             "rust_arrow.py_result_convert": _as_int(timings.get("rust_arrow.py_result_convert"), 0),
@@ -900,8 +904,11 @@ def _aggregate_worker_attempts(
         "rust_arrow.number_validate",
         "rust_arrow.py_to_json",
         "json.flatten",
+        "rust_arrow.table_assemble",
         "rust_arrow.columnar_merge",
         "json.parquet.persist",
+        "rust_arrow.id_compaction",
+        "rust_arrow.table_write",
         "rust_arrow.arrow_build",
         "rust_arrow.parquet_write",
         "rust_arrow.py_result_convert",
@@ -1091,13 +1098,13 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
     lines.append(
         "| backend | effective | parser | parser_fallbacks | raw_jsonl | file_jsonl | table_write_parallel | columnar | workers | status | attempts | eligible | duration_s | records_per_s | rps_min | rps_max | "
         "io.json_parse_ms | rust_arrow.read_line_ms | rust_arrow.json_parse_ms | rust_arrow.number_validate_ms | "
-        "rust_arrow.py_to_json_ms | json.flatten_ms | rust_arrow.columnar_merge_ms | "
-        "json.parquet.persist_ms | rust_arrow.arrow_build_ms | rust_arrow.parquet_write_ms | "
+        "rust_arrow.py_to_json_ms | json.flatten_ms | rust_arrow.table_assemble_ms | rust_arrow.columnar_merge_ms | "
+        "json.parquet.persist_ms | rust_arrow.id_compaction_ms | rust_arrow.table_write_ms | rust_arrow.arrow_build_ms | rust_arrow.parquet_write_ms | "
         "rust_arrow.py_result_convert_ms | rust_arrow.total_ms | rust_arrow.unaccounted_ms | "
         "issues | errors | warnings | artifact_contract | rust_arrow_failed_batches | fallback_reason |"
     )
     lines.append(
-        "|---|---|---|---:|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
+        "|---|---|---|---:|---|---|---|---|---:|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---:|---|"
     )
     for row in summary.get("runs") or []:
         timings = row.get("timings_ms") if isinstance(row.get("timings_ms"), Mapping) else {}
@@ -1127,8 +1134,11 @@ def _render_parallel_profile_markdown(summary: Mapping[str, Any]) -> str:
             f"{_as_int(timings.get('rust_arrow.number_validate'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.py_to_json'), 0)} | "
             f"{_as_int(timings.get('json.flatten'), 0)} | "
+            f"{_as_int(timings.get('rust_arrow.table_assemble'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.columnar_merge'), 0)} | "
             f"{_as_int(timings.get('json.parquet.persist'), 0)} | "
+            f"{_as_int(timings.get('rust_arrow.id_compaction'), 0)} | "
+            f"{_as_int(timings.get('rust_arrow.table_write'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.arrow_build'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.parquet_write'), 0)} | "
             f"{_as_int(timings.get('rust_arrow.py_result_convert'), 0)} | "

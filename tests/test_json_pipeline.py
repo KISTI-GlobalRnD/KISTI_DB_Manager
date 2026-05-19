@@ -1463,6 +1463,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             calls = []
 
@@ -1547,6 +1548,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -1657,6 +1659,67 @@ class TestJsonPipeline(unittest.TestCase):
             sub_table = self._read_single_parquet_table(pq, out_dir, "base__items").to_pydict()
             self.assertEqual(sub_table["id"], [2])
             self.assertIn("bad json", quarantine_path.read_text(encoding="utf-8"))
+
+    def test_run_json_pipeline_rust_arrow_raw_gz_jsonl_parse_path(self):
+        _pa, pq = self._require_rust_arrow_with_pyarrow()
+
+        with tempfile.TemporaryDirectory() as td:
+            import gzip
+
+            root = Path(td)
+            source = root / "x.jsonl.gz"
+            lines = [
+                json.dumps({"id": 1, "name": "ok"}),
+                "{bad json",
+                json.dumps(["not", "a", "dict"]),
+                json.dumps({"id": 2, "items": [{"x": 7}]}),
+            ]
+            with gzip.open(source, "wt", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+
+            out_dir = root / "parquet_out"
+            quarantine_path = root / "quarantine.jsonl"
+            from KISTI_DB_Manager.quarantine import QuarantineWriter
+
+            data_config = {
+                "PATH": str(root),
+                "file_name": "x.jsonl.gz",
+                "file_type": "gz",
+                "table_name": "base",
+                "KEY_SEP": "__",
+                "persist_parquet_files": True,
+                "persist_parquet_dir": str(out_dir),
+                "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_file_parse": True,
+            }
+
+            res = run_json_pipeline(
+                data_config,
+                {},
+                chunk_size=10,
+                create=False,
+                load=False,
+                index=False,
+                optimize=False,
+                continue_on_error=True,
+                quarantine=QuarantineWriter(quarantine_path),
+            )
+
+            self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+            self.assertEqual(res.report.artifacts.get("rust_raw_jsonl_parse_requested"), True)
+            self.assertEqual(res.report.artifacts.get("rust_raw_jsonl_parse_effective"), True)
+            self.assertEqual(res.report.artifacts.get("rust_raw_jsonl_file_parse_effective"), False)
+            self.assertIn("gz sources", res.report.artifacts.get("rust_raw_jsonl_file_parse_disabled_reason", ""))
+            self.assertEqual(res.report.stats.get("records_read"), 4)
+            self.assertEqual(res.report.stats.get("records_ok"), 2)
+            self.assertEqual(res.report.stats.get("records_failed"), 2)
+            main_table = self._read_single_parquet_table(pq, out_dir, "base").to_pydict()
+            self.assertEqual(main_table["id"], [1, 2])
+            sub_table = self._read_single_parquet_table(pq, out_dir, "base__items").to_pydict()
+            self.assertEqual(sub_table["id"], [2])
+            quarantine_text = quarantine_path.read_text(encoding="utf-8")
+            self.assertIn("bad json", quarantine_text)
+            self.assertIn(str(source), quarantine_text)
 
     def test_run_json_pipeline_rust_arrow_direct_jsonl_file_parse_path(self):
         _pa, pq = self._require_rust_arrow_with_pyarrow()
@@ -1978,6 +2041,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "parallel_workers": 2,
                 "id_compaction": {"enabled": True},
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
@@ -2019,6 +2083,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "parallel_workers": 2,
                 "id_compaction": {"enabled": True},
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
@@ -2202,6 +2267,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -2244,6 +2310,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_link),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -2445,6 +2512,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -2485,6 +2553,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -2520,6 +2589,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "rust_raw_jsonl_parse": False,
             }
             db_config = {"host": "h", "user": "u", "password": "p", "database": "d"}
 
@@ -2540,8 +2610,11 @@ class TestJsonPipeline(unittest.TestCase):
                         "rust_arrow.py_to_json": 2,
                         "rust_arrow.number_validate": 3,
                         "json.flatten": 3,
+                        "rust_arrow.table_assemble": 12,
                         "rust_arrow.columnar_merge": 4,
                         "json.parquet.persist": 4,
+                        "rust_arrow.id_compaction": 13,
+                        "rust_arrow.table_write": 14,
                         "rust_arrow.arrow_build": 5,
                         "rust_arrow.parquet_write": 6,
                         "rust_arrow.py_result_convert": 7,
@@ -2568,13 +2641,16 @@ class TestJsonPipeline(unittest.TestCase):
             self.assertEqual(res.report.timings_ms.get("rust_arrow.py_to_json"), 2)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.number_validate"), 3)
             self.assertEqual(res.report.timings_ms.get("json.flatten"), 3)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.table_assemble"), 12)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.columnar_merge"), 4)
             self.assertEqual(res.report.timings_ms.get("json.parquet.persist"), 4)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.id_compaction"), 13)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.table_write"), 14)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.arrow_build"), 5)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.parquet_write"), 6)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.py_result_convert"), 7)
             self.assertEqual(res.report.timings_ms.get("rust_arrow.total"), 50)
-            self.assertEqual(res.report.timings_ms.get("rust_arrow.unaccounted_ms"), 17)
+            self.assertEqual(res.report.timings_ms.get("rust_arrow.unaccounted_ms"), 5)
             self.assertIn("base", res.name_maps)
 
     def test_run_json_pipeline_rust_arrow_feeds_existing_db_path_from_parquet(self):
@@ -3004,7 +3080,7 @@ class TestJsonPipeline(unittest.TestCase):
                 json.dumps(
                     {
                         "id": "https://openalex.org/W1",
-                        "author_id": "https://openalex.org/A1",
+                        "author_id": "HTTPS://OPENALEX.ORG/A1",
                         "primary_location": {"source": {"id": "https://openalex.org/S1"}},
                         "referenced_works": ["https://openalex.org/W2"],
                     }
@@ -3022,6 +3098,7 @@ class TestJsonPipeline(unittest.TestCase):
                 "persist_parquet_files": True,
                 "persist_parquet_dir": str(out_dir),
                 "flatten_backend": "rust-arrow",
+                "parallel_workers": 2,
                 "id_compaction": {"enabled": True},
             }
 
@@ -3037,6 +3114,9 @@ class TestJsonPipeline(unittest.TestCase):
             )
 
             self.assertEqual(res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+            self.assertEqual(res.report.artifacts.get("parallel_workers"), 2)
+            self.assertEqual(res.report.artifacts.get("parallel_workers_explicit"), True)
+            self.assertNotIn("parallel_workers_default_source", res.report.artifacts)
             main = self._read_single_parquet_table(pq, out_dir, "base").to_pydict()
             self.assertEqual(main["id"], ["W1"])
             self.assertEqual(main["author_openalex_id"], ["A1"])
@@ -3127,6 +3207,12 @@ class TestJsonPipeline(unittest.TestCase):
 
             self.assertEqual(py_res.report.artifacts.get("flatten_backend_effective"), "python")
             self.assertEqual(rust_res.report.artifacts.get("flatten_backend_effective"), "rust-arrow")
+            self.assertEqual(rust_res.report.artifacts.get("parallel_workers"), 8)
+            self.assertEqual(rust_res.report.artifacts.get("parallel_workers_explicit"), False)
+            self.assertEqual(
+                rust_res.report.artifacts.get("parallel_workers_default_source"),
+                "rust_arrow_id_compaction",
+            )
             self.assertEqual(rust_tables, py_tables)
             self.assertEqual(rust_manifest["id_compaction"]["counts"], py_manifest["id_compaction"]["counts"])
             self.assertEqual(rust_manifest["tables"], py_manifest["tables"])

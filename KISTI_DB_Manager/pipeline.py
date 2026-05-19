@@ -88,7 +88,10 @@ _LONG_JSON_INTEGER_RE_BYTES = re.compile(
 _RUST_ARROW_DETAIL_TIMING_KEYS = (
     "rust_arrow.read_line",
     "rust_arrow.number_validate",
+    "rust_arrow.table_assemble",
     "rust_arrow.columnar_merge",
+    "rust_arrow.id_compaction",
+    "rust_arrow.table_write",
     "rust_arrow.arrow_build",
     "rust_arrow.parquet_write",
     "rust_arrow.py_result_convert",
@@ -98,12 +101,27 @@ _RUST_ARROW_UNACCOUNTED_DETAIL_KEYS = (
     "rust_arrow.json_parse",
     "rust_arrow.number_validate",
     "json.flatten",
+    "rust_arrow.table_assemble",
     "rust_arrow.columnar_merge",
     "json.parquet.persist",
     "rust_arrow.arrow_build",
     "rust_arrow.parquet_write",
     "rust_arrow.py_result_convert",
 )
+_RUST_ARROW_ID_COMPACTION_DEFAULT_PARALLEL_WORKERS = 8
+
+
+def _parallel_workers_was_explicit(data_config: Any) -> bool:
+    try:
+        marker = data_config.get("_parallel_workers_explicit")
+    except Exception:
+        marker = None
+    if marker is not None:
+        return bool(marker)
+    try:
+        return "parallel_workers" in data_config
+    except Exception:
+        return hasattr(data_config, "parallel_workers")
 
 
 def _timing_ms(timings: Mapping[str, Any], key: str) -> int:
@@ -1117,6 +1135,7 @@ def run_json_pipeline(
     import time
 
     t_total0 = time.perf_counter()
+    parallel_workers_explicit = _parallel_workers_was_explicit(data_config)
 
     dc = coerce_data_config(data_config, inplace=isinstance(data_config, dict))
     dbc = coerce_db_config(db_config)
@@ -1217,10 +1236,35 @@ def run_json_pipeline(
     report.set_artifact("flatten_backend_requested", flatten_backend_requested)
     rust_parser_backend = normalize_parser_backend(dc.get("rust_parser_backend", "serde-json"))
     report.set_artifact("rust_parser_backend", rust_parser_backend)
-    rust_raw_jsonl_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_parse", False), default=False)
+    rust_raw_jsonl_parse_requested = bool(
+        _coerce_bool(dc.get("rust_raw_jsonl_parse", True), default=True)
+        and flatten_backend_requested == BACKEND_RUST_ARROW
+    )
     rust_raw_jsonl_file_parse_requested = _coerce_bool(dc.get("rust_raw_jsonl_file_parse", False), default=False)
     report.set_artifact("rust_raw_jsonl_parse_requested", bool(rust_raw_jsonl_parse_requested))
     report.set_artifact("rust_raw_jsonl_file_parse_requested", bool(rust_raw_jsonl_file_parse_requested))
+    parallel_workers = dc.get("parallel_workers")
+    try:
+        parallel_workers = int(parallel_workers) if parallel_workers is not None else 0
+    except Exception:
+        parallel_workers = 0
+    json_streaming_load = _coerce_bool(dc.get("json_streaming_load", False), default=False)
+    parallel_workers_auto_default_source = None
+    if (
+        not parallel_workers_explicit
+        and parallel_workers <= 0
+        and flatten_backend_requested == BACKEND_RUST_ARROW
+        and id_compactor.enabled
+        and persist_parquet_files
+        and not json_streaming_load
+    ):
+        parallel_workers = _RUST_ARROW_ID_COMPACTION_DEFAULT_PARALLEL_WORKERS
+        dc["parallel_workers"] = int(parallel_workers)
+        parallel_workers_auto_default_source = "rust_arrow_id_compaction"
+    report.set_artifact("parallel_workers", int(parallel_workers or 0))
+    report.set_artifact("parallel_workers_explicit", bool(parallel_workers_explicit))
+    if parallel_workers_auto_default_source:
+        report.set_artifact("parallel_workers_default_source", parallel_workers_auto_default_source)
 
     # Best-effort progress checkpointing (for crash recovery / quick shard detection).
     # This intentionally writes a tiny JSON snapshot periodically without waiting for the final report.
@@ -1431,10 +1475,6 @@ def run_json_pipeline(
     report.set_artifact("except_keys", list(except_keys))
     report.set_artifact("auto_except", dict(auto_except_meta or {}))
     report.set_artifact("max_records", max_records)
-    try:
-        report.set_artifact("parallel_workers", int(dc.get("parallel_workers") or 0))
-    except Exception:
-        pass
 
     to_sql_chunksize = dc.get("to_sql_chunksize")
     if to_sql_chunksize is not None:
@@ -4543,20 +4583,20 @@ def run_json_pipeline(
                     return "excepted_expand_dict=true is not supported by rust-arrow"
                 return None
 
-            def _rust_raw_jsonl_sources() -> tuple[list[Any] | None, str | None]:
+            def _rust_raw_jsonl_sources() -> tuple[list[dict[str, Any]] | None, str | None]:
                 from pathlib import Path
 
                 try:
                     source_infos = _resolve_json_sources(dc, report=report, apply_sampling=True)
                 except Exception as e:
                     return None, f"failed to resolve JSON sources: {type(e).__name__}: {e}"
-                sources: list[Any] = []
+                sources: list[dict[str, Any]] = []
                 configured_file_type = str(dc.get("file_type") or "").strip().lower()
                 for _origin, path in source_infos:
                     file_type = configured_file_type or Path(str(path)).suffix.lstrip(".").lower()
-                    if file_type not in {"jsonl", "ndjson", "jsonlines"}:
+                    if file_type not in {"jsonl", "ndjson", "jsonlines", "gz"}:
                         return None, f"unsupported file_type for raw JSONL parser: {file_type or '<empty>'}"
-                    sources.append(path)
+                    sources.append({"path": path, "file_type": file_type})
                 if not sources:
                     return None, "no JSONL sources resolved"
                 return sources, None
@@ -4573,6 +4613,10 @@ def run_json_pipeline(
                 raw_jsonl_file_disabled_reason = "not requested"
             elif raw_jsonl_disabled_reason is not None:
                 raw_jsonl_file_disabled_reason = raw_jsonl_disabled_reason
+            elif raw_jsonl_sources is not None and any(
+                str(item.get("file_type") or "").lower() == "gz" for item in raw_jsonl_sources
+            ):
+                raw_jsonl_file_disabled_reason = "gz sources are not supported by direct Rust JSONL file parser"
             elif id_compactor.enabled:
                 raw_jsonl_file_disabled_reason = "id_compaction is not supported by direct Rust JSONL file parser"
             if raw_jsonl_file_disabled_reason and rust_raw_jsonl_file_parse_requested:
@@ -4586,7 +4630,7 @@ def run_json_pipeline(
                 try:
                     rust_t0 = time.perf_counter()
                     rust_result = persist_jsonl_sources_to_parquet(
-                        raw_jsonl_sources,
+                        [item["path"] for item in raw_jsonl_sources],
                         base_table=base_table,
                         index_key=index_key,
                         except_keys=except_keys,
@@ -4707,10 +4751,18 @@ def run_json_pipeline(
             elif raw_jsonl_disabled_reason is None and raw_jsonl_sources is not None:
                 raw_batch: list[bytes | str] = []
                 reached_max_records = False
-                for raw_source in raw_jsonl_sources:
+                for raw_source_info in raw_jsonl_sources:
                     if reached_max_records or rust_explicit_failed:
                         break
-                    with open(raw_source, "rb") as raw_fp:
+                    raw_source = raw_source_info["path"]
+                    raw_file_type = str(raw_source_info.get("file_type") or "").lower()
+                    if raw_file_type == "gz":
+                        import gzip
+
+                        raw_fp_cm = gzip.open(raw_source, "rb")
+                    else:
+                        raw_fp_cm = open(raw_source, "rb")
+                    with raw_fp_cm as raw_fp:
                         for line_no, raw_line in enumerate(raw_fp, start=1):
                             if not raw_line or raw_line.isspace():
                                 continue

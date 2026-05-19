@@ -50,19 +50,22 @@ kisti-db-manager json run \
   --flatten-backend rust-arrow
 ```
 
-For plain JSONL/NDJSON parse/parquet-only runs, you can also bypass Python JSON decoding and parse raw lines in Rust:
+For JSONL/NDJSON/GZ JSONL parse/parquet-only runs, explicit `rust-arrow` runs bypass Python JSON decoding and parse raw lines in Rust by default:
 
 ```bash
 kisti-db-manager json run \
   --config path/to/openalex_config.json \
   --mode parse-parquet-safe \
-  --flatten-backend rust-arrow \
-  --rust-raw-jsonl-parse
+  --flatten-backend rust-arrow
 ```
 
-This path is opt-in and intentionally narrow. It requires `flatten_backend=rust-arrow`, `persist_parquet_files=true`, no DB/create/index/optimize stages, no `records_key`, and plain `.jsonl`/`.ndjson` input. Reports include `rust_raw_jsonl_parse_effective` and the Rust parser timing key `rust_arrow.json_parse` when measurable.
+This path is intentionally narrow. It requires `flatten_backend=rust-arrow`, `persist_parquet_files=true`, no DB/create/index/optimize stages, no `records_key`, and JSONL/NDJSON/GZ JSONL input. Use `--no-rust-raw-jsonl-parse` to force the older Python JSON decoding path for comparison. Reports include `rust_raw_jsonl_parse_effective` and the Rust parser timing key `rust_arrow.json_parse` when measurable.
 
-Rust run reports also expose lower-level timing keys when measurable: `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.columnar_merge`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms`. Use these with `json.flatten`, `json.parquet.persist`, and `rust_arrow.total` to identify whether the next bottleneck is source reading, JSON decoding, flattening, Arrow array construction, parquet output, Python result conversion, or remaining unattributed overhead.
+For explicit `rust-arrow` parquet-first runs with OpenAlex ID compaction, omitted `parallel_workers` defaults to `8`. This default is scoped to the measured ID-compacted Rust path; use `--parallel-workers 0` to force single-worker behavior or pass another worker count to override it. Reports include `parallel_workers_default_source=rust_arrow_id_compaction` when the scoped default was applied.
+
+For OpenAlex ID-compacted artifact runs, use `--chunk-size 10000` as the current operational starting point. In the retained 100k check, `10000` reduced parquet files from `194` to `100` with essentially unchanged runtime and identical `schema_manifest` content; `20000` reduced file count further but was slower. Keep `--rust-parallel-table-writes` disabled unless a fresh profile shows a local benefit.
+
+Rust run reports also expose lower-level timing keys when measurable: `rust_arrow.read_line`, `rust_arrow.number_validate`, `rust_arrow.table_assemble`, `rust_arrow.columnar_merge`, `rust_arrow.id_compaction`, `rust_arrow.table_write`, `rust_arrow.arrow_build`, `rust_arrow.parquet_write`, `rust_arrow.py_result_convert`, and `rust_arrow.unaccounted_ms`. Use these with `json.flatten`, `json.parquet.persist`, and `rust_arrow.total` to identify whether the next bottleneck is source reading, JSON decoding, flattening, table assembly, ID compaction, table write dispatch, Arrow array construction, parquet output, Python result conversion, or remaining unattributed overhead.
 
 For the narrowest fast path, add `--rust-raw-jsonl-file-parse` as well. That keeps the same parse/parquet-only constraints and bypasses Python's line-reading loop. It currently falls back to the batch raw parser when ID compaction is enabled.
 
@@ -86,10 +89,24 @@ kisti-db-manager json profile-parallel \
 ```
 
 `json profile-parallel` keeps per-run reports and parquet artifacts by default.
-Add `--rust-raw-jsonl-parse --rust-raw-jsonl-file-parse` when you want the `rust-arrow` profile runs to include the raw JSONL parser and direct file reader fast paths.
+Rust raw JSONL/GZ decoding is enabled by default for eligible `rust-arrow` profile runs. The retained 100k and 500k OpenAlex ID-compaction profiles support `8` as the scoped default when `parallel_workers` is omitted on explicit `rust-arrow` parquet-first runs. Add `--rust-raw-jsonl-file-parse` when you want plain JSONL/NDJSON runs to include the direct file reader fast path, or `--no-rust-raw-jsonl-parse` to compare against the older Python JSON decoding path.
 Add `--rust-parallel-table-writes` only when you want to test table-level parquet write parallelism explicitly.
 Add `--rust-columnar-accumulator` to compare the opt-in columnar Rust accumulator against the existing row accumulator before using it in a real run.
 Add `--rust-parquet-flush-records` when profiling small `--chunk-size` values so the speed benefit does not imply thousands of parquet files.
+For the production-like OpenAlex ID-compacted Rust artifact path, compare against `--chunk-size 10000` before changing the recommended runbook.
+
+```bash
+kisti-db-manager json profile-parallel \
+  --config path/to/openalex_config.json \
+  --flatten-backends rust-arrow \
+  --workers 4,8 \
+  --max-records 100000 \
+  --chunk-size 10000 \
+  --repeat 2 \
+  --id-compaction \
+  --out runs/profile_openalex_idcompact_100k
+```
+
 It also writes:
 
 - `parallel_profile.json`
@@ -189,7 +206,7 @@ The Rust path is intentionally conservative.
 - `excepted_expand_dict=true` remains Python-only
 - `persist_parquet_files=false` cannot use Rust
 - custom Python `extract_fn` disables Rust
-- raw JSONL parsing is limited to explicit `rust-arrow` parse/parquet-only runs
+- raw JSONL/GZ parsing is limited to explicit `rust-arrow` parse/parquet-only runs
 - direct Rust JSONL file parsing currently excludes ID compaction and uses the batch raw parser instead
 - schema-freeze extra-column mode disables direct Rust DB load
 - DB indexes and optimize remain Python-managed

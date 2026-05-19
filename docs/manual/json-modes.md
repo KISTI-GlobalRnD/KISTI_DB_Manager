@@ -41,12 +41,14 @@ For OpenAlex-scale JSON parsing, ID compaction can be enabled explicitly:
 kisti-db-manager json run \
   --config path/to/openalex_config.json \
   --mode parse-parquet-safe \
-  --id-compaction
+  --flatten-backend rust-arrow \
+  --id-compaction \
+  --chunk-size 10000
 ```
 
 The current OpenAlex preset removes repeated URL prefixes from known ID values and stores namespace meaning in column names and descriptions. For example, `author_id=https://openalex.org/A123` becomes `author_openalex_id=A123`, while base `id` remains named `id` and stores `W...`. Semantic columns are renamed consistently even when a row has `null` or an already compact bare ID value, preventing mixed schemas such as both `author_id` and `author_openalex_id`.
 
-ID compaction can be used with `--parallel-workers`. Worker processes flatten JSON slices, then the parent applies compaction and merges the resulting schema summary. Compaction collisions and namespace conflicts still fail immediately by default rather than being hidden by the sequential fallback path.
+ID compaction can be used with `--parallel-workers`. For explicit `rust-arrow` parquet-first runs, omitted `parallel_workers` defaults to `8`; pass `--parallel-workers 0` or another value to override it. For OpenAlex artifact runs on this path, use `--chunk-size 10000` as the current runbook recommendation: it cuts parquet file count substantially without the slowdown seen at `20000`. Worker processes flatten JSON slices, then the parent applies compaction and merges the resulting schema summary. Compaction collisions and namespace conflicts still fail immediately by default rather than being hidden by the sequential fallback path.
 
 If two nonblank source values map to the same compacted output column, compaction raises an error by default instead of silently choosing one. The run report and `schema_manifest.json` record the removed prefix, source column, new column, and description; schema-evolved DB columns also receive the same column comments when the target supports them.
 

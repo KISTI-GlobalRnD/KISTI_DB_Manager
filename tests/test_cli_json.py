@@ -258,6 +258,50 @@ class TestCLIJson(unittest.TestCase):
             self.assertEqual(data_cfg["rust_raw_jsonl_parse"], True)
             self.assertEqual(data_cfg["rust_raw_jsonl_file_parse"], False)
 
+    def test_json_run_defaults_rust_raw_jsonl_parse_on_and_allows_disable(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "tbl",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as p_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
+                rc = main(["json", "run", "--config", cfg_path, "--flatten-backend", "rust-arrow"])
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(p_run.call_args.args[0]["rust_raw_jsonl_parse"], True)
+
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as p_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
+                rc = main(
+                    [
+                        "json",
+                        "run",
+                        "--config",
+                        cfg_path,
+                        "--flatten-backend",
+                        "rust-arrow",
+                        "--no-rust-raw-jsonl-parse",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            self.assertEqual(p_run.call_args.args[0]["rust_raw_jsonl_parse"], False)
+
     def test_json_run_passes_rust_raw_jsonl_file_parse_option(self):
         with tempfile.TemporaryDirectory() as td:
             cfg_path = f"{td}/config.json"
@@ -344,6 +388,49 @@ class TestCLIJson(unittest.TestCase):
             data_cfg = p_run.call_args.args[0]
             self.assertEqual(data_cfg["flatten_backend"], "rust-arrow")
             self.assertEqual(data_cfg["id_compaction"]["enabled"], True)
+            self.assertEqual(data_cfg["_parallel_workers_explicit"], False)
+
+    def test_json_run_marks_parallel_workers_cli_override_explicit(self):
+        with tempfile.TemporaryDirectory() as td:
+            cfg_path = f"{td}/config.json"
+
+            cfg = {
+                "data_config": {
+                    "PATH": "data/",
+                    "file_name": "x.jsonl",
+                    "file_type": "jsonl",
+                    "table_name": "tbl",
+                },
+                "db_config": {"host": "h", "user": "u", "password": "p", "database": "d"},
+            }
+            with open(cfg_path, "w", encoding="utf-8") as f:
+                f.write(json.dumps(cfg))
+
+            fake_report = RunReport()
+            with patch(
+                "KISTI_DB_Manager.pipeline.run_json_pipeline",
+                return_value=JsonRunResult(name_maps={}, report=fake_report),
+            ) as p_run, patch("KISTI_DB_Manager.cli._ensure_optional_deps", return_value=None):
+                rc = main(
+                    [
+                        "json",
+                        "run",
+                        "--config",
+                        cfg_path,
+                        "--mode",
+                        "parse-parquet-safe",
+                        "--flatten-backend",
+                        "rust-arrow",
+                        "--id-compaction",
+                        "--parallel-workers",
+                        "0",
+                    ]
+                )
+
+            self.assertEqual(rc, 0)
+            data_cfg = p_run.call_args.args[0]
+            self.assertEqual(data_cfg["parallel_workers"], 0)
+            self.assertEqual(data_cfg["_parallel_workers_explicit"], True)
 
     def test_json_run_passes_id_compaction_options(self):
         with tempfile.TemporaryDirectory() as td:

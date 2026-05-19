@@ -9,6 +9,19 @@ For current OpenAlex work, use a two-stage flow.
 1. `parse-parquet-safe` to create canonical local parquet artifacts
 2. `oa_materialize_parquet_to_db.py` to load selected tables or the full set into MariaDB later
 
+For the current Rust ID-compacted artifact path, start with:
+
+```bash
+kisti-db-manager json run \
+  --config path/to/openalex_config.json \
+  --mode parse-parquet-safe \
+  --flatten-backend rust-arrow \
+  --id-compaction \
+  --chunk-size 10000
+```
+
+This keeps `parallel_workers` omitted so the scoped `rust-arrow` ID-compaction default applies (`8`), while using the retained 100k chunk-size check's file-count recommendation.
+
 ## Why this split exists
 
 OpenAlex has large nested branches and some branches are operationally better treated as local analytical artifacts first.
