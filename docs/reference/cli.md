@@ -68,6 +68,10 @@ kisti-db-manager openalex benchmark-load runs/example/parquet \
   --config runs/example/config.json \
   --loader rust-mysql \
   --report runs/example/rust_mysql_load_benchmark.json
+kisti-db-manager openalex validate-reload runs/example \
+  --config runs/example/config.json \
+  --table works \
+  --out runs/example/reload_validation.json
 ```
 
 `json profile-parallel` compares JSON parse/parquet-only sample runs across `parallel_workers` values and optional `--flatten-backends` values. It disables DB stages, writes artifacts under `<out>/w<workers>/` for one backend or `<out>/<backend>/w<workers>/` for multiple backends, runs `parquet inspect`-style artifact contract checks, and creates `parallel_profile.json` plus `parallel_profile.md`. Use `--repeat N` to run each worker/backend setting multiple times; recommendations use median `records_per_s`. Eligible `rust-arrow` profile runs include the Rust raw JSONL/GZ parser by default; add `--no-rust-raw-jsonl-parse` to compare the older Python JSON decoding path, add `--rust-raw-jsonl-file-parse` to include direct Rust source-file reading, add `--rust-parser-backend simd-json` to run the experimental parser variant after building the Rust extension with the `simd-json` Cargo feature, add `--rust-columnar-accumulator` to test the columnar Rust accumulator, add `--rust-parquet-flush-records` to test larger parquet output flushes with smaller chunks, and add `--rust-parallel-table-writes` to test per-table parquet write parallelism. Rust profile summaries include detailed timing keys for source reading, number validation, table assembly, columnar merge, ID compaction, table write dispatch, Arrow array build, parquet file writing, `rust_arrow.unaccounted_ms` for remaining unattributed Rust time, and `rust_parser_fallbacks` for simd-to-serde parser fallback attempts. Add `--cleanup-parquet` when you want to keep reports/contracts but remove sample parquet directories.
@@ -111,6 +115,7 @@ Source-checkout compatibility script wrappers are also available:
 
 ```bash
 python scripts/oa_materialize_parquet_to_db.py runs/<openalex_parse_run_dir> --dotenv path/to/.env
+python scripts/oa_validate_serving_reload.py runs/<run_dir> --table works --out runs/<run_dir>/reload_validation.json
 python scripts/parquet_reload_plan.py run --plan runs/<run_dir>/plans/parquet_reload_plan.json
 python scripts/parquet_preflight_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json
 python scripts/parquet_finalize_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json

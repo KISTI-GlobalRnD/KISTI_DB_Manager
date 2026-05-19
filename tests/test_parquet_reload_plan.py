@@ -53,6 +53,8 @@ class TestParquetReloadPlan(unittest.TestCase):
             self.assertIn("works", cmd)
 
             validate = parquet_reload.validation_cmd(plan, specs[0], report_path=run_dir / "validate.json")
+            self.assertIn("-m", validate)
+            self.assertIn("KISTI_DB_Manager.openalex_reload_validate", validate)
             self.assertIn("--literal-null-marker-compare-mode", validate)
             self.assertIn("utf8mb4_bin", validate)
             self.assertIn("--skip-parquet-key-health", validate)

@@ -444,7 +444,8 @@ def main() -> int:
     else:
         reload_validation_cmd = [
             str(repo_root / ".venv" / "bin" / "python"),
-            "scripts/oa_validate_serving_reload.py",
+            "-m",
+            "KISTI_DB_Manager.openalex_reload_validate",
             str(run_dir),
             "--dotenv",
             str(dotenv_path or repo_root / ".env"),

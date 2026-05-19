@@ -25,6 +25,14 @@ def _cmd_openalex_benchmark_load(args: argparse.Namespace) -> int:
     )
 
 
+def _cmd_openalex_validate_reload(args: argparse.Namespace) -> int:
+    return _run_packaged_main(
+        "KISTI_DB_Manager.openalex_reload_validate",
+        args.argv,
+        prog="kisti-db-manager openalex validate-reload",
+    )
+
+
 def register_openalex_parser(sub) -> None:
     p_openalex = sub.add_parser("openalex", help="OpenAlex parquet materialization helpers")
     openalex_sub = p_openalex.add_subparsers(dest="openalex_cmd", required=True)
@@ -57,6 +65,22 @@ def register_openalex_parser(sub) -> None:
     p_benchmark.add_argument("argv", nargs="*")
     p_benchmark.set_defaults(
         func=_cmd_openalex_benchmark_load,
+        forward_unknown_args=True,
+        forward_arg_offset=2,
+    )
+
+    p_validate = openalex_sub.add_parser(
+        "validate-reload",
+        add_help=False,
+        help="Validate an OpenAlex serving DB reload against source parquet",
+        description=(
+            "Forward arguments to the packaged OpenAlex reload validator. "
+            "Use `kisti-db-manager openalex validate-reload --help` for command options."
+        ),
+    )
+    p_validate.add_argument("argv", nargs="*")
+    p_validate.set_defaults(
+        func=_cmd_openalex_validate_reload,
         forward_unknown_args=True,
         forward_arg_offset=2,
     )

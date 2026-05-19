@@ -1,16 +1,10 @@
-import importlib.util
 import json
 import unittest
 from argparse import Namespace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "oa_validate_serving_reload.py"
-SPEC = importlib.util.spec_from_file_location("oa_validate_serving_reload", SCRIPT_PATH)
-oa_validate = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(oa_validate)
+from KISTI_DB_Manager import openalex_reload_validate as oa_validate
 
 
 class TestOaValidateServingReload(unittest.TestCase):

@@ -128,6 +128,16 @@ class TestCLI(unittest.TestCase):
             prog="kisti-db-manager openalex benchmark-load",
         )
 
+    def test_openalex_validate_reload_dispatches_to_packaged_module(self):
+        with patch("KISTI_DB_Manager.openalex_reload_validate.main", return_value=0) as validate_main:
+            rc = main(["openalex", "validate-reload", "runs/example", "--table", "works"])
+
+        self.assertEqual(rc, 0)
+        validate_main.assert_called_once_with(
+            ["runs/example", "--table", "works"],
+            prog="kisti-db-manager openalex validate-reload",
+        )
+
     def test_smoke_rust_db_load_dispatches_to_packaged_module(self):
         with patch("KISTI_DB_Manager.rust_db_smoke.main", return_value=0) as smoke_main:
             rc = main(["smoke", "rust-db-load", "--dotenv", ".env"])

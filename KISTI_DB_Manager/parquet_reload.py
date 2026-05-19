@@ -346,7 +346,8 @@ def validation_cmd(plan: dict[str, Any], spec: ReloadTableSpec, *, report_path: 
     config_path = Path(str(plan.get("config") or paths["run_dir"] / "config.json")).expanduser().resolve()
     cmd = [
         sys.executable,
-        "scripts/oa_validate_serving_reload.py",
+        "-m",
+        "KISTI_DB_Manager.openalex_reload_validate",
         str(paths["run_dir"]),
         "--config",
         str(config_path),
@@ -405,7 +406,15 @@ def preflight_enabled(plan: dict[str, Any], *, skip_preflight: bool = False) -> 
 
 def finalizer_cmd(plan_path: Path, plan: dict[str, Any], *, report_path: Path) -> list[str]:
     finalize = plan.get("finalize") if isinstance(plan.get("finalize"), dict) else {}
-    cmd = [sys.executable, "scripts/parquet_finalize_db.py", "--plan", str(Path(plan_path).expanduser().resolve()), "--out", str(report_path)]
+    cmd = [
+        sys.executable,
+        "-m",
+        "KISTI_DB_Manager.parquet_finalize",
+        "--plan",
+        str(Path(plan_path).expanduser().resolve()),
+        "--out",
+        str(report_path),
+    ]
     if bool(finalize.get("strict_indexes", False)):
         cmd.append("--strict-indexes")
     if bool(finalize.get("no_unique_fallback", False)):
