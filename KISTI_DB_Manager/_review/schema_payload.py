@@ -5,7 +5,7 @@ from typing import Any, Iterable, Mapping
 
 from ..namemap import load_namemap
 from ..naming import MYSQL_IDENTIFIER_MAX_LEN, truncate_table_name
-from ..review import TableInfo
+from .core import TableInfo
 from .schema_graph import (
     fallback_join_sql,
     infer_table_role,
