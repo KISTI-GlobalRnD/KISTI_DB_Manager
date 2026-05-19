@@ -20,7 +20,7 @@ That means a restart usually replays at most the current batch rather than the f
 
 ## Materialize stage
 
-`oa_materialize_parquet_to_db.py` stores progress at:
+`kisti-db-manager openalex materialize` stores progress at:
 
 - `runs/<openalex_parse_run_dir>/parquet_materialize/progress.json`
 
@@ -34,7 +34,7 @@ The materializer now supports two resume granularities:
 Example:
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+kisti-db-manager openalex materialize \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --file-chunk-rows 5000

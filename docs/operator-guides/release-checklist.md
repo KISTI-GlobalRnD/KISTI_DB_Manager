@@ -55,7 +55,7 @@ cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
 Run the DB smoke test only against a disposable or development MariaDB target:
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
+kisti-db-manager smoke rust-db-load --dotenv .env
 ```
 
 ## Operator-Facing Changes

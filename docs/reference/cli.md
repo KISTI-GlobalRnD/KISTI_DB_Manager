@@ -63,8 +63,8 @@ kisti-db-manager json id-compaction-preflight --config path/to/openalex_config.j
 Operational Rust DB checks:
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
-python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
+kisti-db-manager smoke rust-db-load --dotenv .env
+kisti-db-manager openalex benchmark-load runs/example/parquet \
   --config runs/example/config.json \
   --loader rust-mysql \
   --report runs/example/rust_mysql_load_benchmark.json
@@ -79,7 +79,7 @@ python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
 ## Parquet materialize helper
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+kisti-db-manager openalex materialize \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \
@@ -107,9 +107,10 @@ kisti-db-manager parquet finalize --plan runs/<run_dir>/plans/parquet_reload_pla
 
 `parquet inspect` validates the parquet artifact contract before DB work: `schema_manifest.json`, ID compaction provenance, `rules_hash`, selected table schemas, and mixed source/compacted ID columns. Add `--strict-schema-manifest` to fail on manifest/parquet mismatches.
 
-Equivalent script wrappers are available:
+Source-checkout compatibility script wrappers are also available:
 
 ```bash
+python scripts/oa_materialize_parquet_to_db.py runs/<openalex_parse_run_dir> --dotenv path/to/.env
 python scripts/parquet_reload_plan.py run --plan runs/<run_dir>/plans/parquet_reload_plan.json
 python scripts/parquet_preflight_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json
 python scripts/parquet_finalize_db.py --plan runs/<run_dir>/plans/parquet_reload_plan.json

@@ -62,7 +62,7 @@ kisti-db-manager json run --config path/to/config.json --mode parse-parquet-safe
 이후 DB 적재는 parquet materialize/reload 경로를 사용합니다.
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+kisti-db-manager openalex materialize \
   runs/<parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_db \
@@ -151,10 +151,10 @@ kisti-db-manager json run \
   --rust-db-load
 ```
 
-실제 DB smoke는 다음 스크립트를 사용합니다. 기본적으로 테스트 테이블을 삭제합니다.
+실제 DB smoke는 다음 CLI를 사용합니다. 기본적으로 테스트 테이블을 삭제합니다.
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
+kisti-db-manager smoke rust-db-load --dotenv .env
 ```
 
 ## OpenAlex ID compaction

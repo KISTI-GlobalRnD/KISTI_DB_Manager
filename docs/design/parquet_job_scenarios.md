@@ -53,7 +53,7 @@ Characteristics:
 
 Current examples:
 
-- `scripts/oa_materialize_parquet_to_db.py`
+- `KISTI_DB_Manager.openalex_materialize`
 - most `works_*` child table loads
 
 ### 2. `dedup_by_key`
@@ -174,7 +174,7 @@ The OpenAlex-specific `works_affiliation_agg` builder now delegates to this engi
 
 | Script / Module | Scenario |
 | --- | --- |
-| `scripts/oa_materialize_parquet_to_db.py` | `direct_materialize` |
+| `KISTI_DB_Manager.openalex_materialize` | `direct_materialize` |
 | `scripts/oa_dedup_merged_main.py` | `dedup_by_key` |
 | `KISTI_DB_Manager/parquet_replay_repair.py` | `dedup_by_key` |
 | `KISTI_DB_Manager/parquet_delta_merge.py` | `delta_merge` |

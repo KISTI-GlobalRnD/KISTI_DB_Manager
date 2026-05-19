@@ -1,19 +1,12 @@
 import json
-import importlib.util
 import os
 import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from uuid import uuid4
 
+from KISTI_DB_Manager import openalex_materialize as oa_materialize
 from KISTI_DB_Manager import load_data
-
-
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "oa_materialize_parquet_to_db.py"
-SPEC = importlib.util.spec_from_file_location("oa_materialize_parquet_to_db", SCRIPT_PATH)
-oa_materialize = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(oa_materialize)
 
 
 def _integration_db_config():

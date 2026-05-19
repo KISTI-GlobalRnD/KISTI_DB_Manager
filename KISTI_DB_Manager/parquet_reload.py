@@ -285,7 +285,8 @@ def materialize_cmd(plan: dict[str, Any], spec: ReloadTableSpec, *, report_path:
     table_prefix = str(materialize.get("table_prefix") or "")
     cmd = [
         sys.executable,
-        "scripts/oa_materialize_parquet_to_db.py",
+        "-m",
+        "KISTI_DB_Manager.openalex_materialize",
         str(paths["run_dir"]),
         "--dotenv",
         str(plan.get("dotenv") or ".env"),

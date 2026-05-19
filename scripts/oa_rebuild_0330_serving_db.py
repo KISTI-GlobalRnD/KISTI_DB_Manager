@@ -302,7 +302,8 @@ def main() -> int:
             phase_report = run_dir / "reports" / f"{table_name}.json"
             phase_cmd = [
                 str(repo_root / ".venv" / "bin" / "python"),
-                "scripts/oa_materialize_parquet_to_db.py",
+                "-m",
+                "KISTI_DB_Manager.openalex_materialize",
                 str(run_dir),
                 "--dotenv",
                 str(dotenv_path or repo_root / ".env"),
@@ -391,7 +392,8 @@ def main() -> int:
         phase_report = run_dir / "reports" / f"{AFFILIATION_AGG_TABLE}.json"
         phase_cmd = [
             str(repo_root / ".venv" / "bin" / "python"),
-            "scripts/oa_materialize_parquet_to_db.py",
+            "-m",
+            "KISTI_DB_Manager.openalex_materialize",
             str(run_dir),
             "--dotenv",
             str(dotenv_path or repo_root / ".env"),

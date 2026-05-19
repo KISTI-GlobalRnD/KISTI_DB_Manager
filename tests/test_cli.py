@@ -100,6 +100,44 @@ class TestCLI(unittest.TestCase):
         self.assertTrue(finalize_args.skip_analyze)
         self.assertEqual(mark_args.parquet_cmd, "mark-table-done")
 
+    def test_openalex_materialize_dispatches_to_packaged_module(self):
+        with patch("KISTI_DB_Manager.openalex_materialize.main", return_value=0) as materialize_main:
+            rc = main(["openalex", "materialize", "runs/example", "--dotenv", ".env"])
+
+        self.assertEqual(rc, 0)
+        materialize_main.assert_called_once_with(
+            ["runs/example", "--dotenv", ".env"],
+            prog="kisti-db-manager openalex materialize",
+        )
+
+    def test_openalex_benchmark_dispatches_to_packaged_module(self):
+        with patch("KISTI_DB_Manager.openalex_benchmark.main", return_value=0) as benchmark_main:
+            rc = main(
+                [
+                    "openalex",
+                    "benchmark-load",
+                    "runs/example/parquet",
+                    "--config",
+                    "runs/example/config.json",
+                ]
+            )
+
+        self.assertEqual(rc, 0)
+        benchmark_main.assert_called_once_with(
+            ["runs/example/parquet", "--config", "runs/example/config.json"],
+            prog="kisti-db-manager openalex benchmark-load",
+        )
+
+    def test_smoke_rust_db_load_dispatches_to_packaged_module(self):
+        with patch("KISTI_DB_Manager.rust_db_smoke.main", return_value=0) as smoke_main:
+            rc = main(["smoke", "rust-db-load", "--dotenv", ".env"])
+
+        self.assertEqual(rc, 0)
+        smoke_main.assert_called_once_with(
+            ["--dotenv", ".env"],
+            prog="kisti-db-manager smoke rust-db-load",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

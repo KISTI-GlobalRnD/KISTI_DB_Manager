@@ -7,7 +7,7 @@ This chapter uses OpenAlex as the public example dataset for the package: prefli
 For current OpenAlex work, use a two-stage flow.
 
 1. `parse-parquet-safe` to create canonical local parquet artifacts
-2. `oa_materialize_parquet_to_db.py` to load selected tables or the full set into MariaDB later
+2. `kisti-db-manager openalex materialize` to load selected tables or the full set into MariaDB later
 
 For the current Rust ID-compacted artifact path, start with:
 
@@ -52,7 +52,7 @@ kisti-db-manager json run \
 ## Materialize into DB later
 
 ```bash
-python scripts/oa_materialize_parquet_to_db.py \
+kisti-db-manager openalex materialize \
   runs/<openalex_parse_run_dir> \
   --dotenv path/to/.env \
   --db-name target_openalex_db \

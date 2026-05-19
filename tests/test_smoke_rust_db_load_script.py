@@ -1,15 +1,10 @@
-import importlib.util
 import unittest
-from pathlib import Path
+
+from KISTI_DB_Manager import rust_db_smoke
 
 
 def _load_script_module():
-    path = Path(__file__).resolve().parents[1] / "scripts" / "smoke_rust_db_load.py"
-    spec = importlib.util.spec_from_file_location("smoke_rust_db_load", path)
-    module = importlib.util.module_from_spec(spec)
-    assert spec.loader is not None
-    spec.loader.exec_module(module)
-    return module
+    return rust_db_smoke
 
 
 class TestSmokeRustDbLoadScript(unittest.TestCase):

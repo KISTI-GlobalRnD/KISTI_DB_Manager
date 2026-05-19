@@ -36,8 +36,13 @@ def _sync_command_facades() -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    raw_argv = list(sys.argv[1:] if argv is None else argv)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args, unknown = parser.parse_known_args(raw_argv)
+    if getattr(args, "forward_unknown_args", False):
+        args.argv = raw_argv[int(getattr(args, "forward_arg_offset", 0) or 0) :]
+    elif unknown:
+        parser.error("unrecognized arguments: " + " ".join(str(item) for item in unknown))
     try:
         _sync_command_facades()
         return int(args.func(args))

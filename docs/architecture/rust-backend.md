@@ -155,13 +155,13 @@ Use the Python DB bridge instead of `--rust-db-load` when you need mature per-ro
 
 ## Smoke Test
 
-Before relying on the Rust DB loader, run the live smoke script against a disposable or development MariaDB database:
+Before relying on the Rust DB loader, run the live smoke command against a disposable or development MariaDB database:
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env
+kisti-db-manager smoke rust-db-load --dotenv .env
 ```
 
-The script:
+The command:
 
 - creates a unique `kisti_rust_db_smoke_*` table family
 - writes OpenAlex-like JSONL input
@@ -172,7 +172,7 @@ The script:
 Keep the tables only for manual inspection:
 
 ```bash
-python scripts/smoke_rust_db_load.py --dotenv .env --keep-tables
+kisti-db-manager smoke rust-db-load --dotenv .env --keep-tables
 ```
 
 The cleanup rule is intentionally narrow: it drops only the exact base table or tables beginning with `base__`.
@@ -182,7 +182,7 @@ The cleanup rule is intentionally narrow: it drops only the exact base table or 
 To compare DB load-only throughput from existing parquet artifacts:
 
 ```bash
-python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
+kisti-db-manager openalex benchmark-load runs/example/parquet \
   --config runs/example/config.json \
   --loader rust-mysql \
   --report runs/example/rust_mysql_load_benchmark.json
@@ -191,7 +191,7 @@ python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
 The default loader remains Python:
 
 ```bash
-python scripts/oa_benchmark_parquet_load.py runs/example/parquet \
+kisti-db-manager openalex benchmark-load runs/example/parquet \
   --config runs/example/config.json \
   --loader python \
   --report runs/example/python_load_benchmark.json
@@ -223,7 +223,7 @@ cargo fmt --manifest-path crates/kisti_json_rs/Cargo.toml --check
 cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
 cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
 python -m unittest discover -s tests -q
-python scripts/smoke_rust_db_load.py --dotenv .env
+kisti-db-manager smoke rust-db-load --dotenv .env
 ```
 
 For DB smoke runs, verify no temporary tables remain unless `--keep-tables` was used.

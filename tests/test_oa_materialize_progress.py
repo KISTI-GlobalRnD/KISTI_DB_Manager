@@ -1,4 +1,3 @@
-import importlib.util
 import threading
 import unittest
 from types import SimpleNamespace
@@ -6,12 +5,7 @@ from unittest import mock
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "oa_materialize_parquet_to_db.py"
-SPEC = importlib.util.spec_from_file_location("oa_materialize_parquet_to_db", SCRIPT_PATH)
-oa_materialize = importlib.util.module_from_spec(SPEC)
-assert SPEC.loader is not None
-SPEC.loader.exec_module(oa_materialize)
+from KISTI_DB_Manager import openalex_materialize as oa_materialize
 
 
 class TestOaMaterializeProgress(unittest.TestCase):
