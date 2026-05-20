@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.0 - 2026-05-20
+
 ### Added
 
 - Added Description Profile v2 outputs for richer per-column database profiling,
