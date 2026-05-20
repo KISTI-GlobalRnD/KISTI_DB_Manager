@@ -38,6 +38,8 @@
   wheel instead of relying on a pre-existing virtual environment.
 - Added source distribution checks for the Rust crate files needed to rebuild
   the optional extension from packaged source.
+- Opted CI and docs workflows into GitHub Actions' Node.js 24 runtime ahead of
+  the June 2026 default runner transition.
 - Reworked column canonicalization and truncation to preserve collision hints
   such as `__dot`, `__raw`, and `__dup2` instead of opaque numeric suffixes.
 - Routed tabular load, row load, TSV load, description-profile, and JSON
