@@ -28,6 +28,9 @@ PACKAGE_STAGING_DIRS = (
     ROOT / "kisti_db_manager.egg-info",
 )
 EXPECTED_SDIST_PATHS = {
+    "crates/kisti_json_rs/Cargo.lock",
+    "crates/kisti_json_rs/Cargo.toml",
+    "crates/kisti_json_rs/src/lib.rs",
     "tests/test_profile_artifact_contracts.py",
     "tests/test_review_schema_artifact_contracts.py",
     "tests/test_rust_arrow_extension_smoke.py",
