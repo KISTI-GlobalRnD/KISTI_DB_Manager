@@ -12,6 +12,9 @@ The maintained documentation lives in `docs/` and is published through MkDocs.
 - Install and first run: [docs/getting-started/index.md](docs/getting-started/index.md)
 - OpenAlex operations: [docs/operator-guides/openalex-runbook.md](docs/operator-guides/openalex-runbook.md)
 - CLI reference: [docs/reference/cli.md](docs/reference/cli.md)
+- Migration notes: [docs/reference/migration.md](docs/reference/migration.md)
+- Release checklist: [docs/operator-guides/release-checklist.md](docs/operator-guides/release-checklist.md)
+- Changelog: [CHANGELOG.md](CHANGELOG.md)
 - Architecture notes: [docs/architecture/index.md](docs/architecture/index.md)
 - Korean operator notes: [docs/ko/index.md](docs/ko/index.md)
 

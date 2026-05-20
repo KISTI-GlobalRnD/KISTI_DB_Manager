@@ -10,8 +10,11 @@ PR과 `main` push는 `.github/workflows/ci.yml`에서 Python 3.10/3.11/3.12 테�
 
 1. `pyproject.toml`과 `KISTI_DB_Manager/__init__.py`의 버전을 같은 값으로 갱신합니다.
 2. `CHANGELOG.md`에 날짜가 있는 릴리스 항목을 추가합니다.
-3. 로컬에서 문서와 패키지를 빌드하고, 빌드된 wheel의 `kisti-db-manager version` 출력이 의도한 버전인지 확인합니다.
-4. 릴리스 커밋의 CI가 통과한 뒤에만 git tag를 생성합니다.
+3. NameMap JSON, Description Profile, Dataset Profile, CLI 출력, report JSON
+   같은 저장 산출물 계약이 바뀌었다면 `docs/reference/migration.md`를
+   갱신합니다.
+4. 로컬에서 문서와 패키지를 빌드하고, 빌드된 wheel의 `kisti-db-manager version` 출력이 의도한 버전인지 확인합니다.
+5. 릴리스 커밋의 CI가 통과한 뒤에만 git tag를 생성합니다.
 
 ```bash
 git diff --check
@@ -23,6 +26,19 @@ mkdocs build --strict
 ```bash
 python -m unittest discover -s tests -q
 ```
+
+산출물 계약이 바뀌었다면 관련 테스트를 명시적으로 확인합니다.
+
+```bash
+python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py -q
+```
+
+확인할 항목:
+
+- 기존 NameMap JSON이 계속 로드되는지
+- 새 NameMap JSON의 선택 필드가 하위 호환인지
+- Description Profile과 Dataset Profile에 `schema_version`이 포함되는지
+- 문서에 포함된 SVG/HTML 예제가 의도적으로 갱신된 것인지
 
 릴리스 태그 또는 배포 전에는 wheel/sdist 빌드도 확인합니다.
 
@@ -52,4 +68,5 @@ kisti-db-manager smoke rust-db-load --dotenv .env
 - 영문 operator guide
 - 한국어 runbook
 - CLI reference 또는 artifacts reference
+- migration notes
 - README의 링크가 바뀐 경우 README

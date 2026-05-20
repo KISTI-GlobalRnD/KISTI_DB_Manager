@@ -25,9 +25,12 @@ Before a release tag:
    package version.
 2. Add a dated `CHANGELOG.md` entry that separates added, changed, fixed, and
    removed behavior where relevant.
-3. Build the docs and package locally, then confirm the built wheel reports the
+3. Update [Migration Notes](../reference/migration.md) when artifact contracts,
+   NameMap JSON, Description Profile, Dataset Profile, CLI output, or persisted
+   report schemas change.
+4. Build the docs and package locally, then confirm the built wheel reports the
    intended version through `kisti-db-manager version`.
-4. Create the git tag only after CI is green on the release commit.
+5. Create the git tag only after CI is green on the release commit.
 
 ## Documentation
 
@@ -38,6 +41,32 @@ mkdocs build --strict
 
 Check that generated public examples are intentionally selected and reproducible.
 Run-specific artifacts should stay outside `docs/` unless they are part of the public examples.
+
+For artifact-facing changes, check all relevant docs together:
+
+- `CHANGELOG.md`
+- `docs/reference/migration.md`
+- `docs/reference/artifacts.md`
+- `docs/reference/cli.md`
+- the affected operator guide
+- Korean runbooks when the day-to-day command sequence changes
+
+## Artifact Contract Checks
+
+Run these checks whenever Description Profile, Dataset Profile, NameMap,
+review artifacts, parquet preflight, or report JSON changes:
+
+```bash
+python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py -q
+```
+
+Confirm the generated artifacts remain inspectable:
+
+- NameMap JSON round-trips through `NameMap.from_dict`.
+- Legacy NameMap JSON without new optional fields still loads.
+- Description Profile JSON includes `schema_version`.
+- Dataset Profile JSON includes `schema_version`.
+- Any SVG or HTML examples checked into `docs/` are intentionally refreshed.
 
 ## Python Tests
 
@@ -84,3 +113,5 @@ installed CLI path.
 - Update the relevant operator guide, not only the reference page.
 - Update Korean runbooks when the day-to-day command sequence changes.
 - Keep README as a short portal; move operational detail into MkDocs.
+- Keep `CHANGELOG.md` and `docs/reference/migration.md` aligned when a change
+  affects saved artifacts or upgrade behavior.

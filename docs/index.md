@@ -26,6 +26,7 @@ Use these pages when you need command sequences and operational stop signals.
 ### Reference
 
 - [CLI Quick Reference](reference/cli.md)
+- [Migration Notes](reference/migration.md)
 - [JSON Modes](reference/modes.md)
 - [Artifacts Reference](reference/artifacts.md)
 - [Examples](reference/examples.md)
@@ -57,6 +58,8 @@ Use decisions when a maintenance policy should survive beyond one cleanup pass.
 ### Design and Performance Notes
 
 - [Design Notes Overview](design/index.md)
+- [Description Profile v2](design/description-profile-v2.md)
+- [Dataset Profile v1](design/dataset-profile-v1.md)
 - [Scenario-Based Parquet Jobs](design/parquet_job_scenarios.md)
 - historical performance and benchmark notes under `docs/performance/`
 
