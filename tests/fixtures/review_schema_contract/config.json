@@ -1,0 +1,15 @@
+{
+  "data_config": {
+    "PATH": "tests/fixtures/review_schema_contract",
+    "file_name": "works.csv",
+    "file_type": "csv",
+    "table_name": "works",
+    "KEY_SEP": "__"
+  },
+  "db_config": {
+    "host": "h",
+    "user": "u",
+    "password": "secret",
+    "database": "openalex_contract"
+  }
+}

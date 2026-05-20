@@ -29,10 +29,15 @@ PACKAGE_STAGING_DIRS = (
 )
 EXPECTED_SDIST_PATHS = {
     "tests/test_profile_artifact_contracts.py",
+    "tests/test_review_schema_artifact_contracts.py",
     "tests/fixtures/profile_contract/sample.csv",
     "tests/fixtures/profile_contract/expected_description_desc_v2.csv",
     "tests/fixtures/profile_contract/expected_description_profile_v2.json",
     "tests/fixtures/profile_contract/expected_dataset_profile_v1.json",
+    "tests/fixtures/review_schema_contract/config.json",
+    "tests/fixtures/review_schema_contract/description_profile.json",
+    "tests/fixtures/review_schema_contract/report.json",
+    "tests/fixtures/review_schema_contract/expected_schema_artifact_contract.json",
 }
 
 

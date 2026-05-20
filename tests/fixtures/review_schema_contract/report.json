@@ -1,0 +1,83 @@
+{
+  "issues": [
+    {
+      "level": "warning",
+      "message": "authorship rows include a nullable author_position",
+      "context": {
+        "table": "works__authorships"
+      }
+    }
+  ],
+  "artifacts": {
+    "name_maps_json": {
+      "works": {
+        "table_original": "works",
+        "table_sql": "works",
+        "columns_original": [
+          "id",
+          "display_name",
+          "publication_year"
+        ],
+        "columns_sql": [
+          "id",
+          "display_name",
+          "publication_year"
+        ],
+        "column_map": {
+          "id": "id",
+          "display_name": "display_name",
+          "publication_year": "publication_year"
+        },
+        "column_aliases": {},
+        "key_sep": "__"
+      },
+      "works__authorships": {
+        "table_original": "works__authorships",
+        "table_sql": "works__authorships",
+        "columns_original": [
+          "id",
+          "author_position",
+          "author__id"
+        ],
+        "columns_sql": [
+          "id",
+          "author_position",
+          "author__id"
+        ],
+        "column_map": {
+          "id": "id",
+          "author_position": "author_position",
+          "author__id": "author__id"
+        },
+        "column_aliases": {},
+        "key_sep": "__"
+      },
+      "works__authorships__institutions": {
+        "table_original": "works__authorships__institutions",
+        "table_sql": "works__authorships__institutions",
+        "columns_original": [
+          "id",
+          "institution__id",
+          "ror"
+        ],
+        "columns_sql": [
+          "id",
+          "institution__id",
+          "ror"
+        ],
+        "column_map": {
+          "id": "id",
+          "institution__id": "institution__id",
+          "ror": "ror"
+        },
+        "column_aliases": {},
+        "key_sep": "__"
+      }
+    },
+    "create_table_sql_json": {
+      "works": "CREATE TABLE `works` (\n  `id` VARCHAR(32) NOT NULL,\n  `display_name` VARCHAR(64),\n  `publication_year` YEAR,\n  PRIMARY KEY (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n",
+      "works__authorships": "CREATE TABLE `works__authorships` (\n  `id` VARCHAR(32) NOT NULL,\n  `author_position` VARCHAR(16),\n  `author__id` VARCHAR(32),\n  KEY `idx_author` (`author__id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n",
+      "works__authorships__institutions": "CREATE TABLE `works__authorships__institutions` (\n  `id` VARCHAR(32) NOT NULL,\n  `institution__id` VARCHAR(32),\n  `ror` VARCHAR(32)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;\n"
+    }
+  }
+}

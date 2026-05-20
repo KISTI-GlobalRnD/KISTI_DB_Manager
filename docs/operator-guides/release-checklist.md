@@ -66,7 +66,7 @@ Run these checks whenever Description Profile, Dataset Profile, NameMap,
 review artifacts, parquet preflight, or report JSON changes:
 
 ```bash
-python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py tests/test_profile_artifact_contracts.py -q
+python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py tests/test_profile_artifact_contracts.py tests/test_review_schema_artifact_contracts.py -q
 ```
 
 Confirm the generated artifacts remain inspectable:
@@ -75,6 +75,7 @@ Confirm the generated artifacts remain inspectable:
 - Legacy NameMap JSON without new optional fields still loads.
 - Description Profile JSON includes `schema_version`.
 - Dataset Profile JSON includes `schema_version`.
+- Schema Viewer JSON/SVG/Mermaid artifacts still match the checked contract.
 - Any SVG or HTML examples checked into `docs/` are intentionally refreshed.
 
 ## Python Tests

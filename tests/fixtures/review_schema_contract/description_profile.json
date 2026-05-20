@@ -1,0 +1,74 @@
+{
+  "schema_version": "2.0",
+  "backend": "python",
+  "source": {
+    "file": "tests/fixtures/review_schema_contract/works.csv",
+    "row_count": 3,
+    "table_name": "works"
+  },
+  "name_map": {
+    "table_original": "works",
+    "table_sql": "works",
+    "columns_original": [
+      "id",
+      "display_name",
+      "publication_year"
+    ],
+    "columns_sql": [
+      "id",
+      "display_name",
+      "publication_year"
+    ],
+    "column_map": {
+      "id": "id",
+      "display_name": "display_name",
+      "publication_year": "publication_year"
+    },
+    "column_aliases": {},
+    "key_sep": "__"
+  },
+  "columns": [
+    {
+      "source_column": "id",
+      "sql_column": "id",
+      "suggested_type": "VARCHAR(32)",
+      "type_family": "string",
+      "type_confidence": 1.0,
+      "type_reason": "forced_key",
+      "null_ratio": 0.0,
+      "unique_ratio": 1.0,
+      "is_key_candidate": true,
+      "index_recommended": true,
+      "warnings": ""
+    },
+    {
+      "source_column": "display_name",
+      "sql_column": "display_name",
+      "suggested_type": "VARCHAR(64)",
+      "type_family": "string",
+      "type_confidence": 1.0,
+      "type_reason": "fallback_string_type",
+      "null_ratio": 0.0,
+      "unique_ratio": 1.0,
+      "is_key_candidate": false,
+      "index_recommended": false,
+      "warnings": ""
+    },
+    {
+      "source_column": "publication_year",
+      "sql_column": "publication_year",
+      "suggested_type": "YEAR",
+      "type_family": "year",
+      "type_confidence": 1.0,
+      "type_reason": "all_non_empty_values_parse_as_integer",
+      "null_ratio": 0.333333,
+      "unique_ratio": 0.666667,
+      "is_key_candidate": false,
+      "index_recommended": false,
+      "warnings": "contains_nulls"
+    }
+  ],
+  "warnings": [
+    "contains_nulls"
+  ]
+}

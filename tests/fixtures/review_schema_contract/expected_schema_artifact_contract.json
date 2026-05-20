@@ -1,0 +1,251 @@
+{
+  "html_markers": [
+    "Schema Viewer",
+    "Table Catalog",
+    "renderColumnProfile",
+    "contains_nulls",
+    "works__authorships__institutions"
+  ],
+  "mermaid": "graph TD\n  works[\"works<br/>rows: n/a\"]\n  works__authorships[\"works__authorships<br/>rows: n/a\"]\n  works__authorships__institutions[\"works__authorships__institutions<br/>rows: n/a\"]\n  works -->|authorships| works__authorships\n  works__authorships -->|institutions| works__authorships__institutions\n",
+  "payload": {
+    "description_profile": {
+      "backend": "python",
+      "column_count": 3,
+      "schema_version": "2.0",
+      "source_file": "<description_source>",
+      "source_row_count": 3,
+      "table_sql": "works",
+      "warnings": [
+        "contains_nulls"
+      ]
+    },
+    "edges": [
+      {
+        "child_sql": "works__authorships",
+        "join_sql": "SELECT p.`id` AS parent_id, c.*\nFROM `works` p\nLEFT JOIN `works__authorships` c ON p.`id` = c.`id`\nLIMIT 5;",
+        "label": "authorships",
+        "parent_sql": "works"
+      },
+      {
+        "child_sql": "works__authorships__institutions",
+        "join_sql": "SELECT p.`id` AS parent_id, c.*\nFROM `works__authorships` p\nLEFT JOIN `works__authorships__institutions` c ON p.`id` = c.`id`\nLIMIT 5;",
+        "label": "institutions",
+        "parent_sql": "works__authorships"
+      }
+    ],
+    "groups": [
+      {
+        "depth": 0,
+        "description": "메인 테이블",
+        "label": "Depth 0 · Base",
+        "table_sqls": [
+          "works"
+        ]
+      },
+      {
+        "depth": 1,
+        "description": "base 바로 아래에서 분기된 첫 번째 subtable",
+        "label": "Depth 1 · First-level subtables",
+        "table_sqls": [
+          "works__authorships"
+        ]
+      },
+      {
+        "depth": 2,
+        "description": "경로 깊이 2 단계의 nested subtable",
+        "label": "Depth 2 · Nested subtables",
+        "table_sqls": [
+          "works__authorships__institutions"
+        ]
+      }
+    ],
+    "meta": {
+      "base_table": "works",
+      "base_table_sql": "works",
+      "config": "<config>",
+      "database": "openalex_contract",
+      "db_enabled": false,
+      "db_error": null,
+      "description_profile": {
+        "backend": "python",
+        "column_count": 3,
+        "schema_version": "2.0",
+        "source_file": "<description_source>",
+        "source_row_count": 3,
+        "table_sql": "works",
+        "warnings": [
+          "contains_nulls"
+        ]
+      },
+      "generated_at": "<generated_at>",
+      "key_sep": "__",
+      "mode": "schema-viewer",
+      "quarantine": "",
+      "quarantine_entries": 0,
+      "quarantine_error": null,
+      "report": "<report>"
+    },
+    "summary": {
+      "columns_total": 9,
+      "edge_count": 2,
+      "flagged_table_count": 1,
+      "rows_total": 0,
+      "size_bytes_total": 0,
+      "table_count": 3
+    },
+    "tables": [
+      {
+        "child_edges": [
+          {
+            "child_sql": "works__authorships",
+            "label": "authorships",
+            "parent_sql": "works"
+          }
+        ],
+        "column_count": 3,
+        "columns": [
+          {
+            "column_key": "PRI",
+            "column_type": "LONGTEXT",
+            "name": "id",
+            "profile_type": "VARCHAR(32)",
+            "profile_warnings": ""
+          },
+          {
+            "column_key": "",
+            "column_type": "LONGTEXT",
+            "name": "display_name",
+            "profile_type": "VARCHAR(64)",
+            "profile_warnings": ""
+          },
+          {
+            "column_key": "",
+            "column_type": "LONGTEXT",
+            "name": "publication_year",
+            "profile_type": "YEAR",
+            "profile_warnings": "contains_nulls"
+          }
+        ],
+        "depth": 0,
+        "display_short": "works",
+        "issue_warning_count": 0,
+        "join_sql": "SELECT *\nFROM `works`\nLIMIT 5;",
+        "name_sql": "works",
+        "parent_edges": [],
+        "relationship_count": 1,
+        "role": "base"
+      },
+      {
+        "child_edges": [
+          {
+            "child_sql": "works__authorships__institutions",
+            "label": "institutions",
+            "parent_sql": "works__authorships"
+          }
+        ],
+        "column_count": 3,
+        "columns": [
+          {
+            "column_key": "PRI",
+            "column_type": "LONGTEXT",
+            "name": "id",
+            "profile_type": null,
+            "profile_warnings": null
+          },
+          {
+            "column_key": "",
+            "column_type": "LONGTEXT",
+            "name": "author_position",
+            "profile_type": null,
+            "profile_warnings": null
+          },
+          {
+            "column_key": "",
+            "column_type": "LONGTEXT",
+            "name": "author__id",
+            "profile_type": null,
+            "profile_warnings": null
+          }
+        ],
+        "depth": 1,
+        "display_short": "authorships",
+        "issue_warning_count": 1,
+        "join_sql": "SELECT p.`id` AS parent_id, c.*\nFROM `works` p\nLEFT JOIN `works__authorships` c ON p.`id` = c.`id`\nLIMIT 5;",
+        "name_sql": "works__authorships",
+        "parent_edges": [
+          {
+            "child_sql": "works__authorships",
+            "label": "authorships",
+            "parent_sql": "works"
+          }
+        ],
+        "relationship_count": 2,
+        "role": "sub"
+      },
+      {
+        "child_edges": [],
+        "column_count": 3,
+        "columns": [
+          {
+            "column_key": "PRI",
+            "column_type": "LONGTEXT",
+            "name": "id",
+            "profile_type": null,
+            "profile_warnings": null
+          },
+          {
+            "column_key": "",
+            "column_type": "LONGTEXT",
+            "name": "institution__id",
+            "profile_type": null,
+            "profile_warnings": null
+          },
+          {
+            "column_key": "",
+            "column_type": "LONGTEXT",
+            "name": "ror",
+            "profile_type": null,
+            "profile_warnings": null
+          }
+        ],
+        "depth": 2,
+        "display_short": "authorships/institutions",
+        "issue_warning_count": 0,
+        "join_sql": "SELECT p.`id` AS parent_id, c.*\nFROM `works__authorships` p\nLEFT JOIN `works__authorships__institutions` c ON p.`id` = c.`id`\nLIMIT 5;",
+        "name_sql": "works__authorships__institutions",
+        "parent_edges": [
+          {
+            "child_sql": "works__authorships__institutions",
+            "label": "institutions",
+            "parent_sql": "works__authorships"
+          }
+        ],
+        "relationship_count": 1,
+        "role": "nested"
+      }
+    ]
+  },
+  "svg": {
+    "edge_sqls": [
+      {
+        "child_sql": "works__authorships",
+        "parent_sql": "works"
+      },
+      {
+        "child_sql": "works__authorships__institutions",
+        "parent_sql": "works__authorships"
+      }
+    ],
+    "markers": [
+      "class=\"edge-card\"",
+      ">authorships · 1:N</text>",
+      ">institutions · 1:N</text>",
+      ">publication_year</text>"
+    ],
+    "node_sqls": [
+      "works",
+      "works__authorships",
+      "works__authorships__institutions"
+    ]
+  }
+}

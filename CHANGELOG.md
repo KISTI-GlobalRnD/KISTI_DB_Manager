@@ -15,6 +15,8 @@
   NameMap alias compatibility.
 - Added golden artifact regression tests for Description Profile v2 and Dataset
   Profile v1 outputs.
+- Added Schema Viewer artifact contract coverage for JSON payload, Mermaid,
+  SVG relationship metadata, and HTML markers.
 - Added Rust crate unit tests for parser backend selection, JSONL parsing,
   number validation, and identifier namespace mapping.
 - Added a source-checkout `scripts/release_check.py` runner for the local

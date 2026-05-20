@@ -38,7 +38,7 @@ python -m pytest -q
 산출물 계약이 바뀌었다면 관련 테스트를 명시적으로 확인합니다.
 
 ```bash
-python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py tests/test_profile_artifact_contracts.py -q
+python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py tests/test_profile_artifact_contracts.py tests/test_review_schema_artifact_contracts.py -q
 ```
 
 확인할 항목:
@@ -46,6 +46,7 @@ python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabul
 - 기존 NameMap JSON이 계속 로드되는지
 - 새 NameMap JSON의 선택 필드가 하위 호환인지
 - Description Profile과 Dataset Profile에 `schema_version`이 포함되는지
+- Schema Viewer JSON/SVG/Mermaid 산출물이 고정 contract와 일치하는지
 - 문서에 포함된 SVG/HTML 예제가 의도적으로 갱신된 것인지
 
 릴리스 태그 또는 배포 전에는 wheel/sdist 빌드도 확인합니다.
