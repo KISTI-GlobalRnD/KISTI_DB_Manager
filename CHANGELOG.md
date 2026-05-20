@@ -40,6 +40,8 @@
   the optional extension from packaged source.
 - Opted CI and docs workflows into GitHub Actions' Node.js 24 runtime ahead of
   the June 2026 default runner transition.
+- Updated GitHub Actions checkout, Python setup, and Pages actions to current
+  Node.js 24-compatible major versions.
 - Reworked column canonicalization and truncation to preserve collision hints
   such as `__dot`, `__raw`, and `__dup2` instead of opaque numeric suffixes.
 - Routed tabular load, row load, TSV load, description-profile, and JSON
