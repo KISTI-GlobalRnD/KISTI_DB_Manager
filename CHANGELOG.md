@@ -32,6 +32,10 @@
   while crate unit tests can run without `extension-module` linking.
 - Extended CI and the local release check to validate the Rust `simd-json`
   feature and installed extension path.
+- Declared the DuckDB Python package in the JSON optional dependencies used by
+  parquet/OpenAlex DuckDB paths.
+- Switched Rust extension CI smoke validation to build and install the extension
+  wheel instead of relying on a pre-existing virtual environment.
 - Reworked column canonicalization and truncation to preserve collision hints
   such as `__dot`, `__raw`, and `__dup2` instead of opaque numeric suffixes.
 - Routed tabular load, row load, TSV load, description-profile, and JSON

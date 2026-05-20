@@ -66,7 +66,8 @@ cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
 cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features
 cargo check --manifest-path crates/kisti_json_rs/Cargo.toml --features simd-json
 cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features --features simd-json
-python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+python -m maturin build --manifest-path crates/kisti_json_rs/Cargo.toml --release --out build/rust-extension-wheels
+python -m pip install --force-reinstall --no-deps build/rust-extension-wheels/kisti_json_rs-*.whl
 python -m pytest tests/test_rust_arrow_extension_smoke.py -q
 ```
 

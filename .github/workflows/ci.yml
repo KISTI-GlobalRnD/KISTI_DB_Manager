@@ -102,8 +102,10 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[json,rust,test]"
 
-      - name: Build Python Rust extension
-        run: python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+      - name: Build and install Python Rust extension
+        run: |
+          python -m maturin build --manifest-path crates/kisti_json_rs/Cargo.toml --release --out dist/rust-extension
+          python -m pip install --force-reinstall --no-deps dist/rust-extension/kisti_json_rs-*.whl
 
       - name: Run Rust extension smoke
         run: pytest tests/test_rust_arrow_extension_smoke.py -q

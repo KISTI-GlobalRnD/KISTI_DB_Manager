@@ -217,6 +217,32 @@ def _wheel_smoke(version: str) -> None:
         )
 
 
+def _install_rust_extension_wheel(runner: str) -> None:
+    wheel_dir = ROOT / "build" / "rust-extension-wheels"
+    _remove_path(wheel_dir)
+    wheel_dir.mkdir(parents=True, exist_ok=True)
+    _run_step(
+        "rust extension build",
+        _python_module_cmd(
+            runner,
+            "maturin",
+            "build",
+            "--manifest-path",
+            str(RUST_MANIFEST),
+            "--release",
+            "--out",
+            str(wheel_dir),
+        ),
+    )
+    wheels = sorted(wheel_dir.glob("kisti_json_rs-*.whl"))
+    if len(wheels) != 1:
+        raise SystemExit(f"expected one Rust extension wheel in {wheel_dir}, found {len(wheels)}")
+    _run_step(
+        "rust extension install",
+        _python_module_cmd(runner, "pip", "install", "--force-reinstall", "--no-deps", str(wheels[0])),
+    )
+
+
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--runner", choices=("auto", "uv", "python"), default="auto")
@@ -271,17 +297,7 @@ def main(argv: list[str] | None = None) -> int:
             ],
         )
         if not args.skip_rust_extension:
-            _run_step(
-                "rust extension build",
-                _python_module_cmd(
-                    runner,
-                    "maturin",
-                    "develop",
-                    "--manifest-path",
-                    str(RUST_MANIFEST),
-                    "--release",
-                ),
-            )
+            _install_rust_extension_wheel(runner)
             _run_step(
                 "rust extension smoke",
                 _python_cmd(runner, "pytest", "tests/test_rust_arrow_extension_smoke.py", "-q"),
