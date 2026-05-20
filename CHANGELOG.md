@@ -19,6 +19,8 @@
   SVG relationship metadata, and HTML markers.
 - Added Rust crate unit tests for parser backend selection, JSONL parsing,
   number validation, and identifier namespace mapping.
+- Added Rust Python extension smoke coverage for raw JSONL parquet output and
+  explicit `simd-json` feature gating.
 - Added a source-checkout `scripts/release_check.py` runner for the local
   release validation gate.
 
@@ -28,6 +30,8 @@
   added an explicit `test` optional dependency group.
 - Split the Rust PyO3 extension feature so default extension builds still work
   while crate unit tests can run without `extension-module` linking.
+- Extended CI and the local release check to validate the Rust `simd-json`
+  feature and installed extension path.
 - Reworked column canonicalization and truncation to preserve collision hints
   such as `__dot`, `__raw`, and `__dup2` instead of opaque numeric suffixes.
 - Routed tabular load, row load, TSV load, description-profile, and JSON

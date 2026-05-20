@@ -30,6 +30,7 @@ PACKAGE_STAGING_DIRS = (
 EXPECTED_SDIST_PATHS = {
     "tests/test_profile_artifact_contracts.py",
     "tests/test_review_schema_artifact_contracts.py",
+    "tests/test_rust_arrow_extension_smoke.py",
     "tests/fixtures/profile_contract/sample.csv",
     "tests/fixtures/profile_contract/expected_description_desc_v2.csv",
     "tests/fixtures/profile_contract/expected_description_profile_v2.json",
@@ -93,6 +94,12 @@ def _python_cmd(runner: str, *args: str) -> list[str]:
     if runner == "uv":
         return ["uv", "run", "--all-extras", *args]
     return [sys.executable, *args]
+
+
+def _python_module_cmd(runner: str, module: str, *args: str) -> list[str]:
+    if runner == "uv":
+        return ["uv", "run", "--all-extras", "python", "-m", module, *args]
+    return [sys.executable, "-m", module, *args]
 
 
 def _package_cmd(runner: str) -> list[str]:
@@ -216,6 +223,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--require-clean", action="store_true", help="Fail if git status is not clean before checks")
     parser.add_argument("--skip-python", action="store_true")
     parser.add_argument("--skip-rust", action="store_true")
+    parser.add_argument("--skip-rust-extension", action="store_true")
     parser.add_argument("--skip-docs", action="store_true")
     parser.add_argument("--skip-package", action="store_true")
     parser.add_argument("--skip-wheel-smoke", action="store_true")
@@ -246,6 +254,38 @@ def main(argv: list[str] | None = None) -> int:
             "rust tests",
             ["cargo", "test", "--manifest-path", str(RUST_MANIFEST), "--no-default-features"],
         )
+        _run_step(
+            "rust simd-json check",
+            ["cargo", "check", "--manifest-path", str(RUST_MANIFEST), "--features", "simd-json"],
+        )
+        _run_step(
+            "rust simd-json tests",
+            [
+                "cargo",
+                "test",
+                "--manifest-path",
+                str(RUST_MANIFEST),
+                "--no-default-features",
+                "--features",
+                "simd-json",
+            ],
+        )
+        if not args.skip_rust_extension:
+            _run_step(
+                "rust extension build",
+                _python_module_cmd(
+                    runner,
+                    "maturin",
+                    "develop",
+                    "--manifest-path",
+                    str(RUST_MANIFEST),
+                    "--release",
+                ),
+            )
+            _run_step(
+                "rust extension smoke",
+                _python_cmd(runner, "pytest", "tests/test_rust_arrow_extension_smoke.py", "-q"),
+            )
 
     if not args.skip_docs:
         _run_step("docs", _python_cmd(runner, "mkdocs", "build", "--strict"))

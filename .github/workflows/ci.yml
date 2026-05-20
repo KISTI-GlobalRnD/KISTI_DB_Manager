@@ -72,6 +72,42 @@ jobs:
       - name: Run crate tests
         run: cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features
 
+      - name: Check crate with simd-json
+        run: cargo check --manifest-path crates/kisti_json_rs/Cargo.toml --features simd-json
+
+      - name: Run crate tests with simd-json
+        run: cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features --features simd-json
+
+  rust-extension:
+    name: rust-extension
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --profile minimal
+          rustup default stable
+
+      - name: Install package, Rust build, and test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[json,rust,test]"
+
+      - name: Build Python Rust extension
+        run: python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+
+      - name: Run Rust extension smoke
+        run: pytest tests/test_rust_arrow_extension_smoke.py -q
+
   package:
     name: package
     runs-on: ubuntu-latest

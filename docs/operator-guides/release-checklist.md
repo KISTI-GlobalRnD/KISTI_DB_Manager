@@ -9,7 +9,8 @@ That workflow blocks on:
 
 - Python 3.10, 3.11, and 3.12 unit tests
 - `mkdocs build --strict`
-- Rust `fmt`, `check`, and `test`
+- Rust `fmt`, default `check`/`test`, and `simd-json` feature checks
+- Rust extension build plus raw JSONL parquet smoke coverage
 - wheel/sdist build plus a built-wheel CLI smoke test
 
 The CI workflow also includes an optional `workflow_dispatch` input,
@@ -106,6 +107,10 @@ When Rust code or Rust backend policy changes:
 cargo fmt --manifest-path crates/kisti_json_rs/Cargo.toml --check
 cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
 cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features
+cargo check --manifest-path crates/kisti_json_rs/Cargo.toml --features simd-json
+cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features --features simd-json
+python -m maturin develop --manifest-path crates/kisti_json_rs/Cargo.toml --release
+python -m pytest tests/test_rust_arrow_extension_smoke.py -q
 ```
 
 Run the DB smoke test only against a disposable or development MariaDB target:
