@@ -70,6 +70,7 @@ more specific, but they are not part of the stable installed command contract.
 
 Examples:
 
+- local maintainer release validation such as `scripts/release_check.py`
 - one-off OpenAlex serving rebuild orchestration such as
   `scripts/oa_rebuild_0330_serving_db.py`
 - OpenAlex 20260330 serving table assembly helpers such as

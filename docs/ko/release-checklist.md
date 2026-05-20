@@ -4,6 +4,14 @@
 PR과 `main` push는 `.github/workflows/ci.yml`에서 Python 3.10/3.11/3.12 테스트, MkDocs 빌드, Rust 검증, 패키지 빌드를 자동으로 확인합니다.
 같은 workflow를 수동 실행할 때 `db-smoke` 입력을 켜면 임시 MariaDB 서비스에서 Rust DB load smoke도 실행합니다.
 
+소스 체크아웃에서 같은 로컬 게이트를 한 번에 실행하려면 다음 명령을 사용합니다.
+
+```bash
+python scripts/release_check.py
+```
+
+릴리스 태그 직전에는 `--require-clean`을 추가해 미커밋 변경이 남아 있으면 실패하도록 할 수 있습니다.
+
 ## 버전과 변경 기록
 
 릴리스 태그 전에는 다음 항목을 먼저 맞춥니다.
@@ -24,13 +32,13 @@ mkdocs build --strict
 코드 변경이 있으면 Python 테스트를 실행합니다.
 
 ```bash
-python -m unittest discover -s tests -q
+python -m pytest -q
 ```
 
 산출물 계약이 바뀌었다면 관련 테스트를 명시적으로 확인합니다.
 
 ```bash
-python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py -q
+python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py tests/test_profile_artifact_contracts.py -q
 ```
 
 확인할 항목:
@@ -54,7 +62,7 @@ Rust backend 변경이 있으면 Rust 검증도 실행합니다.
 ```bash
 cargo fmt --manifest-path crates/kisti_json_rs/Cargo.toml --check
 cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
-cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
+cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features
 ```
 
 Rust DB load나 DB 의존성이 바뀌었다면 disposable MariaDB 대상에서 smoke도 확인합니다.

@@ -17,6 +17,15 @@ The CI workflow also includes an optional `workflow_dispatch` input,
 cutting a release when Rust DB load behavior, DB dependencies, or OpenAlex
 parquet load paths changed.
 
+For the same local gate in a source checkout, run:
+
+```bash
+python scripts/release_check.py
+```
+
+Use `--require-clean` before tagging if you want the command to fail on any
+uncommitted worktree changes.
+
 ## Version and Changelog
 
 Before a release tag:
@@ -57,7 +66,7 @@ Run these checks whenever Description Profile, Dataset Profile, NameMap,
 review artifacts, parquet preflight, or report JSON changes:
 
 ```bash
-python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py -q
+python -m pytest tests/test_naming.py tests/test_namemap.py tests/test_cli_tabular.py tests/test_dataset_profile.py tests/test_profile_artifact_contracts.py -q
 ```
 
 Confirm the generated artifacts remain inspectable:
@@ -73,7 +82,7 @@ Confirm the generated artifacts remain inspectable:
 For code changes, run the unit suite:
 
 ```bash
-python -m unittest discover -s tests -q
+python -m pytest -q
 ```
 
 ## Package Build
@@ -95,7 +104,7 @@ When Rust code or Rust backend policy changes:
 ```bash
 cargo fmt --manifest-path crates/kisti_json_rs/Cargo.toml --check
 cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
-cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
+cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features
 ```
 
 Run the DB smoke test only against a disposable or development MariaDB target:

@@ -17,6 +17,8 @@
   Profile v1 outputs.
 - Added Rust crate unit tests for parser backend selection, JSONL parsing,
   number validation, and identifier namespace mapping.
+- Added a source-checkout `scripts/release_check.py` runner for the local
+  release validation gate.
 
 ### Changed
 
