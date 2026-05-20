@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.10.1 - 2026-05-20
+
 ### Added
 
 - Added Dataset Profile overlays to `review schema-viewer` through
