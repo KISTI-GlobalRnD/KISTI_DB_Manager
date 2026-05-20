@@ -41,10 +41,10 @@ jobs:
       - name: Install package and test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -e ".[tabular,json,db,viz,review,docs,rust]"
+          pip install -e ".[tabular,json,db,viz,review,docs,rust,test]"
 
       - name: Run unit tests
-        run: python -m unittest discover -s tests -q
+        run: pytest -q
 
       - name: Build documentation
         run: mkdocs build --strict
@@ -70,7 +70,7 @@ jobs:
         run: cargo check --manifest-path crates/kisti_json_rs/Cargo.toml
 
       - name: Run crate tests
-        run: cargo test --manifest-path crates/kisti_json_rs/Cargo.toml
+        run: cargo test --manifest-path crates/kisti_json_rs/Cargo.toml --no-default-features
 
   package:
     name: package

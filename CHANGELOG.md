@@ -13,9 +13,17 @@
   collisions can be traced across schema drift and reload paths.
 - Added migration notes for Description Profile v2, Dataset Profile v1, and
   NameMap alias compatibility.
+- Added golden artifact regression tests for Description Profile v2 and Dataset
+  Profile v1 outputs.
+- Added Rust crate unit tests for parser backend selection, JSONL parsing,
+  number validation, and identifier namespace mapping.
 
 ### Changed
 
+- Switched CI's Python test gate from `unittest discover` to `pytest -q` and
+  added an explicit `test` optional dependency group.
+- Split the Rust PyO3 extension feature so default extension builds still work
+  while crate unit tests can run without `extension-module` linking.
 - Reworked column canonicalization and truncation to preserve collision hints
   such as `__dot`, `__raw`, and `__dup2` instead of opaque numeric suffixes.
 - Routed tabular load, row load, TSV load, description-profile, and JSON

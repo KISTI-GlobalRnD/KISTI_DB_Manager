@@ -4365,3 +4365,119 @@ fn kisti_json_rs(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(load_parquet_files_to_mysql, m)?)?;
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn parser_backend_accepts_stable_aliases() {
+        assert_eq!(
+            ParserBackend::parse("serde-json").unwrap(),
+            ParserBackend::SerdeJson
+        );
+        assert_eq!(
+            ParserBackend::parse("serde_json").unwrap(),
+            ParserBackend::SerdeJson
+        );
+        assert!(ParserBackend::parse("unknown").is_err());
+    }
+
+    #[test]
+    fn parse_json_bytes_value_skips_blank_lines_and_reports_invalid_json() {
+        let mut fallbacks = 0usize;
+        assert_eq!(
+            parse_json_bytes_value(b"  \n\t", ParserBackend::SerdeJson, &mut fallbacks).unwrap(),
+            None
+        );
+
+        let parsed = parse_json_bytes_value(
+            br#" {"id": 1, "name": "sample"} "#,
+            ParserBackend::SerdeJson,
+            &mut fallbacks,
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(parsed["id"], json!(1));
+        assert_eq!(parsed["name"], json!("sample"));
+
+        let error =
+            parse_json_bytes_value(b"{", ParserBackend::SerdeJson, &mut fallbacks).unwrap_err();
+        assert!(error.contains("failed to parse JSONL line"));
+    }
+
+    #[test]
+    fn validate_json_value_for_flatten_rejects_unsupported_integer_ranges_with_path() {
+        let value: Value =
+            serde_json::from_str(r#"{"outer": [{"id": 92233720368547758079223372036854775807}]}"#)
+                .unwrap();
+
+        let error = validate_json_value_for_flatten(&value, "$").unwrap_err();
+        assert!(error.contains("$.outer[0].id"));
+        assert!(error.contains("integer outside supported i64/u64 range"));
+    }
+
+    #[test]
+    fn openalex_column_name_preserves_semantic_entity_hints() {
+        assert_eq!(
+            openalex_column_name("authorships__author__id", "id", "__"),
+            (
+                Some("authorships__author_openalex_id".to_string()),
+                Some("author".to_string())
+            )
+        );
+        assert_eq!(
+            openalex_column_name("referenced_works", "id", "__"),
+            (
+                Some("referenced_work_openalex_id".to_string()),
+                Some("referenced_work".to_string())
+            )
+        );
+        assert_eq!(
+            openalex_column_name("id", "id", "__"),
+            (Some("id".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn column_namespace_mapping_handles_non_openalex_ids() {
+        assert_eq!(
+            column_namespace_mapping("doi", "id", "__"),
+            (
+                Some("doi_id".to_string()),
+                Some("doi"),
+                Some("doi".to_string())
+            )
+        );
+        assert_eq!(
+            column_namespace_mapping("author__orcid", "id", "__"),
+            (
+                Some("author__orcid_id".to_string()),
+                Some("orcid"),
+                Some("orcid".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn namespace_for_value_extracts_url_prefix_and_tail() {
+        assert_eq!(
+            namespace_for_value(&json!("https://openalex.org/W123")),
+            (
+                Some("openalex"),
+                Some("https://openalex.org/"),
+                Some("W123".to_string())
+            )
+        );
+        assert_eq!(
+            namespace_for_value(&json!("https://doi.org/10.1234/example")),
+            (
+                Some("doi"),
+                Some("https://doi.org/"),
+                Some("10.1234/example".to_string())
+            )
+        );
+        assert_eq!(namespace_for_value(&json!("not a url")), (None, None, None));
+    }
+}

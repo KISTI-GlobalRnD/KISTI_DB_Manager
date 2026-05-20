@@ -1,0 +1,68 @@
+{
+  "backend": "python",
+  "dataset": {
+    "base_table": "works",
+    "base_table_sql": "works",
+    "key_sep": "__"
+  },
+  "generated_at": "fixed",
+  "relationship_candidates": [
+    {
+      "child_column_sql": "id",
+      "child_table_sql": "works__authorships",
+      "confidence": 0.8,
+      "evidence": {
+        "child_null_ratio": 0.0,
+        "child_table_original": "works__authorships",
+        "parent_table_original": "works",
+        "parent_unique_ratio": 1.0,
+        "shared_column_name": true,
+        "source": "table_name_path"
+      },
+      "parent_column_sql": "id",
+      "parent_table_sql": "works",
+      "relationship_type": "naming_parent_child",
+      "status": "candidate",
+      "warnings": []
+    }
+  ],
+  "schema_version": "1.0",
+  "source": {
+    "profile_count": 2,
+    "profile_paths": [
+      "<profile:works__authorships_profile.json>",
+      "<profile:works_profile.json>"
+    ]
+  },
+  "tables": [
+    {
+      "column_count": 2,
+      "index_recommended_columns": [
+        "id"
+      ],
+      "key_candidates": [
+        "id"
+      ],
+      "row_count": 4,
+      "source_file": "/input/works.csv",
+      "table_original": "works",
+      "table_sql": "works",
+      "warnings": []
+    },
+    {
+      "column_count": 2,
+      "index_recommended_columns": [
+        "id"
+      ],
+      "key_candidates": [
+        "id"
+      ],
+      "row_count": 4,
+      "source_file": "/input/works__authorships.csv",
+      "table_original": "works__authorships",
+      "table_sql": "works__authorships",
+      "warnings": []
+    }
+  ],
+  "warnings": []
+}

@@ -42,6 +42,9 @@ docs = [
 rust = [
   "maturin>=1.7",
 ]
+test = [
+  "pytest>=8.0",
+]
 
 [project.scripts]
 kisti-db-manager = "KISTI_DB_Manager.cli:main"

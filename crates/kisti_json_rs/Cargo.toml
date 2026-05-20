@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [features]
-default = []
+default = ["extension-module"]
+extension-module = ["pyo3/extension-module"]
 simd-json = ["dep:simd-json"]
 
 [lib]
@@ -15,7 +16,7 @@ crate-type = ["cdylib"]
 arrow = "54"
 mysql = { version = "25", default-features = false, features = ["minimal-rust"] }
 parquet = { version = "54", features = ["arrow"] }
-pyo3 = { version = "0.22", features = ["abi3-py310", "extension-module"] }
+pyo3 = { version = "0.22", features = ["abi3-py310"] }
 rayon = "1.10"
 serde_json = { version = "1.0", features = ["arbitrary_precision"] }
 simd-json = { version = "0.17", optional = true }
