@@ -58,7 +58,12 @@ and detailed evidence for review and future RDB visualization.
 `tabular profile-dataset` reads multiple per-table `*_profile.json` files and
 writes `dataset_profile.json`. The v1 output is DB-free and conservative: it
 summarizes tables and emits naming-path relationship candidates as review hints,
-not confirmed foreign keys.
+not confirmed foreign keys. `review schema-viewer --dataset-profile
+dataset_profile.json` overlays those candidates on matching relationship cards;
+if omitted, the viewer auto-detects `<PATH>/dataset_profile.json` when present.
+The Schema Viewer overview summarizes table roles, candidate-backed
+relationships, unmatched candidates, relation warnings, and disconnected
+non-base tables.
 
 ## JSON
 

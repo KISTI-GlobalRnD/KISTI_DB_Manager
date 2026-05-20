@@ -124,6 +124,7 @@ def _cmd_review_schema_viewer(args: argparse.Namespace) -> int:
         sample_rows=int(args.sample_rows) if args.sample_rows is not None else None,
         sample_max_tables=int(args.sample_max_tables),
         description_profile_path=args.description_profile,
+        dataset_profile_path=args.dataset_profile,
     )
 
     print(f"out_dir: {res['out_dir']}")
@@ -227,6 +228,10 @@ def register_review_parser(sub) -> None:
     p_schema.add_argument(
         "--description-profile",
         help="Optional v2 tabular profile JSON; defaults to <PATH>/<table_name>_profile.json when present",
+    )
+    p_schema.add_argument(
+        "--dataset-profile",
+        help="Optional dataset_profile.json overlay; defaults to <PATH>/dataset_profile.json when present",
     )
     p_schema.add_argument("--out", help="Output directory (default: <config>_schema_viewer)")
     p_schema.add_argument(

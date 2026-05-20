@@ -26,6 +26,39 @@ from .review import (
 )
 
 
+def _int_or_none(value: Any) -> int | None:
+    try:
+        if value is None or value == "":
+            return None
+        return int(value)
+    except Exception:
+        return None
+
+
+def _collect_table_infos_from_dataset_profile(dataset_profile: Mapping[str, Any]) -> list[TableInfo]:
+    tables = dataset_profile.get("tables") or []
+    if not isinstance(tables, list):
+        return []
+    out: list[TableInfo] = []
+    seen: set[str] = set()
+    for table in tables:
+        if not isinstance(table, Mapping):
+            continue
+        table_sql = str(table.get("table_sql") or "").strip()
+        if not table_sql or table_sql in seen:
+            continue
+        seen.add(table_sql)
+        table_original = str(table.get("table_original") or "").strip() or None
+        out.append(
+            TableInfo(
+                name_sql=table_sql,
+                name_original=table_original,
+                row_count=_int_or_none(table.get("row_count")),
+            )
+        )
+    return sorted(out, key=lambda item: item.name_sql)
+
+
 def generate_schema_viewer(
     *,
     config_path: str,
@@ -38,6 +71,7 @@ def generate_schema_viewer(
     sample_rows: int | None = None,
     sample_max_tables: int = 20,
     description_profile_path: str | None = None,
+    dataset_profile_path: str | None = None,
 ) -> dict[str, Any]:
     cfg = _load_json(config_path)
     data_config = coerce_data_config(cfg.get("data_config") or cfg.get("data") or {})
@@ -59,12 +93,24 @@ def generate_schema_viewer(
         profile_path = Path(data_config["PATH"]) / f"{data_config['table_name']}_profile.json"
         if profile_path.exists():
             description_profile = _load_json(str(profile_path))
+    dataset_profile = None
+    resolved_dataset_profile_path = ""
+    if dataset_profile_path:
+        resolved_dataset_profile_path = str(Path(dataset_profile_path).expanduser())
+        dataset_profile = _load_json(resolved_dataset_profile_path)
+    else:
+        profile_path = Path(data_config["PATH"]) / "dataset_profile.json"
+        if profile_path.exists():
+            resolved_dataset_profile_path = str(profile_path)
+            dataset_profile = _load_json(str(profile_path))
 
     table_infos = (
         _collect_table_infos_from_report(base_table=base_table, report=report)
         if isinstance(report, Mapping)
         else []
     )
+    if not table_infos and isinstance(dataset_profile, Mapping):
+        table_infos = _collect_table_infos_from_dataset_profile(dataset_profile)
     if not table_infos:
         table_infos = [TableInfo(name_sql=base_table_sql, name_original=base_table)]
 
@@ -129,6 +175,8 @@ def generate_schema_viewer(
         edges=edges,
         generated_at=_utc_now_iso(),
         description_profile=description_profile if isinstance(description_profile, Mapping) else None,
+        dataset_profile=dataset_profile if isinstance(dataset_profile, Mapping) else None,
+        dataset_profile_path=resolved_dataset_profile_path,
     )
 
     out_path = Path(out_dir)

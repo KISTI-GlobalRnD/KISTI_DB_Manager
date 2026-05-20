@@ -52,13 +52,21 @@ def infer_table_role(depth: int, *, is_base: bool) -> str:
     return "nested"
 
 
-def relationship_join_sql(*, parent_sql: str, child_sql: str) -> str:
+def relationship_join_sql(
+    *,
+    parent_sql: str,
+    child_sql: str,
+    parent_column_sql: str = "id",
+    child_column_sql: str = "id",
+) -> str:
     parent_q = quote_mysql_identifier(parent_sql)
     child_q = quote_mysql_identifier(child_sql)
+    parent_col_q = quote_mysql_identifier(parent_column_sql or "id")
+    child_col_q = quote_mysql_identifier(child_column_sql or "id")
     return (
-        "SELECT p.`id` AS parent_id, c.*\n"
+        f"SELECT p.`{parent_col_q}` AS parent_id, c.*\n"
         f"FROM `{parent_q}` p\n"
-        f"LEFT JOIN `{child_q}` c ON p.`id` = c.`id`\n"
+        f"LEFT JOIN `{child_q}` c ON p.`{parent_col_q}` = c.`{child_col_q}`\n"
         "LIMIT 5;"
     )
 
@@ -74,4 +82,3 @@ def fallback_join_sql(*, base_table_sql: str, table_sql: str) -> str:
         f"LEFT JOIN `{table_q}` s ON b.`id` = s.`id`\n"
         "LIMIT 5;"
     )
-

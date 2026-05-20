@@ -62,6 +62,12 @@ operator decision. v1 uses profile metadata and table naming paths only; bounded
 value-overlap evidence is intentionally left for a later opt-in phase. The v1
 design contract is documented in [Dataset Profile v1](../design/dataset-profile-v1.md).
 
+`review schema-viewer` can overlay this artifact through `--dataset-profile` or
+auto-detect `<PATH>/dataset_profile.json`. The viewer attaches candidate
+confidence, status, warnings, and evidence to matching relationship cards. Its
+overview panels also summarize table roles, candidate-backed relationships,
+unmatched candidates, relation warnings, and disconnected non-base tables.
+
 ## Parquet Artifacts
 
 Parquet-first runs produce table directories under a run-specific parquet root.

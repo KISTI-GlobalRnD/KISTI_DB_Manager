@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+### Added
+
+- Added Dataset Profile overlays to `review schema-viewer` through
+  `--dataset-profile` or automatic `<PATH>/dataset_profile.json` detection,
+  with candidate evidence attached to existing relationship cards.
+- Added Schema Viewer relational overview panels for table roles,
+  relationship evidence, coverage gaps, relationship warnings, and
+  disconnected-table filtering.
+
 ## 0.10.0 - 2026-05-20
 
 ### Added

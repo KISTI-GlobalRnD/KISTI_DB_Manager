@@ -135,7 +135,10 @@ Initial viewer behavior:
 - label candidate edges clearly as candidates, not constraints
 
 The table inspector should show candidate evidence and warnings next to the
-relationship SQL.
+relationship SQL. The top-level overview should also distinguish structural
+naming edges from Dataset Profile evidence, surface unmatched candidates, and
+make disconnected non-base tables visible without forcing operators to inspect
+every table card.
 
 ## CLI Shape
 
@@ -168,12 +171,18 @@ Phase 1: artifact builder (implemented)
 - write deterministic `dataset_profile.json`
 - add focused unit tests
 
-Phase 2: viewer overlay (next)
+Phase 2: viewer overlay (initial implemented)
 
 - add `--dataset-profile`
 - merge candidate evidence into schema viewer payload
 - render relationship candidate badges and warnings
+- summarize table roles, candidate-backed relationships, coverage gaps, and
+  disconnected tables in the viewer overview
 - add no-DB viewer tests
+
+The initial overlay attaches Dataset Profile candidate evidence to existing
+structural relationship cards. It does not yet draw additional candidate-only
+edges.
 
 Phase 3: bounded optional evidence
 

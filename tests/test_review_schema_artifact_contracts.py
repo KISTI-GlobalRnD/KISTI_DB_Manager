@@ -117,6 +117,73 @@ def _html_markers(html: str) -> list[str]:
 class TestReviewSchemaArtifactContracts(unittest.TestCase):
     maxDiff = None
 
+    def _write_config(self, root: Path) -> Path:
+        config_path = root / "config.json"
+        config_path.write_text(
+            json.dumps(
+                {
+                    "data_config": {
+                        "PATH": str(root),
+                        "file_name": "works.csv",
+                        "file_type": "csv",
+                        "table_name": "works",
+                        "KEY_SEP": "__",
+                    },
+                    "db_config": {
+                        "host": "h",
+                        "user": "u",
+                        "password": "secret",
+                        "database": "openalex_contract",
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        return config_path
+
+    def _write_dataset_profile(self, root: Path) -> Path:
+        path = root / "dataset_profile.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "schema_version": "1.0",
+                    "backend": "python",
+                    "source": {"profile_count": 2, "profile_paths": []},
+                    "dataset": {"base_table": "works", "base_table_sql": "works", "key_sep": "__"},
+                    "tables": [
+                        {"table_sql": "works", "table_original": "works", "row_count": 3},
+                        {
+                            "table_sql": "works__authorships",
+                            "table_original": "works__authorships",
+                            "row_count": 5,
+                        },
+                    ],
+                    "relationship_candidates": [
+                        {
+                            "parent_table_sql": "works",
+                            "child_table_sql": "works__authorships",
+                            "parent_column_sql": "id",
+                            "child_column_sql": "id",
+                            "relationship_type": "naming_parent_child",
+                            "confidence": 0.8,
+                            "evidence": {
+                                "source": "table_name_path",
+                                "parent_unique_ratio": 1.0,
+                                "child_null_ratio": 0.0,
+                                "shared_column_name": True,
+                            },
+                            "warnings": [],
+                            "status": "candidate",
+                        }
+                    ],
+                    "warnings": [],
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        return path
+
     def test_schema_viewer_artifacts_match_golden_contract(self):
         with tempfile.TemporaryDirectory() as td:
             out_dir = Path(td) / "out"
@@ -137,6 +204,73 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
             }
 
         self.assertEqual(contract, _load_json("expected_schema_artifact_contract.json"))
+
+    def test_schema_viewer_auto_detects_dataset_profile_overlay(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config_path = self._write_config(root)
+            out_dir = root / "out"
+            self._write_dataset_profile(root)
+
+            generate_schema_viewer(
+                config_path=str(config_path),
+                report_path=str(FIXTURE_DIR / "report.json"),
+                out_dir=str(out_dir),
+                db_enabled=False,
+            )
+
+            payload = json.loads((out_dir / "schema_viewer.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["meta"]["dataset_profile"]["relationship_candidate_count"], 1)
+            self.assertEqual(payload["summary"]["relationship_candidate_count"], 1)
+            self.assertEqual(payload["summary"]["relationship_candidates_on_edges"], 1)
+            edge = next(
+                item
+                for item in payload["edges"]
+                if item["parent_sql"] == "works" and item["child_sql"] == "works__authorships"
+            )
+            self.assertEqual(edge["relationship_source"], "dataset_profile")
+            self.assertEqual(edge["relationship_status"], "candidate")
+            self.assertEqual(edge["relationship_type"], "naming_parent_child")
+            self.assertEqual(edge["relationship_candidate_count"], 1)
+            self.assertEqual(edge["relationship_warning_count"], 0)
+            self.assertEqual(edge["relationship_candidates"][0]["evidence"]["source"], "table_name_path")
+            works = next(table for table in payload["tables"] if table["name_sql"] == "works")
+            authorships = next(
+                table for table in payload["tables"] if table["name_sql"] == "works__authorships"
+            )
+            self.assertEqual(works["relationship_candidate_count"], 1)
+            self.assertEqual(authorships["relationship_candidate_count"], 1)
+            self.assertFalse(works["is_disconnected"])
+            self.assertFalse(authorships["is_disconnected"])
+            html = (out_dir / "schema_viewer.html").read_text(encoding="utf-8")
+            self.assertIn("Relation candidates", html)
+            self.assertIn("Relationship Evidence", html)
+            self.assertIn("Coverage Gaps", html)
+            self.assertIn("Candidate-backed", html)
+            self.assertIn("dataset_profile", html)
+            self.assertIn("dataset profile overlay", html)
+            self.assertIn("table_name_path", html)
+
+    def test_schema_viewer_uses_dataset_profile_as_no_db_table_source(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config_path = self._write_config(root)
+            self._write_dataset_profile(root)
+            out_dir = root / "out"
+
+            generate_schema_viewer(
+                config_path=str(config_path),
+                out_dir=str(out_dir),
+                db_enabled=False,
+            )
+
+            payload = json.loads((out_dir / "schema_viewer.json").read_text(encoding="utf-8"))
+            self.assertEqual(payload["summary"]["table_count"], 2)
+            self.assertEqual(payload["summary"]["edge_count"], 1)
+            self.assertEqual(payload["summary"]["relationship_candidates_on_edges"], 1)
+            self.assertEqual(payload["edges"][0]["relationship_source"], "dataset_profile")
+            self.assertEqual(payload["edges"][0]["relationship_status"], "candidate")
+            self.assertEqual([table["name_sql"] for table in payload["tables"]], ["works", "works__authorships"])
 
 
 if __name__ == "__main__":

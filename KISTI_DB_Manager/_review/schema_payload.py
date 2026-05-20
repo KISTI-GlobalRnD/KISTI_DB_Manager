@@ -207,6 +207,92 @@ def _description_profile_summary(profile: Mapping[str, Any] | None) -> dict[str,
     }
 
 
+def _compact_relationship_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    keys = [
+        "parent_table_sql",
+        "child_table_sql",
+        "parent_column_sql",
+        "child_column_sql",
+        "relationship_type",
+        "confidence",
+        "status",
+        "warnings",
+        "evidence",
+    ]
+    return {key: candidate.get(key) for key in keys if key in candidate}
+
+
+def _dataset_relationship_candidates(profile: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(profile, Mapping):
+        return []
+    raw = profile.get("relationship_candidates") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for candidate in raw:
+        if isinstance(candidate, Mapping):
+            out.append(_compact_relationship_candidate(candidate))
+    return out
+
+
+def _dataset_candidate_key(candidate: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(candidate.get("parent_table_sql") or ""),
+        str(candidate.get("child_table_sql") or ""),
+    )
+
+
+def _candidate_confidence(candidate: Mapping[str, Any]) -> float:
+    try:
+        return float(candidate.get("confidence") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _candidate_warning_count(candidate: Mapping[str, Any]) -> int:
+    warnings = candidate.get("warnings")
+    if isinstance(warnings, list):
+        return len([item for item in warnings if str(item)])
+    if warnings:
+        return 1
+    return 0
+
+
+def _candidate_column_sql(candidate: Mapping[str, Any], key: str) -> str:
+    value = str(candidate.get(key) or "").strip()
+    return value or "id"
+
+
+def _dataset_profile_summary(
+    profile: Mapping[str, Any] | None,
+    *,
+    source_file: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(profile, Mapping):
+        return None
+    source = profile.get("source") if isinstance(profile.get("source"), Mapping) else {}
+    dataset = profile.get("dataset") if isinstance(profile.get("dataset"), Mapping) else {}
+    tables = profile.get("tables") if isinstance(profile.get("tables"), list) else []
+    candidates = _dataset_relationship_candidates(profile)
+    status_counts: dict[str, int] = {}
+    for candidate in candidates:
+        status = str(candidate.get("status") or "unknown")
+        status_counts[status] = int(status_counts.get(status, 0)) + 1
+    return {
+        "schema_version": profile.get("schema_version"),
+        "backend": profile.get("backend"),
+        "source_file": source_file or "",
+        "source_profile_count": source.get("profile_count"),
+        "base_table": dataset.get("base_table"),
+        "base_table_sql": dataset.get("base_table_sql"),
+        "key_sep": dataset.get("key_sep"),
+        "table_count": len(tables),
+        "relationship_candidate_count": len(candidates),
+        "relationship_candidate_status_counts": status_counts,
+        "warnings": profile.get("warnings") or [],
+    }
+
+
 def prepare_schema_table_infos(
     *,
     report: Mapping[str, Any] | None,
@@ -391,6 +477,8 @@ def build_schema_viewer_payload(
     edges: list[tuple[str, str, str]],
     generated_at: str,
     description_profile: Mapping[str, Any] | None = None,
+    dataset_profile: Mapping[str, Any] | None = None,
+    dataset_profile_path: str | None = None,
 ) -> dict[str, Any]:
     ddls_by_sql = collect_schema_ddls_by_sql(report=report, table_infos=table_infos)
     issue_counts_by_sql = _collect_issue_counts_by_sql(issues=issues, table_infos=table_infos)
@@ -404,6 +492,14 @@ def build_schema_viewer_payload(
     edges_payload: list[dict[str, Any]] = []
     parent_edges_by_child_sql: dict[str, list[dict[str, Any]]] = {}
     child_edges_by_parent_sql: dict[str, list[dict[str, Any]]] = {}
+    dataset_candidates = _dataset_relationship_candidates(dataset_profile)
+    dataset_candidates_by_edge: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for candidate in dataset_candidates:
+        key = _dataset_candidate_key(candidate)
+        if all(key):
+            dataset_candidates_by_edge.setdefault(key, []).append(candidate)
+    matched_dataset_candidate_count = 0
+    matched_dataset_candidate_keys: set[tuple[str, str]] = set()
     for parent, child, label in edges:
         parent_info = info_by_graph_name.get(parent)
         child_info = info_by_graph_name.get(child)
@@ -426,7 +522,44 @@ def build_schema_viewer_payload(
             "parent_display": table_display_label(base_table_graph, key_sep, parent),
             "child_display": table_display_label(base_table_graph, key_sep, child),
             "join_sql": relationship_join_sql(parent_sql=parent_sql, child_sql=child_sql),
+            "relationship_source": "structural_naming",
+            "relationship_status": "structural",
+            "relationship_type": "structural_naming",
+            "relationship_candidate_count": 0,
+            "relationship_warning_count": 0,
         }
+        relationship_candidates = dataset_candidates_by_edge.get((parent_sql, child_sql)) or []
+        if relationship_candidates:
+            primary_candidate = max(relationship_candidates, key=_candidate_confidence)
+            statuses = sorted({str(candidate.get("status") or "unknown") for candidate in relationship_candidates})
+            types = sorted(
+                {
+                    str(candidate.get("relationship_type") or "relationship")
+                    for candidate in relationship_candidates
+                }
+            )
+            item["relationship_candidates"] = relationship_candidates
+            item["relationship_candidate_count"] = len(relationship_candidates)
+            item["relationship_confidence_max"] = max(
+                _candidate_confidence(candidate)
+                for candidate in relationship_candidates
+            )
+            item["relationship_statuses"] = statuses
+            item["relationship_source"] = "dataset_profile"
+            item["relationship_status"] = statuses[0] if len(statuses) == 1 else "mixed"
+            item["relationship_type"] = types[0] if len(types) == 1 else "mixed"
+            item["relationship_warning_count"] = sum(
+                _candidate_warning_count(candidate)
+                for candidate in relationship_candidates
+            )
+            item["join_sql"] = relationship_join_sql(
+                parent_sql=parent_sql,
+                child_sql=child_sql,
+                parent_column_sql=_candidate_column_sql(primary_candidate, "parent_column_sql"),
+                child_column_sql=_candidate_column_sql(primary_candidate, "child_column_sql"),
+            )
+            matched_dataset_candidate_count += len(relationship_candidates)
+            matched_dataset_candidate_keys.add((parent_sql, child_sql))
         edges_payload.append(item)
         parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
         child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
@@ -438,6 +571,7 @@ def build_schema_viewer_payload(
     profile_table_sql = _description_profile_table_sql(description_profile)
     profile_columns_by_sql = _description_profile_columns_by_sql(description_profile)
     description_profile_summary = _description_profile_summary(description_profile)
+    dataset_profile_summary = _dataset_profile_summary(dataset_profile, source_file=dataset_profile_path)
     for ti in table_infos:
         graph_name = ti.name_original or ti.name_sql
         depth = table_depth(base_table_graph, key_sep, graph_name)
@@ -500,6 +634,15 @@ def build_schema_viewer_payload(
             "parent_edges": parent_edges,
             "child_edges": child_edges,
             "relationship_count": len(parent_edges) + len(child_edges),
+            "relationship_candidate_count": sum(
+                int(edge.get("relationship_candidate_count") or 0)
+                for edge in parent_edges + child_edges
+            ),
+            "relationship_warning_count": sum(
+                int(edge.get("relationship_warning_count") or 0)
+                for edge in parent_edges + child_edges
+            ),
+            "is_disconnected": not parent_edges and not child_edges,
             "issue_error_count": int(issue_counts.get("error") or 0),
             "issue_warning_count": int(issue_counts.get("warning") or 0),
             "quarantine_count": quarantine_count,
@@ -517,6 +660,18 @@ def build_schema_viewer_payload(
                     if isinstance(col.get("description_profile"), Mapping)
                 ),
                 " ".join(str(ix.get("index_name") or "") for ix in idxs),
+                " ".join(
+                    str(candidate.get("relationship_type") or "")
+                    for edge in parent_edges + child_edges
+                    for candidate in edge.get("relationship_candidates", [])
+                    if isinstance(candidate, Mapping)
+                ),
+                " ".join(
+                    str(candidate.get("warnings") or "")
+                    for edge in parent_edges + child_edges
+                    for candidate in edge.get("relationship_candidates", [])
+                    if isinstance(candidate, Mapping)
+                ),
             ]
         ).lower()
         table_payloads.append(payload)
@@ -541,33 +696,60 @@ def build_schema_viewer_payload(
             }
         )
 
-    return {
-        "meta": {
-            "generated_at": generated_at,
-            "config": config_path,
-            "report": report_path or "",
-            "database": db_masked.get("database") if db_masked else db_config.get("database"),
-            "db_enabled": bool(db_enabled),
-            "db_error": db_error,
-            "quarantine": quarantine_path or "",
-            "quarantine_entries": quarantine_total,
-            "quarantine_error": quarantine_error,
-            "base_table": base_table,
-            "base_table_sql": base_table_sql,
-            "key_sep": key_sep,
-            "mode": "schema-viewer",
-            "description_profile": description_profile_summary,
-        },
-        "summary": {
-            "table_count": len(table_payloads),
-            "rows_total": int(totals["rows"]),
-            "columns_total": int(totals["columns"]),
-            "size_bytes_total": int(totals["size_bytes"]),
-            "flagged_table_count": int(issue_tables),
-            "edge_count": len(edges),
-        },
+    meta_payload = {
+        "generated_at": generated_at,
+        "config": config_path,
+        "report": report_path or "",
+        "database": db_masked.get("database") if db_masked else db_config.get("database"),
+        "db_enabled": bool(db_enabled),
+        "db_error": db_error,
+        "quarantine": quarantine_path or "",
+        "quarantine_entries": quarantine_total,
+        "quarantine_error": quarantine_error,
+        "base_table": base_table,
+        "base_table_sql": base_table_sql,
+        "key_sep": key_sep,
+        "mode": "schema-viewer",
+        "description_profile": description_profile_summary,
+    }
+    summary_payload = {
+        "table_count": len(table_payloads),
+        "rows_total": int(totals["rows"]),
+        "columns_total": int(totals["columns"]),
+        "size_bytes_total": int(totals["size_bytes"]),
+        "flagged_table_count": int(issue_tables),
+        "edge_count": len(edges),
+    }
+    dataset_profile_payload = None
+    if dataset_profile_summary is not None:
+        meta_payload["dataset_profile"] = dataset_profile_summary
+        summary_payload.update(
+            {
+                "relationship_candidate_count": len(dataset_candidates),
+                "relationship_candidates_on_edges": matched_dataset_candidate_count,
+                "unmatched_relationship_candidate_count": max(
+                    0,
+                    len(dataset_candidates) - matched_dataset_candidate_count,
+                ),
+            }
+        )
+        dataset_profile_payload = {
+            **dataset_profile_summary,
+            "unmatched_relationship_candidates": [
+                candidate
+                for candidate in dataset_candidates
+                if _dataset_candidate_key(candidate) not in matched_dataset_candidate_keys
+            ],
+        }
+
+    result = {
+        "meta": meta_payload,
+        "summary": summary_payload,
         "tables": table_payloads,
         "groups": groups,
         "edges": edges_payload,
         "description_profile": description_profile_summary,
     }
+    if dataset_profile_payload is not None:
+        result["dataset_profile"] = dataset_profile_payload
+    return result

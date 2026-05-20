@@ -208,6 +208,29 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     .stat-label { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
     .stat-value { margin-top: 10px; font-size: 28px; font-weight: 800; }
     .stat-note { margin-top: 8px; font-size: 12px; color: var(--muted); }
+    .overview-grid {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 14px;
+      margin-top: 14px;
+    }
+    .overview-panel {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: #fff;
+      padding: 16px;
+    }
+    .overview-panel h3 { margin: 0 0 10px; font-size: 15px; }
+    .overview-list { display: grid; gap: 8px; }
+    .overview-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: baseline;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .overview-row strong { color: var(--ink); }
     .diagram-shell { border: 1px solid var(--line); border-radius: 18px; background: #fff; overflow: hidden; }
     .diagram-toolbar {
       display: flex; justify-content: space-between; gap: 10px; align-items: center; flex-wrap: wrap;
@@ -269,6 +292,28 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     }
     .relationship-title code { overflow-wrap: anywhere; }
     .relationship-label { color: var(--muted); font-size: 12px; }
+    .relationship-evidence {
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid var(--line);
+      display: grid;
+      gap: 8px;
+    }
+    .relationship-evidence-title {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+      align-items: center;
+      font-size: 12px;
+      font-weight: 800;
+    }
+    .evidence-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 6px;
+      font-size: 12px;
+      color: var(--muted);
+    }
     .relationship-card pre { margin-top: 8px; }
     details.block {
       margin-top: 14px;
@@ -306,6 +351,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       .layout { grid-template-columns: 1fr; }
       .sidebar { position: static; }
       .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .overview-grid { grid-template-columns: 1fr; }
     }
     @media (max-width: 720px) {
       .hero { padding: 24px 18px 18px; }
@@ -351,6 +397,8 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           </select>
           <label><input id=\"only-flagged\" type=\"checkbox\" /> only flagged</label>
           <label><input id=\"only-nested\" type=\"checkbox\" /> nested only</label>
+          <label><input id=\"only-relation-warnings\" type=\"checkbox\" /> relation warnings</label>
+          <label><input id=\"only-disconnected\" type=\"checkbox\" /> disconnected</label>
         </div>
       </div>
 
@@ -372,6 +420,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           </div>
         </div>
         <div class=\"stats-grid\" id=\"stats-grid\"></div>
+        <div class=\"overview-grid\" id=\"relational-overview\"></div>
       </section>
 
       <section id=\"diagram\" class=\"section\">
@@ -417,6 +466,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     const tables = Array.isArray(PAYLOAD.tables) ? PAYLOAD.tables.slice() : [];
     const groups = Array.isArray(PAYLOAD.groups) ? PAYLOAD.groups.slice() : [];
     const statsGrid = document.getElementById('stats-grid');
+    const relationalOverview = document.getElementById('relational-overview');
     const groupGrid = document.getElementById('group-grid');
     const tableList = document.getElementById('table-list');
     const catalogGrid = document.getElementById('catalog-grid');
@@ -425,6 +475,8 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     const sortSelect = document.getElementById('table-sort');
     const onlyFlagged = document.getElementById('only-flagged');
     const onlyNested = document.getElementById('only-nested');
+    const onlyRelationWarnings = document.getElementById('only-relation-warnings');
+    const onlyDisconnected = document.getElementById('only-disconnected');
     const diagramStatus = document.getElementById('diagram-status');
     const navLinks = Array.from(document.querySelectorAll('.nav-links a'));
     const svgRoot = document.querySelector('#schema-container svg');
@@ -477,6 +529,15 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       if ((table.quarantine_count || 0) > 0) {
         items.push('<span class="badge quarantine">quarantine ' + formatInt(table.quarantine_count) + '</span>');
       }
+      if ((table.relationship_candidate_count || 0) > 0) {
+        items.push('<span class="badge">candidate ' + formatInt(table.relationship_candidate_count) + '</span>');
+      }
+      if ((table.relationship_warning_count || 0) > 0) {
+        items.push('<span class="badge warn">relation warning ' + formatInt(table.relationship_warning_count) + '</span>');
+      }
+      if (table.is_disconnected && String(table.role) !== 'base') {
+        items.push('<span class="badge warn">disconnected</span>');
+      }
       return items.join('');
     }
 
@@ -493,6 +554,12 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       }
       if (onlyNested.checked) {
         filtered = filtered.filter((table) => String(table.role) !== 'base');
+      }
+      if (onlyRelationWarnings.checked) {
+        filtered = filtered.filter((table) => Number(table.relationship_warning_count || 0) > 0);
+      }
+      if (onlyDisconnected.checked) {
+        filtered = filtered.filter((table) => Boolean(table.is_disconnected));
       }
       const key = String(sortSelect.value || 'depth');
       filtered.sort((a, b) => {
@@ -524,6 +591,14 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
         { label: 'Columns in view', value: formatInt(cols), note: 'DDL/column catalog 기준' },
         { label: 'Flagged tables', value: formatInt(flagged), note: 'error / warning / quarantine overlay' },
       ];
+      const datasetProfile = PAYLOAD.dataset_profile && typeof PAYLOAD.dataset_profile === 'object' ? PAYLOAD.dataset_profile : null;
+      if (datasetProfile) {
+        cards.push({
+          label: 'Relation candidates',
+          value: formatInt(datasetProfile.relationship_candidate_count || 0),
+          note: 'dataset profile overlay'
+        });
+      }
       statsGrid.innerHTML = cards.map((card) => (
         '<div class="stat-card">' +
           '<div class="stat-label">' + escHtml(card.label) + '</div>' +
@@ -531,7 +606,64 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           '<div class="stat-note">' + escHtml(card.note) + '</div>' +
         '</div>'
       )).join('');
+      renderRelationalOverview(filtered);
       diagramStatus.textContent = filtered.length + ' / ' + tables.length + ' tables visible';
+    }
+
+    function renderOverviewPanel(title, rows) {
+      return (
+        '<div class="overview-panel">' +
+          '<h3>' + escHtml(title) + '</h3>' +
+          '<div class="overview-list">' +
+            rows.map((row) => (
+              '<div class="overview-row">' +
+                '<span>' + escHtml(row.label) + '</span>' +
+                '<strong>' + escHtml(row.value) + '</strong>' +
+              '</div>'
+            )).join('') +
+          '</div>' +
+        '</div>'
+      );
+    }
+
+    function edgeTouchesVisible(edge, visible) {
+      return visible.has(String(edge.parent_sql || '')) || visible.has(String(edge.child_sql || ''));
+    }
+
+    function renderRelationalOverview(filtered) {
+      if (!relationalOverview) return;
+      const visible = new Set(filtered.map((table) => String(table.name_sql)));
+      const allEdges = Array.isArray(PAYLOAD.edges) ? PAYLOAD.edges : [];
+      const visibleEdges = allEdges.filter((edge) => edgeTouchesVisible(edge, visible));
+      const roleCounts = filtered.reduce((acc, table) => {
+        const role = String(table.role || 'unknown');
+        acc[role] = Number(acc[role] || 0) + 1;
+        return acc;
+      }, {});
+      const candidateEdges = visibleEdges.filter((edge) => Number(edge.relationship_candidate_count || 0) > 0);
+      const relationWarnings = visibleEdges.reduce((acc, edge) => acc + Number(edge.relationship_warning_count || 0), 0);
+      const disconnected = filtered.filter((table) => table.is_disconnected && String(table.role) !== 'base');
+      const datasetProfile = PAYLOAD.dataset_profile && typeof PAYLOAD.dataset_profile === 'object' ? PAYLOAD.dataset_profile : null;
+      const unmatchedCandidates = datasetProfile
+        ? Number((datasetProfile.unmatched_relationship_candidates || []).length || 0)
+        : 0;
+      relationalOverview.innerHTML = [
+        renderOverviewPanel('Table Roles', [
+          { label: 'Base tables', value: formatInt(roleCounts.base || 0) },
+          { label: 'Sub tables', value: formatInt(roleCounts.sub || 0) },
+          { label: 'Nested tables', value: formatInt(roleCounts.nested || 0) },
+        ]),
+        renderOverviewPanel('Relationship Evidence', [
+          { label: 'Visible relationships', value: formatInt(visibleEdges.length) },
+          { label: 'Candidate-backed', value: formatInt(candidateEdges.length) },
+          { label: 'Relation warnings', value: formatInt(relationWarnings) },
+        ]),
+        renderOverviewPanel('Coverage Gaps', [
+          { label: 'Disconnected non-base tables', value: formatInt(disconnected.length) },
+          { label: 'Unmatched candidates', value: formatInt(unmatchedCandidates) },
+          { label: 'Dataset overlay', value: datasetProfile ? 'on' : 'off' },
+        ]),
+      ].join('');
     }
 
     function renderGroups(filtered) {
@@ -646,19 +778,61 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       return '<pre class="code">' + escHtml(JSON.stringify(samples, null, 2)) + '</pre>';
     }
 
+    function renderRelationshipCandidate(candidate) {
+      if (!candidate || typeof candidate !== 'object') return '';
+      const evidence = candidate.evidence && typeof candidate.evidence === 'object' ? candidate.evidence : {};
+      const warnings = Array.isArray(candidate.warnings)
+        ? candidate.warnings.filter(Boolean).join(', ')
+        : String(candidate.warnings || '');
+      const badges = [
+        '<span class="mini-badge good">' + escHtml(candidate.status || 'candidate') + '</span>',
+        '<span class="mini-badge">confidence ' + escHtml(ratioLabel(candidate.confidence)) + '</span>',
+        '<span class="mini-badge">' + escHtml(candidate.relationship_type || 'relationship') + '</span>'
+      ];
+      const evidenceRows = [
+        ['source', evidence.source],
+        ['parent uniq', ratioLabel(evidence.parent_unique_ratio)],
+        ['child null', ratioLabel(evidence.child_null_ratio)],
+        ['parent col', candidate.parent_column_sql],
+        ['child col', candidate.child_column_sql],
+      ].filter((item) => item[1] !== undefined && item[1] !== null && String(item[1]) !== '');
+      const evidenceHtml = evidenceRows.map((item) => (
+        '<div><span class="muted">' + escHtml(item[0]) + '</span> <code>' + escHtml(item[1]) + '</code></div>'
+      )).join('');
+      return (
+        '<div class="relationship-evidence">' +
+          '<div class="relationship-evidence-title">' + badges.join('') + '</div>' +
+          (evidenceHtml ? '<div class="evidence-grid">' + evidenceHtml + '</div>' : '') +
+          (warnings ? '<div><span class="mini-badge warn">' + escHtml(warnings) + '</span></div>' : '') +
+        '</div>'
+      );
+    }
+
     function renderRelationshipEdges(edges, direction) {
       if (!Array.isArray(edges) || !edges.length) return '';
       return edges.map((edge) => {
         const counterpartSql = direction === 'parent' ? edge.parent_sql : edge.child_sql;
         const counterpartDisplay = direction === 'parent' ? edge.parent_display : edge.child_display;
         const prefix = direction === 'parent' ? 'Parent' : 'Child';
+        const candidates = Array.isArray(edge.relationship_candidates) ? edge.relationship_candidates : [];
+        const candidateHtml = candidates.map(renderRelationshipCandidate).join('');
+        const edgeBadges = [
+          '<span class="mini-badge">' + escHtml(edge.relationship_source || 'structural_naming') + '</span>',
+          '<span class="mini-badge">' + escHtml(edge.relationship_status || 'structural') + '</span>',
+          '<span class="mini-badge">' + escHtml(edge.relationship_type || 'relationship') + '</span>'
+        ];
+        if (Number(edge.relationship_warning_count || 0) > 0) {
+          edgeBadges.push('<span class="mini-badge warn">warnings ' + formatInt(edge.relationship_warning_count) + '</span>');
+        }
         return (
           '<div class="relationship-card">' +
             '<div class="relationship-title">' +
               '<span>' + escHtml(prefix) + ': <code>' + escHtml(counterpartSql || counterpartDisplay || '') + '</code></span>' +
               '<span class="relationship-label">' + escHtml(edge.label || '') + '</span>' +
             '</div>' +
+            '<div class="mini-badges">' + edgeBadges.join('') + '</div>' +
             '<pre class="code">' + escHtml(edge.join_sql || '') + '</pre>' +
+            candidateHtml +
           '</div>'
         );
       }).join('');
@@ -690,6 +864,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
             '<span class="metric-pill">cols ' + formatInt(table.column_count) + '</span>' +
             '<span class="metric-pill">indexes ' + formatInt(table.index_count) + '</span>' +
             '<span class="metric-pill">relations ' + formatInt(table.relationship_count) + '</span>' +
+            '<span class="metric-pill">candidates ' + formatInt(table.relationship_candidate_count || 0) + '</span>' +
             '<span class="metric-pill">size ' + escHtml(table.size_label) + '</span>' +
             '<span class="metric-pill">engine ' + escHtml(table.engine || 'n/a') + '</span>' +
           '</div>' +
@@ -806,6 +981,8 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     sortSelect.addEventListener('change', refresh);
     onlyFlagged.addEventListener('change', refresh);
     onlyNested.addEventListener('change', refresh);
+    onlyRelationWarnings.addEventListener('change', refresh);
+    onlyDisconnected.addEventListener('change', refresh);
     window.addEventListener('scroll', syncNav, { passive: true });
     bindSvg();
     refresh();
