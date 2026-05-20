@@ -59,6 +59,78 @@ def _collect_table_infos_from_dataset_profile(dataset_profile: Mapping[str, Any]
     return sorted(out, key=lambda item: item.name_sql)
 
 
+def _dataset_relationship_candidates(dataset_profile: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(dataset_profile, Mapping):
+        return []
+    raw = dataset_profile.get("relationship_candidates") or []
+    if not isinstance(raw, list):
+        return []
+    return [dict(item) for item in raw if isinstance(item, Mapping)]
+
+
+def _candidate_confidence(candidate: Mapping[str, Any]) -> float:
+    try:
+        return float(candidate.get("confidence") or 0.0)
+    except Exception:
+        return 0.0
+
+
+def _candidate_only_graph_edges(
+    *,
+    dataset_profile: Mapping[str, Any] | None,
+    table_infos: list[TableInfo],
+    base_table_graph: str,
+    key_sep: str,
+) -> list[tuple[str, str, str]]:
+    if not isinstance(dataset_profile, Mapping):
+        return []
+    graph_by_sql = {
+        ti.name_sql: ti.name_original or ti.name_sql
+        for ti in table_infos
+        if ti.name_sql
+    }
+    if not graph_by_sql:
+        return []
+    structural_keys: set[tuple[str, str]] = set()
+    structural_edges = build_table_edges(
+        base_table=base_table_graph,
+        tables=[ti.name_original or ti.name_sql for ti in table_infos],
+        key_sep=key_sep,
+    )
+    sql_by_graph = {
+        ti.name_original or ti.name_sql: ti.name_sql
+        for ti in table_infos
+        if ti.name_sql
+    }
+    for parent_graph, child_graph, _label in structural_edges:
+        parent_sql = sql_by_graph.get(parent_graph, parent_graph)
+        child_sql = sql_by_graph.get(child_graph, child_graph)
+        structural_keys.add((str(parent_sql), str(child_sql)))
+
+    grouped: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for candidate in _dataset_relationship_candidates(dataset_profile):
+        parent_sql = str(candidate.get("parent_table_sql") or "").strip()
+        child_sql = str(candidate.get("child_table_sql") or "").strip()
+        key = (parent_sql, child_sql)
+        if (
+            not parent_sql
+            or not child_sql
+            or parent_sql == child_sql
+            or key in structural_keys
+            or parent_sql not in graph_by_sql
+            or child_sql not in graph_by_sql
+        ):
+            continue
+        grouped.setdefault(key, []).append(candidate)
+
+    edges: list[tuple[str, str, str]] = []
+    for (parent_sql, child_sql), candidates in sorted(grouped.items()):
+        primary = max(candidates, key=_candidate_confidence)
+        label = str(primary.get("status") or "candidate").strip() or "candidate"
+        edges.append((graph_by_sql[parent_sql], graph_by_sql[child_sql], label))
+    return edges
+
+
 def generate_schema_viewer(
     *,
     config_path: str,
@@ -149,12 +221,28 @@ def generate_schema_viewer(
     )
     use_original_names = any(ti.name_original for ti in table_infos)
     base_table_graph = base_table if use_original_names else base_table_sql
-    mermaid = render_mermaid(base_table=base_table_graph, table_infos=table_infos, key_sep=key_sep)
-    svg_text = render_simple_svg(base_table=base_table_graph, table_infos=table_infos, key_sep=key_sep)
     edges = build_table_edges(
         base_table=base_table_graph,
         tables=[ti.name_original or ti.name_sql for ti in table_infos],
         key_sep=key_sep,
+    )
+    candidate_only_edges = _candidate_only_graph_edges(
+        dataset_profile=dataset_profile if isinstance(dataset_profile, Mapping) else None,
+        table_infos=table_infos,
+        base_table_graph=base_table_graph,
+        key_sep=key_sep,
+    )
+    mermaid = render_mermaid(
+        base_table=base_table_graph,
+        table_infos=table_infos,
+        key_sep=key_sep,
+        extra_edges=candidate_only_edges,
+    )
+    svg_text = render_simple_svg(
+        base_table=base_table_graph,
+        table_infos=table_infos,
+        key_sep=key_sep,
+        extra_edges=candidate_only_edges,
     )
     payload = build_schema_viewer_payload(
         config_path=config_path,

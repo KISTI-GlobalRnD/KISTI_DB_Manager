@@ -63,7 +63,9 @@ dataset_profile.json` overlays those candidates on matching relationship cards;
 if omitted, the viewer auto-detects `<PATH>/dataset_profile.json` when present.
 The Schema Viewer overview summarizes table roles, candidate-backed
 relationships, unmatched candidates, relation warnings, and disconnected
-non-base tables.
+non-base tables. Candidate relationships between known tables that are not
+covered by the structural naming tree are drawn as dashed candidate edges in
+the SVG and Mermaid outputs.
 
 ## JSON
 

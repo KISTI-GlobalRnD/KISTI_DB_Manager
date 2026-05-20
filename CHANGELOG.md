@@ -10,6 +10,8 @@
 - Added Schema Viewer relational overview panels for table roles,
   relationship evidence, coverage gaps, relationship warnings, and
   disconnected-table filtering.
+- Added dashed Schema Viewer candidate-only edges for Dataset Profile
+  relationships between known tables that are not covered by structural naming.
 
 ## 0.10.0 - 2026-05-20
 

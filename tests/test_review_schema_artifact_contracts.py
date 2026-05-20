@@ -157,6 +157,11 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
                             "table_original": "works__authorships",
                             "row_count": 5,
                         },
+                        {
+                            "table_sql": "works__authorships__institutions",
+                            "table_original": "works__authorships__institutions",
+                            "row_count": 7,
+                        },
                     ],
                     "relationship_candidates": [
                         {
@@ -173,6 +178,22 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
                                 "shared_column_name": True,
                             },
                             "warnings": [],
+                            "status": "candidate",
+                        },
+                        {
+                            "parent_table_sql": "works",
+                            "child_table_sql": "works__authorships__institutions",
+                            "parent_column_sql": "id",
+                            "child_column_sql": "institution__id",
+                            "relationship_type": "naming_candidate_only",
+                            "confidence": 0.42,
+                            "evidence": {
+                                "source": "dataset_profile_review",
+                                "parent_unique_ratio": 1.0,
+                                "child_null_ratio": 0.1,
+                                "shared_column_name": False,
+                            },
+                            "warnings": ["candidate_without_structural_edge"],
                             "status": "candidate",
                         }
                     ],
@@ -220,9 +241,11 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
             )
 
             payload = json.loads((out_dir / "schema_viewer.json").read_text(encoding="utf-8"))
-            self.assertEqual(payload["meta"]["dataset_profile"]["relationship_candidate_count"], 1)
-            self.assertEqual(payload["summary"]["relationship_candidate_count"], 1)
-            self.assertEqual(payload["summary"]["relationship_candidates_on_edges"], 1)
+            self.assertEqual(payload["meta"]["dataset_profile"]["relationship_candidate_count"], 2)
+            self.assertEqual(payload["summary"]["relationship_candidate_count"], 2)
+            self.assertEqual(payload["summary"]["relationship_candidates_on_edges"], 2)
+            self.assertEqual(payload["summary"]["candidate_only_edge_count"], 1)
+            self.assertEqual(payload["summary"]["unmatched_relationship_candidate_count"], 0)
             edge = next(
                 item
                 for item in payload["edges"]
@@ -234,11 +257,23 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
             self.assertEqual(edge["relationship_candidate_count"], 1)
             self.assertEqual(edge["relationship_warning_count"], 0)
             self.assertEqual(edge["relationship_candidates"][0]["evidence"]["source"], "table_name_path")
+            candidate_only_edge = next(
+                item
+                for item in payload["edges"]
+                if item["parent_sql"] == "works"
+                and item["child_sql"] == "works__authorships__institutions"
+            )
+            self.assertEqual(candidate_only_edge["relationship_source"], "dataset_profile")
+            self.assertEqual(candidate_only_edge["relationship_status"], "candidate")
+            self.assertEqual(candidate_only_edge["relationship_type"], "naming_candidate_only")
+            self.assertEqual(candidate_only_edge["relationship_warning_count"], 1)
+            self.assertIn("candidate-edge", (out_dir / "schema.svg").read_text(encoding="utf-8"))
+            self.assertIn("works -.->|candidate| works__authorships__institutions", (out_dir / "schema.mmd").read_text(encoding="utf-8"))
             works = next(table for table in payload["tables"] if table["name_sql"] == "works")
             authorships = next(
                 table for table in payload["tables"] if table["name_sql"] == "works__authorships"
             )
-            self.assertEqual(works["relationship_candidate_count"], 1)
+            self.assertEqual(works["relationship_candidate_count"], 2)
             self.assertEqual(authorships["relationship_candidate_count"], 1)
             self.assertFalse(works["is_disconnected"])
             self.assertFalse(authorships["is_disconnected"])
@@ -265,12 +300,17 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
             )
 
             payload = json.loads((out_dir / "schema_viewer.json").read_text(encoding="utf-8"))
-            self.assertEqual(payload["summary"]["table_count"], 2)
-            self.assertEqual(payload["summary"]["edge_count"], 1)
-            self.assertEqual(payload["summary"]["relationship_candidates_on_edges"], 1)
+            self.assertEqual(payload["summary"]["table_count"], 3)
+            self.assertEqual(payload["summary"]["edge_count"], 3)
+            self.assertEqual(payload["summary"]["structural_edge_count"], 2)
+            self.assertEqual(payload["summary"]["candidate_only_edge_count"], 1)
+            self.assertEqual(payload["summary"]["relationship_candidates_on_edges"], 2)
             self.assertEqual(payload["edges"][0]["relationship_source"], "dataset_profile")
             self.assertEqual(payload["edges"][0]["relationship_status"], "candidate")
-            self.assertEqual([table["name_sql"] for table in payload["tables"]], ["works", "works__authorships"])
+            self.assertEqual(
+                [table["name_sql"] for table in payload["tables"]],
+                ["works", "works__authorships", "works__authorships__institutions"],
+            )
 
 
 if __name__ == "__main__":

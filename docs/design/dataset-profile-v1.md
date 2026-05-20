@@ -178,11 +178,13 @@ Phase 2: viewer overlay (initial implemented)
 - render relationship candidate badges and warnings
 - summarize table roles, candidate-backed relationships, coverage gaps, and
   disconnected tables in the viewer overview
+- draw candidate-only SVG/Mermaid edges when both endpoint tables exist and no
+  structural naming edge already covers the pair
 - add no-DB viewer tests
 
-The initial overlay attaches Dataset Profile candidate evidence to existing
-structural relationship cards. It does not yet draw additional candidate-only
-edges.
+The overlay attaches Dataset Profile candidate evidence to existing structural
+relationship cards and draws dashed candidate-only edges for known table pairs
+that are not already covered by naming structure.
 
 Phase 3: bounded optional evidence
 

@@ -66,7 +66,9 @@ design contract is documented in [Dataset Profile v1](../design/dataset-profile-
 auto-detect `<PATH>/dataset_profile.json`. The viewer attaches candidate
 confidence, status, warnings, and evidence to matching relationship cards. Its
 overview panels also summarize table roles, candidate-backed relationships,
-unmatched candidates, relation warnings, and disconnected non-base tables.
+unmatched candidates, relation warnings, and disconnected non-base tables. When
+both endpoint tables exist but no structural naming edge covers a candidate,
+the SVG and Mermaid outputs draw it as a dashed candidate edge.
 
 ## Parquet Artifacts
 

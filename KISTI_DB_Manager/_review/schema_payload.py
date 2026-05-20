@@ -489,6 +489,7 @@ def build_schema_viewer_payload(
     )
 
     info_by_graph_name = {ti.name_original or ti.name_sql: ti for ti in table_infos}
+    info_by_sql = {ti.name_sql: ti for ti in table_infos if ti.name_sql}
     edges_payload: list[dict[str, Any]] = []
     parent_edges_by_child_sql: dict[str, list[dict[str, Any]]] = {}
     child_edges_by_parent_sql: dict[str, list[dict[str, Any]]] = {}
@@ -563,6 +564,58 @@ def build_schema_viewer_payload(
         edges_payload.append(item)
         parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
         child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
+
+    for (parent_sql, child_sql), relationship_candidates in sorted(dataset_candidates_by_edge.items()):
+        if (parent_sql, child_sql) in matched_dataset_candidate_keys:
+            continue
+        parent_info = info_by_sql.get(parent_sql)
+        child_info = info_by_sql.get(child_sql)
+        if parent_info is None or child_info is None or parent_sql == child_sql:
+            continue
+        primary_candidate = max(relationship_candidates, key=_candidate_confidence)
+        statuses = sorted({str(candidate.get("status") or "unknown") for candidate in relationship_candidates})
+        types = sorted(
+            {
+                str(candidate.get("relationship_type") or "relationship")
+                for candidate in relationship_candidates
+            }
+        )
+        parent_graph = parent_info.name_original or parent_info.name_sql
+        child_graph = child_info.name_original or child_info.name_sql
+        item = {
+            "parent": parent_graph,
+            "child": child_graph,
+            "label": "candidate",
+            "parent_sql": parent_sql,
+            "child_sql": child_sql,
+            "parent_display": table_display_label(base_table_graph, key_sep, parent_graph),
+            "child_display": table_display_label(base_table_graph, key_sep, child_graph),
+            "join_sql": relationship_join_sql(
+                parent_sql=parent_sql,
+                child_sql=child_sql,
+                parent_column_sql=_candidate_column_sql(primary_candidate, "parent_column_sql"),
+                child_column_sql=_candidate_column_sql(primary_candidate, "child_column_sql"),
+            ),
+            "relationship_source": "dataset_profile",
+            "relationship_status": statuses[0] if len(statuses) == 1 else "mixed",
+            "relationship_type": types[0] if len(types) == 1 else "mixed",
+            "relationship_candidates": relationship_candidates,
+            "relationship_candidate_count": len(relationship_candidates),
+            "relationship_confidence_max": max(
+                _candidate_confidence(candidate)
+                for candidate in relationship_candidates
+            ),
+            "relationship_statuses": statuses,
+            "relationship_warning_count": sum(
+                _candidate_warning_count(candidate)
+                for candidate in relationship_candidates
+            ),
+        }
+        edges_payload.append(item)
+        parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
+        child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
+        matched_dataset_candidate_count += len(relationship_candidates)
+        matched_dataset_candidate_keys.add((parent_sql, child_sql))
 
     table_payloads: list[dict[str, Any]] = []
     totals = {"rows": 0, "columns": 0, "size_bytes": 0}
@@ -718,7 +771,7 @@ def build_schema_viewer_payload(
         "columns_total": int(totals["columns"]),
         "size_bytes_total": int(totals["size_bytes"]),
         "flagged_table_count": int(issue_tables),
-        "edge_count": len(edges),
+        "edge_count": len(edges_payload),
     }
     dataset_profile_payload = None
     if dataset_profile_summary is not None:
@@ -727,6 +780,8 @@ def build_schema_viewer_payload(
             {
                 "relationship_candidate_count": len(dataset_candidates),
                 "relationship_candidates_on_edges": matched_dataset_candidate_count,
+                "structural_edge_count": len(edges),
+                "candidate_only_edge_count": max(0, len(edges_payload) - len(edges)),
                 "unmatched_relationship_candidate_count": max(
                     0,
                     len(dataset_candidates) - matched_dataset_candidate_count,

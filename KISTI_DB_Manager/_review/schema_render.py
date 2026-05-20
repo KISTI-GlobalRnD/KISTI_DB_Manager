@@ -84,9 +84,11 @@ def render_mermaid(
     base_table: str,
     table_infos: list[TableInfo],
     key_sep: str,
+    extra_edges: Iterable[tuple[str, str, str]] | None = None,
 ) -> str:
     tables = [ti.name_original or ti.name_sql for ti in table_infos]
     edges = build_table_edges(base_table=base_table, tables=tables, key_sep=key_sep)
+    candidate_edges = list(extra_edges or [])
 
     id_by_name = {t: _sanitize_mermaid_id(t) for t in tables + [base_table]}
 
@@ -102,6 +104,10 @@ def render_mermaid(
         p_id = id_by_name.get(parent, _sanitize_mermaid_id(parent))
         c_id = id_by_name.get(child, _sanitize_mermaid_id(child))
         lines.append(f"  {p_id} -->|{html.escape(label)}| {c_id}")
+    for parent, child, label in candidate_edges:
+        p_id = id_by_name.get(parent, _sanitize_mermaid_id(parent))
+        c_id = id_by_name.get(child, _sanitize_mermaid_id(child))
+        lines.append(f"  {p_id} -.->|{html.escape(label or 'candidate')}| {c_id}")
 
     return "\n".join(lines) + "\n"
 
@@ -122,6 +128,7 @@ def render_simple_svg(
     base_table: str,
     table_infos: list[TableInfo],
     key_sep: str,
+    extra_edges: Iterable[tuple[str, str, str]] | None = None,
     width: int = 1800,
     x_step: int = 420,
     y_step: int = 44,
@@ -214,20 +221,21 @@ def render_simple_svg(
         more_h = 18 if len(cols) > len(visible) else 0
         return max(box_h, header_h + sub_h + metric_h + len(visible) * row_h + more_h + footer_h)
 
-    def _cardinality_marker(x: int, y: int, *, side: str, kind: str) -> list[str]:
+    def _cardinality_marker(x: int, y: int, *, side: str, kind: str, extra_class: str = "") -> list[str]:
         if side not in {"left", "right"}:
             return []
         dx = 1 if side == "right" else -1
+        cls = "edge-card" + (f" {extra_class}" if extra_class else "")
         out: list[str] = []
         if kind == "one":
             bx = x + (dx * 5)
-            out.append(f'<line class="edge-card" x1="{bx}" y1="{y - 7}" x2="{bx}" y2="{y + 7}" />')
+            out.append(f'<line class="{cls}" x1="{bx}" y1="{y - 7}" x2="{bx}" y2="{y + 7}" />')
             return out
         px = x + (dx * 2)
         ex = x + (dx * 12)
-        out.append(f'<line class="edge-card" x1="{px}" y1="{y}" x2="{ex}" y2="{y}" />')
-        out.append(f'<line class="edge-card" x1="{px}" y1="{y}" x2="{ex}" y2="{y - 6}" />')
-        out.append(f'<line class="edge-card" x1="{px}" y1="{y}" x2="{ex}" y2="{y + 6}" />')
+        out.append(f'<line class="{cls}" x1="{px}" y1="{y}" x2="{ex}" y2="{y}" />')
+        out.append(f'<line class="{cls}" x1="{px}" y1="{y}" x2="{ex}" y2="{y - 6}" />')
+        out.append(f'<line class="{cls}" x1="{px}" y1="{y}" x2="{ex}" y2="{y + 6}" />')
         return out
 
     def depth(name: str) -> int:
@@ -263,7 +271,15 @@ def render_simple_svg(
             pos[t] = (xs, ys)
             ys += box_height_by_table.get(t, box_h) + y_step
 
-    edges = build_table_edges(base_table=base_table, tables=tables, key_sep=key_sep)
+    structural_edges = build_table_edges(base_table=base_table, tables=tables, key_sep=key_sep)
+    candidate_edges = list(extra_edges or [])
+    edges = [
+        (parent, child, label, "structural")
+        for parent, child, label in structural_edges
+    ] + [
+        (parent, child, label or "candidate", "candidate")
+        for parent, child, label in candidate_edges
+    ]
 
     max_y = 30
     for t, (_x, y) in pos.items():
@@ -297,6 +313,8 @@ def render_simple_svg(
     lines.append(".edge { stroke: #64748B; stroke-width: 1.5; fill: none; }")
     lines.append(".edge-card { stroke: #64748B; stroke-width: 1.3; fill: none; }")
     lines.append(".edge-label { font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; font-size: 10px; fill: #475467; }")
+    lines.append(".candidate-edge { stroke: #d97706; stroke-dasharray: 5 5; }")
+    lines.append(".candidate-edge-label { fill: #92400e; font-weight: 700; }")
     lines.append(".node { cursor: pointer; }")
     lines.append(".node.selected .box, .node.selected .head { stroke: #0f766e; stroke-width: 2.5; }")
     lines.append(".node.selected .col-name, .node.selected .col-key { fill: #0f172a; font-weight: 700; }")
@@ -306,7 +324,7 @@ def render_simple_svg(
     lines.append(".diff-changed .box { stroke: #bf8700; stroke-width: 2; }")
     lines.append("</style>")
 
-    for parent, child, label in edges:
+    for parent, child, label, edge_kind in edges:
         if parent not in pos or child not in pos:
             continue
         px, py = pos[parent]
@@ -322,16 +340,22 @@ def render_simple_svg(
         c_info = name_to_info.get(child)
         p_sql = p_info.name_sql if p_info is not None else parent
         c_sql = c_info.name_sql if c_info is not None else child
+        is_candidate = edge_kind == "candidate"
+        edge_extra_cls = "candidate-edge" if is_candidate else ""
+        edge_label_cls = "edge-label candidate-edge-label" if is_candidate else "edge-label"
         lines.append('<g class="edge-group">')
         lines.append(
-            f'<path class="edge" data-parent="{_svg_escape(parent)}" data-child="{_svg_escape(child)}" '
+            f'<path class="edge{(" " + edge_extra_cls) if edge_extra_cls else ""}" '
+            f'data-parent="{_svg_escape(parent)}" data-child="{_svg_escape(child)}" '
             f'data-parent-sql="{_svg_escape(p_sql)}" data-child-sql="{_svg_escape(c_sql)}" '
+            f'data-relationship-source="{_svg_escape("dataset_profile" if is_candidate else "structural_naming")}" '
             f'd="M {x1} {y1} C {mid} {y1}, {mid} {y2}, {x2} {y2}" />'
         )
-        edge_text = _truncate_middle(f"{label} · 1:N", max_chars=28)
-        lines.append(f'<text class="edge-label" x="{mid}" y="{int((y1 + y2) / 2) - 6}" text-anchor="middle">{_svg_escape(edge_text)}</text>')
-        lines.extend(_cardinality_marker(x1, y1, side="right", kind="one"))
-        lines.extend(_cardinality_marker(x2, y2, side="left", kind="many"))
+        edge_suffix = "candidate" if is_candidate else "1:N"
+        edge_text = _truncate_middle(f"{label} · {edge_suffix}", max_chars=28)
+        lines.append(f'<text class="{edge_label_cls}" x="{mid}" y="{int((y1 + y2) / 2) - 6}" text-anchor="middle">{_svg_escape(edge_text)}</text>')
+        lines.extend(_cardinality_marker(x1, y1, side="right", kind="one", extra_class=edge_extra_cls))
+        lines.extend(_cardinality_marker(x2, y2, side="left", kind="many", extra_class=edge_extra_cls))
         lines.append("</g>")
 
     for name in tables:
