@@ -108,6 +108,27 @@ def _boolish(value: Any) -> bool:
     return str(value).strip().lower() in {"1", "true", "yes", "y"}
 
 
+def _warning_flags(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple, set)):
+        return sorted({str(item).strip() for item in value if str(item).strip()})
+    text = str(value).strip()
+    if not text:
+        return []
+    return sorted({part.strip() for part in text.replace(",", ";").split(";") if part.strip()})
+
+
+def _count_values(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value).strip()
+        if not key:
+            continue
+        counts[key] = int(counts.get(key, 0)) + 1
+    return {key: counts[key] for key in sorted(counts)}
+
+
 def _column_sql(column: Mapping[str, Any]) -> str:
     return str(column.get("sql_column") or column.get("source_column") or "")
 
@@ -184,6 +205,70 @@ def _find_column(table: _TableProfile, column_name: str) -> dict[str, Any] | Non
     return None
 
 
+def _column_identity_names(column: Mapping[str, Any]) -> tuple[str, ...]:
+    names = {
+        str(column.get("sql_column") or "").strip(),
+        str(column.get("source_column") or "").strip(),
+    }
+    return tuple(sorted(name for name in names if name))
+
+
+def _is_parent_key_column(column: Mapping[str, Any]) -> bool:
+    if _boolish(column.get("is_key_candidate")):
+        return True
+    unique_ratio = _float_or_none(column.get("unique_ratio"))
+    null_ratio = _float_or_none(column.get("null_ratio"))
+    return bool(
+        unique_ratio is not None
+        and unique_ratio >= 0.95
+        and (null_ratio is None or null_ratio <= 0.05)
+    )
+
+
+def _relationship_key_pair(
+    parent: _TableProfile,
+    child: _TableProfile,
+) -> tuple[dict[str, Any], dict[str, Any], str] | None:
+    parent_id = _find_column(parent, "id")
+    child_id = _find_column(child, "id")
+    if parent_id is not None and child_id is not None:
+        return parent_id, child_id, "exact_id"
+
+    child_by_name: dict[str, dict[str, Any]] = {}
+    for child_column in child.columns:
+        for name in _column_identity_names(child_column):
+            child_by_name.setdefault(name, child_column)
+
+    candidates: list[tuple[tuple[int, float, str], dict[str, Any], dict[str, Any], str]] = []
+    for parent_column in parent.columns:
+        if not _is_parent_key_column(parent_column):
+            continue
+        for name in _column_identity_names(parent_column):
+            child_column = child_by_name.get(name)
+            if child_column is None:
+                continue
+            child_null_ratio = _float_or_none(child_column.get("null_ratio"))
+            if child_null_ratio is not None and child_null_ratio > 0.2:
+                continue
+            lower = name.lower()
+            name_rank = 0 if lower == "id" else 1 if lower.endswith("id") else 2
+            parent_unique_ratio = _float_or_none(parent_column.get("unique_ratio")) or 0.0
+            candidates.append(
+                (
+                    (name_rank, -parent_unique_ratio, name),
+                    parent_column,
+                    child_column,
+                    name,
+                )
+            )
+
+    if not candidates:
+        return None
+
+    _, parent_column, child_column, _name = sorted(candidates, key=lambda item: item[0])[0]
+    return parent_column, child_column, "shared_parent_key"
+
+
 def _find_parent_table(
     child: _TableProfile,
     *,
@@ -218,24 +303,81 @@ def _relationship_warnings(parent_id: Mapping[str, Any], child_id: Mapping[str, 
     warnings: list[str] = []
     parent_unique_ratio = _float_or_none(parent_id.get("unique_ratio"))
     child_null_ratio = _float_or_none(child_id.get("null_ratio"))
+    parent_type_family = str(parent_id.get("type_family") or "").strip()
+    child_type_family = str(child_id.get("type_family") or "").strip()
     if parent_unique_ratio is not None and parent_unique_ratio < 0.95:
         warnings.append("parent_id_unique_ratio_below_0_95")
     if child_null_ratio is not None and child_null_ratio > 0.2:
         warnings.append("child_id_null_ratio_above_0_2")
+    if parent_type_family and child_type_family and parent_type_family != child_type_family:
+        warnings.append("relationship_column_type_family_mismatch")
     return warnings
 
 
-def _infer_relationship_candidates(
+def _confidence_bucket(confidence: float | None) -> str:
+    value = float(confidence or 0.0)
+    if value >= 0.75:
+        return "high"
+    if value >= 0.5:
+        return "medium"
+    return "low"
+
+
+def _candidate_review_priority(confidence: float | None, warnings: Sequence[str]) -> str:
+    value = float(confidence or 0.0)
+    if value < 0.5 or len(warnings) >= 2:
+        return "high_risk"
+    if warnings or value < 0.75:
+        return "review"
+    return "accept_hint"
+
+
+def _annotate_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
+    out = dict(candidate)
+    warnings = _warning_flags(out.get("warnings"))
+    confidence = _float_or_none(out.get("confidence")) or 0.0
+    risk_score = min(1.0, max(0.0, 1.0 - confidence) + (0.15 * len(warnings)))
+    out["warnings"] = warnings
+    out["confidence_bucket"] = _confidence_bucket(confidence)
+    out["review_priority"] = _candidate_review_priority(confidence, warnings)
+    out["risk_score"] = round(risk_score, 6)
+    return out
+
+
+def _skipped_candidate(
+    *,
+    child: _TableProfile,
+    parent: _TableProfile | None,
+    reason: str,
+) -> dict[str, Any]:
+    return {
+        "source": "table_name_path",
+        "reason": reason,
+        "parent_table_sql": str(parent.table.get("table_sql") or "") if parent is not None else "",
+        "child_table_sql": str(child.table.get("table_sql") or ""),
+        "parent_table_original": str(parent.table.get("table_original") or "") if parent is not None else "",
+        "child_table_original": str(child.table.get("table_original") or ""),
+        "expected_parent_column_sql": "id",
+        "expected_child_column_sql": "id",
+    }
+
+
+def _infer_relationship_candidates_with_audit(
     tables: Sequence[_TableProfile],
     *,
     base_table: str,
     key_sep: str,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     by_original = {str(table.table.get("table_original") or ""): table for table in tables}
     by_sql = {str(table.table.get("table_sql") or ""): table for table in tables}
     candidates: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
 
     for child in sorted(tables, key=lambda item: str(item.table.get("table_sql") or "")):
+        child_original = str(child.table.get("table_original") or "")
+        child_sql_name = str(child.table.get("table_sql") or "")
+        if child_original == base_table or child_sql_name == truncate_table_name(base_table):
+            continue
         parent = _find_parent_table(
             child,
             by_original=by_original,
@@ -244,39 +386,112 @@ def _infer_relationship_candidates(
             key_sep=key_sep,
         )
         if parent is None or parent is child:
+            if key_sep in child_original or key_sep in child_sql_name:
+                skipped.append(_skipped_candidate(child=child, parent=None, reason="missing_parent_table"))
             continue
 
-        parent_id = _find_column(parent, "id")
-        child_id = _find_column(child, "id")
-        if parent_id is None or child_id is None:
+        key_pair = _relationship_key_pair(parent, child)
+        if key_pair is None:
+            parent_id = _find_column(parent, "id")
+            child_id = _find_column(child, "id")
+            missing = []
+            if parent_id is None:
+                missing.append("missing_parent_id")
+            if child_id is None:
+                missing.append("missing_child_id")
+            skipped.append(_skipped_candidate(child=child, parent=parent, reason="_and_".join(missing)))
             continue
 
+        parent_id, child_id, key_match_source = key_pair
         parent_sql = str(parent.table["table_sql"])
         child_sql = str(child.table["table_sql"])
         warnings = _relationship_warnings(parent_id, child_id)
         confidence = 0.8 if not warnings else 0.6
         candidates.append(
-            {
-                "parent_table_sql": parent_sql,
-                "child_table_sql": child_sql,
-                "parent_column_sql": str(parent_id.get("sql_column") or "id"),
-                "child_column_sql": str(child_id.get("sql_column") or "id"),
-                "relationship_type": "naming_parent_child",
-                "confidence": confidence,
-                "evidence": {
-                    "source": "table_name_path",
-                    "parent_table_original": str(parent.table.get("table_original") or ""),
-                    "child_table_original": str(child.table.get("table_original") or ""),
-                    "parent_unique_ratio": _float_or_none(parent_id.get("unique_ratio")),
-                    "child_null_ratio": _float_or_none(child_id.get("null_ratio")),
-                    "shared_column_name": True,
-                },
-                "warnings": warnings,
-                "status": "candidate",
-            }
+            _annotate_candidate(
+                {
+                    "parent_table_sql": parent_sql,
+                    "child_table_sql": child_sql,
+                    "parent_column_sql": str(parent_id.get("sql_column") or "id"),
+                    "child_column_sql": str(child_id.get("sql_column") or "id"),
+                    "relationship_type": "naming_parent_child",
+                    "confidence": confidence,
+                    "evidence": {
+                        "source": "table_name_path",
+                        "parent_table_original": str(parent.table.get("table_original") or ""),
+                        "child_table_original": str(child.table.get("table_original") or ""),
+                        "parent_unique_ratio": _float_or_none(parent_id.get("unique_ratio")),
+                        "child_null_ratio": _float_or_none(child_id.get("null_ratio")),
+                        "shared_column_name": True,
+                        "key_match_source": key_match_source,
+                    },
+                    "warnings": warnings,
+                    "status": "candidate",
+                }
+            )
         )
 
-    return sorted(candidates, key=lambda item: (item["parent_table_sql"], item["child_table_sql"]))
+    return (
+        sorted(candidates, key=lambda item: (item["parent_table_sql"], item["child_table_sql"])),
+        sorted(skipped, key=lambda item: (item["child_table_sql"], item["reason"])),
+    )
+
+
+def _infer_relationship_candidates(
+    tables: Sequence[_TableProfile],
+    *,
+    base_table: str,
+    key_sep: str,
+) -> list[dict[str, Any]]:
+    candidates, _skipped = _infer_relationship_candidates_with_audit(
+        tables,
+        base_table=base_table,
+        key_sep=key_sep,
+    )
+    return candidates
+
+
+def _build_dataset_audit(
+    *,
+    tables: Sequence[_TableProfile],
+    candidates: Sequence[Mapping[str, Any]],
+    skipped_candidates: Sequence[Mapping[str, Any]],
+) -> dict[str, Any]:
+    candidate_warnings = [
+        warning
+        for candidate in candidates
+        for warning in _warning_flags(candidate.get("warnings"))
+    ]
+    table_warnings = [
+        warning
+        for table in tables
+        for warning in _warning_flags(table.table.get("warnings"))
+    ]
+    column_warnings = [
+        warning
+        for table in tables
+        for column in table.columns
+        for warning in _warning_flags(column.get("warnings"))
+    ]
+    review_counts = _count_values(str(candidate.get("review_priority") or "") for candidate in candidates)
+    return {
+        "mode": "profile_only",
+        "data_scan": "not_performed",
+        "candidate_count": len(candidates),
+        "confidence_buckets": _count_values(str(candidate.get("confidence_bucket") or "") for candidate in candidates),
+        "review_priority_counts": review_counts,
+        "candidate_warning_count": len(candidate_warnings),
+        "warning_counts": _count_values(candidate_warnings),
+        "skipped_candidate_count": len(skipped_candidates),
+        "skip_reason_counts": _count_values(str(item.get("reason") or "") for item in skipped_candidates),
+        "skipped_candidates": list(skipped_candidates),
+        "table_warning_counts": _count_values(table_warnings),
+        "column_warning_counts": _count_values(column_warnings),
+        "value_overlap": {
+            "status": "not_computed",
+            "reason": "disabled_by_default",
+        },
+    }
 
 
 def build_dataset_profile(
@@ -307,7 +522,16 @@ def build_dataset_profile(
 
     tables = sorted(tables, key=lambda item: str(item.table.get("table_sql") or ""))
     base = str(base_table or _infer_base_table(tables, key_sep=key_sep))
-    candidates = _infer_relationship_candidates(tables, base_table=base, key_sep=key_sep)
+    candidates, skipped_candidates = _infer_relationship_candidates_with_audit(
+        tables,
+        base_table=base,
+        key_sep=key_sep,
+    )
+    audit = _build_dataset_audit(
+        tables=tables,
+        candidates=candidates,
+        skipped_candidates=skipped_candidates,
+    )
 
     return {
         "schema_version": DATASET_PROFILE_SCHEMA_VERSION,
@@ -324,6 +548,7 @@ def build_dataset_profile(
         },
         "tables": [table.table for table in tables],
         "relationship_candidates": candidates,
+        "audit": audit,
         "warnings": sorted(set(warnings)),
     }
 

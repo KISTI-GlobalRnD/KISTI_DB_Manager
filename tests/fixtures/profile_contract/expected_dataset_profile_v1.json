@@ -1,4 +1,26 @@
 {
+  "audit": {
+    "candidate_count": 1,
+    "candidate_warning_count": 0,
+    "column_warning_counts": {},
+    "confidence_buckets": {
+      "high": 1
+    },
+    "data_scan": "not_performed",
+    "mode": "profile_only",
+    "review_priority_counts": {
+      "accept_hint": 1
+    },
+    "skip_reason_counts": {},
+    "skipped_candidate_count": 0,
+    "skipped_candidates": [],
+    "table_warning_counts": {},
+    "value_overlap": {
+      "reason": "disabled_by_default",
+      "status": "not_computed"
+    },
+    "warning_counts": {}
+  },
   "backend": "python",
   "dataset": {
     "base_table": "works",
@@ -11,9 +33,11 @@
       "child_column_sql": "id",
       "child_table_sql": "works__authorships",
       "confidence": 0.8,
+      "confidence_bucket": "high",
       "evidence": {
         "child_null_ratio": 0.0,
         "child_table_original": "works__authorships",
+        "key_match_source": "exact_id",
         "parent_table_original": "works",
         "parent_unique_ratio": 1.0,
         "shared_column_name": true,
@@ -22,6 +46,8 @@
       "parent_column_sql": "id",
       "parent_table_sql": "works",
       "relationship_type": "naming_parent_child",
+      "review_priority": "accept_hint",
+      "risk_score": 0.2,
       "status": "candidate",
       "warnings": []
     }

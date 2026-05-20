@@ -125,6 +125,7 @@ def _cmd_review_schema_viewer(args: argparse.Namespace) -> int:
         sample_max_tables=int(args.sample_max_tables),
         description_profile_path=args.description_profile,
         dataset_profile_path=args.dataset_profile,
+        relationship_decisions_path=args.relationship_decisions,
     )
 
     print(f"out_dir: {res['out_dir']}")
@@ -232,6 +233,10 @@ def register_review_parser(sub) -> None:
     p_schema.add_argument(
         "--dataset-profile",
         help="Optional dataset_profile.json overlay; defaults to <PATH>/dataset_profile.json when present",
+    )
+    p_schema.add_argument(
+        "--relationship-decisions",
+        help="Optional relationship_decisions.json overlay; defaults to <PATH>/relationship_decisions.json when present",
     )
     p_schema.add_argument("--out", help="Output directory (default: <config>_schema_viewer)")
     p_schema.add_argument(

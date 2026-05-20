@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
-import csv
-import re
 import sys
 from pathlib import Path
 
@@ -17,36 +15,28 @@ def _repo_root() -> Path:
     return ROOT
 
 
-def _strip_numeric_prefix(name: str) -> str:
-    return re.sub(r"^[0-9]+__", "", name)
+def _load_parquet_table_info(path: Path) -> TableInfo:
+    try:
+        import pyarrow.parquet as pq
+    except Exception as exc:  # pragma: no cover
+        raise RuntimeError(
+            "pyarrow is required to read the OpenAlex parquet sample. "
+            "Run with: uv run --all-extras python examples/generate_data_sample_schema.py"
+        ) from exc
 
-
-def _load_desc_columns(path: Path) -> list[dict[str, str | None]] | None:
-    if not path.exists():
-        return None
-    with path.open("r", encoding="utf-8", newline="") as f:
-        reader = csv.reader(f)
-        header = next(reader, None)
-        if not header:
-            return None
-        type_idx = None
-        for i, h in enumerate(header):
-            if str(h).strip().lower() == "type":
-                type_idx = i
-                break
-
-        cols: list[dict[str, str | None]] = []
-        for row in reader:
-            if not row:
-                continue
-            name = str(row[0]).strip()
-            if not name:
-                continue
-            col_type = None
-            if type_idx is not None and type_idx < len(row):
-                col_type = str(row[type_idx]).strip() or None
-            cols.append({"name": name, "column_type": col_type})
-        return cols
+    parquet_file = pq.ParquetFile(path)
+    columns = [
+        {"name": field.name, "column_type": str(field.type)}
+        for field in parquet_file.schema_arrow
+    ]
+    table = path.stem
+    return TableInfo(
+        name_sql=table,
+        name_original=table,
+        row_count=int(parquet_file.metadata.num_rows),
+        row_count_exact=True,
+        columns=columns,
+    )
 
 
 def main() -> int:
@@ -54,34 +44,28 @@ def main() -> int:
     data_dir = root / "Data_Sample"
     out_dir = root / "Image"
 
-    ftrs = sorted(data_dir.glob("*.ftr"))
-    if not ftrs:
-        raise SystemExit(f"No .ftr files found under: {data_dir}")
+    parquet_files = sorted(data_dir.glob("*.parquet"))
+    if not parquet_files:
+        raise SystemExit(f"No .parquet files found under: {data_dir}")
 
-    table_infos: list[TableInfo] = []
-    candidates: list[str] = []
-    for ftr in ftrs:
-        stem = ftr.stem
-        table = _strip_numeric_prefix(stem)
-        candidates.append(table)
-
-        cols = _load_desc_columns(data_dir / f"{stem}_Desc.csv")
-        table_infos.append(TableInfo(name_sql=table, name_original=table, columns=cols))
-
-    # Heuristic: pick the first non -SUB table as base.
-    base_table = next((t for t in candidates if "-SUB" not in t), candidates[0])
+    table_infos = [_load_parquet_table_info(path) for path in parquet_files]
+    table_names = [ti.name_original or ti.name_sql for ti in table_infos]
 
     key_sep = "__"
+    base_table = min(table_names, key=lambda name: (name.count(key_sep), len(name), name))
+
     svg = render_simple_svg(base_table=base_table, table_infos=table_infos, key_sep=key_sep)
     mermaid = render_mermaid(base_table=base_table, table_infos=table_infos, key_sep=key_sep)
 
     out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / "Schema_WoS_Sample.svg").write_text(svg, encoding="utf-8")
-    (out_dir / "Schema_WoS_Sample.mmd").write_text(mermaid, encoding="utf-8")
+    svg_path = out_dir / "Schema_OpenAlex_Sample.svg"
+    mmd_path = out_dir / "Schema_OpenAlex_Sample.mmd"
+    svg_path.write_text(svg, encoding="utf-8")
+    mmd_path.write_text(mermaid, encoding="utf-8")
 
     print("Wrote:")
-    print(f"- {out_dir / 'Schema_WoS_Sample.svg'}")
-    print(f"- {out_dir / 'Schema_WoS_Sample.mmd'}")
+    print(f"- {svg_path}")
+    print(f"- {mmd_path}")
     print(f"base_table={base_table!r} tables={len(table_infos)}")
     return 0
 

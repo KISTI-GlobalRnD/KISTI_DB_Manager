@@ -66,6 +66,14 @@ def _cmd_tabular_profile_dataset(args: argparse.Namespace) -> int:
                 "profile_count": res.profile.get("source", {}).get("profile_count"),
                 "table_count": len(res.profile.get("tables", [])),
                 "relationship_candidate_count": len(res.profile.get("relationship_candidates", [])),
+                "relationship_review_priority_counts": (res.profile.get("audit") or {}).get(
+                    "review_priority_counts",
+                    {},
+                ),
+                "skipped_relationship_hint_count": (res.profile.get("audit") or {}).get(
+                    "skipped_candidate_count",
+                    0,
+                ),
                 "warnings": res.profile.get("warnings", []),
             },
             ensure_ascii=False,

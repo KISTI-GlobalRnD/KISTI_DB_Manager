@@ -12,6 +12,27 @@
   disconnected-table filtering.
 - Added dashed Schema Viewer candidate-only edges for Dataset Profile
   relationships between known tables that are not covered by structural naming.
+- Added Schema Viewer relationship review badges, key-source badges, and a
+  needs-review filter for Dataset Profile-backed relationship cards.
+- Added a Schema Viewer Relationship Catalog with relationship search,
+  priority/key-source filters, sorting, join SQL previews, and parent/child
+  table jump actions.
+- Added optional `relationship_decisions.json` overlays for Schema Viewer so
+  operator accepted/rejected relationship decisions stay separate from inferred
+  Dataset Profile evidence.
+- Added Schema Viewer auto-loading of per-table `*_profile.json` files
+  referenced by `dataset_profile.json`, so no-DB Dataset Profile views can show
+  column catalogs, type hints, and key/index badges.
+- Added profile-only Dataset Profile audit summaries for confidence buckets,
+  review priority, warning counts, skipped naming hints, and no-scan value
+  overlap status.
+- Added shared parent-key relationship hints for profile-only Dataset Profiles
+  so WoS-style `UID` parent-child tables are not dropped when `id` is absent.
+
+### Changed
+
+- Replaced the legacy WoS Feather `Data_Sample` fixture with a parquet-first
+  OpenAlex works sample and refreshed the sample schema generator/docs.
 
 ## 0.10.0 - 2026-05-20
 

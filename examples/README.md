@@ -116,16 +116,17 @@ kisti-db-manager review preview --config examples/configs/json_preview_wos_like.
 
 ![Raw vs Flatten diagram view (wos-like)](assets/json_wos_like_preview_diagram.png)
 
-## Data_Sample schema (WoS)
+## Data_Sample schema (OpenAlex)
 
-We also ship a real-ish multi-table sample under `Data_Sample/` (repo root).
+We also ship a real-ish multi-table OpenAlex parquet sample under
+`Data_Sample/` (repo root).
 
 Generate/update the schema image:
 
 ```bash
-python3 examples/generate_data_sample_schema.py
+uv run --all-extras python examples/generate_data_sample_schema.py
 ```
 
 Result:
 
-![WoS sample schema](../Image/Schema_WoS_Sample.png)
+![OpenAlex sample schema](../Image/Schema_OpenAlex_Sample.svg)

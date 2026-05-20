@@ -215,11 +215,53 @@ def _compact_relationship_candidate(candidate: Mapping[str, Any]) -> dict[str, A
         "child_column_sql",
         "relationship_type",
         "confidence",
+        "confidence_bucket",
+        "review_priority",
+        "risk_score",
         "status",
         "warnings",
         "evidence",
     ]
     return {key: candidate.get(key) for key in keys if key in candidate}
+
+
+def _normalize_relationship_decision(value: Any) -> str:
+    decision = str(value or "").strip().lower().replace("-", "_")
+    aliases = {
+        "accept": "accepted",
+        "accepted": "accepted",
+        "approve": "accepted",
+        "approved": "accepted",
+        "reject": "rejected",
+        "rejected": "rejected",
+        "deny": "rejected",
+        "denied": "rejected",
+        "review": "needs_review",
+        "needs_review": "needs_review",
+        "needs review": "needs_review",
+        "defer": "deferred",
+        "deferred": "deferred",
+        "hold": "deferred",
+    }
+    return aliases.get(decision, decision or "undecided")
+
+
+def _compact_relationship_decision(decision: Mapping[str, Any]) -> dict[str, Any]:
+    keys = [
+        "parent_table_sql",
+        "child_table_sql",
+        "parent_column_sql",
+        "child_column_sql",
+        "decision",
+        "reason",
+        "reviewed_by",
+        "reviewed_at",
+        "source",
+        "notes",
+    ]
+    item = {key: decision.get(key) for key in keys if key in decision}
+    item["decision"] = _normalize_relationship_decision(decision.get("decision") or decision.get("status"))
+    return item
 
 
 def _dataset_relationship_candidates(profile: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -235,11 +277,54 @@ def _dataset_relationship_candidates(profile: Mapping[str, Any] | None) -> list[
     return out
 
 
+def _relationship_decisions(decisions_profile: Mapping[str, Any] | None) -> list[dict[str, Any]]:
+    if not isinstance(decisions_profile, Mapping):
+        return []
+    raw = decisions_profile.get("decisions") or decisions_profile.get("relationship_decisions") or []
+    if not isinstance(raw, list):
+        return []
+    out: list[dict[str, Any]] = []
+    for decision in raw:
+        if not isinstance(decision, Mapping):
+            continue
+        item = _compact_relationship_decision(decision)
+        if item.get("parent_table_sql") and item.get("child_table_sql"):
+            out.append(item)
+    return out
+
+
 def _dataset_candidate_key(candidate: Mapping[str, Any]) -> tuple[str, str]:
     return (
         str(candidate.get("parent_table_sql") or ""),
         str(candidate.get("child_table_sql") or ""),
     )
+
+
+def _relationship_decision_key(decision: Mapping[str, Any]) -> tuple[str, str]:
+    return (
+        str(decision.get("parent_table_sql") or ""),
+        str(decision.get("child_table_sql") or ""),
+    )
+
+
+def _relationship_decision_summary(decisions: Iterable[Mapping[str, Any]]) -> dict[str, Any]:
+    decision_list = list(decisions)
+    counts = _count_values(
+        _normalize_relationship_decision(decision.get("decision"))
+        for decision in decision_list
+    )
+    status = ""
+    if len(counts) == 1:
+        status = next(iter(counts))
+    elif len(counts) > 1:
+        status = "mixed"
+    return {
+        "relationship_decisions": decision_list,
+        "relationship_decision_count": len(decision_list),
+        "relationship_decision_counts": counts,
+        "relationship_decision_status": status,
+        "relationship_operator_reviewed": len(decision_list) > 0,
+    }
 
 
 def _candidate_confidence(candidate: Mapping[str, Any]) -> float:
@@ -258,6 +343,76 @@ def _candidate_warning_count(candidate: Mapping[str, Any]) -> int:
     return 0
 
 
+def _count_values(values: Iterable[str]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for value in values:
+        key = str(value).strip()
+        if not key:
+            continue
+        counts[key] = int(counts.get(key, 0)) + 1
+    return {key: counts[key] for key in sorted(counts)}
+
+
+def _sum_count_dicts(items: Iterable[Mapping[str, Any]]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for item in items:
+        for key, value in item.items():
+            if not str(key).strip():
+                continue
+            try:
+                n = int(value or 0)
+            except Exception:
+                n = 0
+            counts[str(key)] = int(counts.get(str(key), 0)) + n
+    return {key: counts[key] for key in sorted(counts)}
+
+
+def _candidate_review_priority(candidate: Mapping[str, Any]) -> str:
+    priority = str(candidate.get("review_priority") or "").strip()
+    if priority:
+        return priority
+    if _candidate_warning_count(candidate) > 0:
+        return "review"
+    return ""
+
+
+def _review_priority_rank(priority: str) -> int:
+    return {
+        "accept_hint": 0,
+        "review": 1,
+        "high_risk": 2,
+    }.get(str(priority), -1)
+
+
+def _candidate_key_match_source(candidate: Mapping[str, Any]) -> str:
+    evidence = candidate.get("evidence")
+    if not isinstance(evidence, Mapping):
+        return ""
+    return str(evidence.get("key_match_source") or "").strip()
+
+
+def _relationship_candidate_summary(candidates: Sequence[Mapping[str, Any]]) -> dict[str, Any]:
+    priorities = [_candidate_review_priority(candidate) for candidate in candidates]
+    priority_counts = _count_values(priorities)
+    worst_priority = ""
+    if priority_counts:
+        worst_priority = max(priority_counts, key=_review_priority_rank)
+    key_sources = sorted(
+        {
+            key_source
+            for key_source in (_candidate_key_match_source(candidate) for candidate in candidates)
+            if key_source
+        }
+    )
+    return {
+        "relationship_review_priority": worst_priority,
+        "relationship_review_priority_counts": priority_counts,
+        "relationship_needs_review": worst_priority in {"review", "high_risk"},
+        "relationship_key_match_sources": key_sources,
+        "relationship_primary_key_match_source": key_sources[0] if key_sources else "",
+    }
+
+
 def _candidate_column_sql(candidate: Mapping[str, Any], key: str) -> str:
     value = str(candidate.get(key) or "").strip()
     return value or "id"
@@ -274,10 +429,27 @@ def _dataset_profile_summary(
     dataset = profile.get("dataset") if isinstance(profile.get("dataset"), Mapping) else {}
     tables = profile.get("tables") if isinstance(profile.get("tables"), list) else []
     candidates = _dataset_relationship_candidates(profile)
+    audit = profile.get("audit") if isinstance(profile.get("audit"), Mapping) else {}
     status_counts: dict[str, int] = {}
     for candidate in candidates:
         status = str(candidate.get("status") or "unknown")
         status_counts[status] = int(status_counts.get(status, 0)) + 1
+    audit_summary = {
+        key: audit.get(key)
+        for key in (
+            "mode",
+            "data_scan",
+            "candidate_count",
+            "confidence_buckets",
+            "review_priority_counts",
+            "candidate_warning_count",
+            "warning_counts",
+            "skipped_candidate_count",
+            "skip_reason_counts",
+            "value_overlap",
+        )
+        if key in audit
+    }
     return {
         "schema_version": profile.get("schema_version"),
         "backend": profile.get("backend"),
@@ -289,7 +461,25 @@ def _dataset_profile_summary(
         "table_count": len(tables),
         "relationship_candidate_count": len(candidates),
         "relationship_candidate_status_counts": status_counts,
+        "audit": audit_summary,
         "warnings": profile.get("warnings") or [],
+    }
+
+
+def _relationship_decisions_profile_summary(
+    decisions_profile: Mapping[str, Any] | None,
+    *,
+    source_file: str | None = None,
+) -> dict[str, Any] | None:
+    if not isinstance(decisions_profile, Mapping):
+        return None
+    decisions = _relationship_decisions(decisions_profile)
+    return {
+        "schema_version": decisions_profile.get("schema_version"),
+        "source_file": source_file or "",
+        "decision_count": len(decisions),
+        "decision_counts": _count_values(decision.get("decision") for decision in decisions),
+        "warnings": decisions_profile.get("warnings") or [],
     }
 
 
@@ -479,6 +669,10 @@ def build_schema_viewer_payload(
     description_profile: Mapping[str, Any] | None = None,
     dataset_profile: Mapping[str, Any] | None = None,
     dataset_profile_path: str | None = None,
+    relationship_decisions: Mapping[str, Any] | None = None,
+    relationship_decisions_path: str | None = None,
+    dataset_table_profile_count: int = 0,
+    dataset_table_profile_column_count: int = 0,
 ) -> dict[str, Any]:
     ddls_by_sql = collect_schema_ddls_by_sql(report=report, table_infos=table_infos)
     issue_counts_by_sql = _collect_issue_counts_by_sql(issues=issues, table_infos=table_infos)
@@ -499,8 +693,16 @@ def build_schema_viewer_payload(
         key = _dataset_candidate_key(candidate)
         if all(key):
             dataset_candidates_by_edge.setdefault(key, []).append(candidate)
+    relationship_decision_items = _relationship_decisions(relationship_decisions)
+    relationship_decisions_by_edge: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for decision in relationship_decision_items:
+        key = _relationship_decision_key(decision)
+        if all(key):
+            relationship_decisions_by_edge.setdefault(key, []).append(decision)
     matched_dataset_candidate_count = 0
     matched_dataset_candidate_keys: set[tuple[str, str]] = set()
+    matched_relationship_decision_count = 0
+    matched_relationship_decision_keys: set[tuple[str, str]] = set()
     for parent, child, label in edges:
         parent_info = info_by_graph_name.get(parent)
         child_info = info_by_graph_name.get(child)
@@ -528,6 +730,11 @@ def build_schema_viewer_payload(
             "relationship_type": "structural_naming",
             "relationship_candidate_count": 0,
             "relationship_warning_count": 0,
+            "relationship_review_priority": "",
+            "relationship_review_priority_counts": {},
+            "relationship_needs_review": False,
+            "relationship_key_match_sources": [],
+            "relationship_primary_key_match_source": "",
         }
         relationship_candidates = dataset_candidates_by_edge.get((parent_sql, child_sql)) or []
         if relationship_candidates:
@@ -553,14 +760,22 @@ def build_schema_viewer_payload(
                 _candidate_warning_count(candidate)
                 for candidate in relationship_candidates
             )
+            item["parent_column_sql"] = _candidate_column_sql(primary_candidate, "parent_column_sql")
+            item["child_column_sql"] = _candidate_column_sql(primary_candidate, "child_column_sql")
+            item.update(_relationship_candidate_summary(relationship_candidates))
             item["join_sql"] = relationship_join_sql(
                 parent_sql=parent_sql,
                 child_sql=child_sql,
-                parent_column_sql=_candidate_column_sql(primary_candidate, "parent_column_sql"),
-                child_column_sql=_candidate_column_sql(primary_candidate, "child_column_sql"),
+                parent_column_sql=item["parent_column_sql"],
+                child_column_sql=item["child_column_sql"],
             )
             matched_dataset_candidate_count += len(relationship_candidates)
             matched_dataset_candidate_keys.add((parent_sql, child_sql))
+        edge_decisions = relationship_decisions_by_edge.get((parent_sql, child_sql)) or []
+        if edge_decisions:
+            item.update(_relationship_decision_summary(edge_decisions))
+            matched_relationship_decision_count += len(edge_decisions)
+            matched_relationship_decision_keys.add((parent_sql, child_sql))
         edges_payload.append(item)
         parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
         child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
@@ -610,7 +825,15 @@ def build_schema_viewer_payload(
                 _candidate_warning_count(candidate)
                 for candidate in relationship_candidates
             ),
+            "parent_column_sql": _candidate_column_sql(primary_candidate, "parent_column_sql"),
+            "child_column_sql": _candidate_column_sql(primary_candidate, "child_column_sql"),
         }
+        item.update(_relationship_candidate_summary(relationship_candidates))
+        edge_decisions = relationship_decisions_by_edge.get((parent_sql, child_sql)) or []
+        if edge_decisions:
+            item.update(_relationship_decision_summary(edge_decisions))
+            matched_relationship_decision_count += len(edge_decisions)
+            matched_relationship_decision_keys.add((parent_sql, child_sql))
         edges_payload.append(item)
         parent_edges_by_child_sql.setdefault(child_sql, []).append(item)
         child_edges_by_parent_sql.setdefault(parent_sql, []).append(item)
@@ -625,6 +848,16 @@ def build_schema_viewer_payload(
     profile_columns_by_sql = _description_profile_columns_by_sql(description_profile)
     description_profile_summary = _description_profile_summary(description_profile)
     dataset_profile_summary = _dataset_profile_summary(dataset_profile, source_file=dataset_profile_path)
+    relationship_decisions_summary = _relationship_decisions_profile_summary(
+        relationship_decisions,
+        source_file=relationship_decisions_path,
+    )
+    if dataset_profile_summary is not None:
+        dataset_profile_summary = {
+            **dataset_profile_summary,
+            "table_profile_count_loaded": int(dataset_table_profile_count or 0),
+            "table_profile_column_count_loaded": int(dataset_table_profile_column_count or 0),
+        }
     for ti in table_infos:
         graph_name = ti.name_original or ti.name_sql
         depth = table_depth(base_table_graph, key_sep, graph_name)
@@ -654,6 +887,25 @@ def build_schema_viewer_payload(
         display_short = table_display_label(base_table_graph, key_sep, graph_name)
         parent_edges = parent_edges_by_child_sql.get(ti.name_sql) or []
         child_edges = child_edges_by_parent_sql.get(ti.name_sql) or []
+        relationship_edges = parent_edges + child_edges
+        relationship_priority_counts = _sum_count_dicts(
+            edge.get("relationship_review_priority_counts") or {}
+            for edge in relationship_edges
+            if isinstance(edge.get("relationship_review_priority_counts"), Mapping)
+        )
+        relationship_key_sources = sorted(
+            {
+                str(source)
+                for edge in relationship_edges
+                for source in edge.get("relationship_key_match_sources", [])
+                if str(source)
+            }
+        )
+        relationship_decision_counts = _sum_count_dicts(
+            edge.get("relationship_decision_counts") or {}
+            for edge in relationship_edges
+            if isinstance(edge.get("relationship_decision_counts"), Mapping)
+        )
         if parent_edges:
             join_sql = str(parent_edges[0].get("join_sql") or "")
         elif ti.name_sql != base_table_sql:
@@ -689,12 +941,21 @@ def build_schema_viewer_payload(
             "relationship_count": len(parent_edges) + len(child_edges),
             "relationship_candidate_count": sum(
                 int(edge.get("relationship_candidate_count") or 0)
-                for edge in parent_edges + child_edges
+                for edge in relationship_edges
             ),
             "relationship_warning_count": sum(
                 int(edge.get("relationship_warning_count") or 0)
-                for edge in parent_edges + child_edges
+                for edge in relationship_edges
             ),
+            "relationship_review_priority_counts": relationship_priority_counts,
+            "relationship_needs_review_count": int(relationship_priority_counts.get("review") or 0)
+            + int(relationship_priority_counts.get("high_risk") or 0),
+            "relationship_key_match_sources": relationship_key_sources,
+            "relationship_decision_count": sum(
+                int(edge.get("relationship_decision_count") or 0)
+                for edge in relationship_edges
+            ),
+            "relationship_decision_counts": relationship_decision_counts,
             "is_disconnected": not parent_edges and not child_edges,
             "issue_error_count": int(issue_counts.get("error") or 0),
             "issue_warning_count": int(issue_counts.get("warning") or 0),
@@ -715,15 +976,39 @@ def build_schema_viewer_payload(
                 " ".join(str(ix.get("index_name") or "") for ix in idxs),
                 " ".join(
                     str(candidate.get("relationship_type") or "")
-                    for edge in parent_edges + child_edges
+                    for edge in relationship_edges
                     for candidate in edge.get("relationship_candidates", [])
                     if isinstance(candidate, Mapping)
                 ),
                 " ".join(
-                    str(candidate.get("warnings") or "")
-                    for edge in parent_edges + child_edges
+                    str(candidate.get("review_priority") or "")
+                    for edge in relationship_edges
                     for candidate in edge.get("relationship_candidates", [])
                     if isinstance(candidate, Mapping)
+                ),
+                " ".join(
+                    str((candidate.get("evidence") or {}).get("key_match_source") or "")
+                    for edge in relationship_edges
+                    for candidate in edge.get("relationship_candidates", [])
+                    if isinstance(candidate, Mapping) and isinstance(candidate.get("evidence"), Mapping)
+                ),
+                " ".join(
+                    str(candidate.get("warnings") or "")
+                    for edge in relationship_edges
+                    for candidate in edge.get("relationship_candidates", [])
+                    if isinstance(candidate, Mapping)
+                ),
+                " ".join(
+                    str(decision.get("decision") or "")
+                    for edge in relationship_edges
+                    for decision in edge.get("relationship_decisions", [])
+                    if isinstance(decision, Mapping)
+                ),
+                " ".join(
+                    str(decision.get("reason") or "")
+                    for edge in relationship_edges
+                    for decision in edge.get("relationship_decisions", [])
+                    if isinstance(decision, Mapping)
                 ),
             ]
         ).lower()
@@ -796,6 +1081,28 @@ def build_schema_viewer_payload(
                 if _dataset_candidate_key(candidate) not in matched_dataset_candidate_keys
             ],
         }
+    relationship_decisions_payload = None
+    if relationship_decisions_summary is not None:
+        meta_payload["relationship_decisions"] = relationship_decisions_summary
+        summary_payload.update(
+            {
+                "relationship_decision_count": len(relationship_decision_items),
+                "relationship_decisions_on_edges": matched_relationship_decision_count,
+                "unmatched_relationship_decision_count": max(
+                    0,
+                    len(relationship_decision_items) - matched_relationship_decision_count,
+                ),
+                "relationship_decision_counts": relationship_decisions_summary.get("decision_counts") or {},
+            }
+        )
+        relationship_decisions_payload = {
+            **relationship_decisions_summary,
+            "unmatched_relationship_decisions": [
+                decision
+                for decision in relationship_decision_items
+                if _relationship_decision_key(decision) not in matched_relationship_decision_keys
+            ],
+        }
 
     result = {
         "meta": meta_payload,
@@ -807,4 +1114,6 @@ def build_schema_viewer_payload(
     }
     if dataset_profile_payload is not None:
         result["dataset_profile"] = dataset_profile_payload
+    if relationship_decisions_payload is not None:
+        result["relationship_decisions"] = relationship_decisions_payload
     return result

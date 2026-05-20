@@ -58,17 +58,60 @@ kisti-db-manager tabular profile-dataset \
 
 Candidate relationships are not confirmed foreign keys. Operators should treat
 them as review hints until they are backed by a DB constraint or an explicit
-operator decision. v1 uses profile metadata and table naming paths only; bounded
-value-overlap evidence is intentionally left for a later opt-in phase. The v1
-design contract is documented in [Dataset Profile v1](../design/dataset-profile-v1.md).
+operator decision. v1 uses profile metadata and table naming paths only: it
+prefers `id`-to-`id`, then falls back to an exact shared parent key candidate
+such as WoS-style `UID`. Bounded value-overlap evidence is intentionally left
+for a later opt-in phase. The v1 design contract is documented in
+[Dataset Profile v1](../design/dataset-profile-v1.md).
+The artifact includes a profile-only `audit` block with confidence buckets,
+review-priority counts, warning counts, skipped naming hints, and an explicit
+`value_overlap.status=not_computed` marker. This audit does not read source data.
 
 `review schema-viewer` can overlay this artifact through `--dataset-profile` or
-auto-detect `<PATH>/dataset_profile.json`. The viewer attaches candidate
-confidence, status, warnings, and evidence to matching relationship cards. Its
-overview panels also summarize table roles, candidate-backed relationships,
-unmatched candidates, relation warnings, and disconnected non-base tables. When
-both endpoint tables exist but no structural naming edge covers a candidate,
-the SVG and Mermaid outputs draw it as a dashed candidate edge.
+auto-detect `<PATH>/dataset_profile.json`. When the dataset profile references
+per-table `*_profile.json` paths, the viewer loads them too, so no-DB schema
+views can still show column catalogs, type hints, key/index recommendations,
+and warning badges. The viewer attaches candidate confidence, review priority,
+key-match source, status, warnings, and evidence to matching relationship
+cards. Its overview panels also summarize table roles, candidate-backed
+relationships, accepted hints, review-needed relationships, key sources,
+unmatched candidates, relation warnings, and disconnected non-base tables.
+Tables can be filtered to review-needed relationship hints. The Relationship
+Catalog lists parent-child routes, join-column hints, review priority, key
+source, warnings, candidate evidence, and join SQL in one searchable review
+surface. When both endpoint
+tables exist but no structural naming edge covers a candidate, the SVG and
+Mermaid outputs draw it as a dashed candidate edge.
+
+## Relationship Decisions
+
+`relationship_decisions.json` is an optional operator overlay for relationship
+reviews. It should not replace or rewrite `dataset_profile.json`; it records
+human decisions about inferred relationship candidates so later profile
+regeneration does not erase review state.
+
+```json
+{
+  "schema_version": "1.0",
+  "decisions": [
+    {
+      "parent_table_sql": "works",
+      "child_table_sql": "works__authorships",
+      "parent_column_sql": "id",
+      "child_column_sql": "id",
+      "decision": "accepted",
+      "reason": "Child rows carry the parent work id.",
+      "reviewed_by": "operator",
+      "reviewed_at": "2026-05-20"
+    }
+  ]
+}
+```
+
+Supported decision values are normalized to `accepted`, `rejected`,
+`needs_review`, `deferred`, or `undecided`. `review schema-viewer` can overlay
+this file through `--relationship-decisions` or auto-detect
+`<PATH>/relationship_decisions.json`.
 
 ## Parquet Artifacts
 

@@ -193,6 +193,8 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     }
     .mini-badge.good { background: #ecfdf5; border-color: #99f6e4; color: var(--accent-strong); }
     .mini-badge.warn { background: var(--warn-soft); border-color: #fed7aa; color: var(--warn); }
+    .mini-badge.risk { background: var(--error-soft); border-color: #fecaca; color: var(--error); }
+    .mini-badge.key { background: #eef2ff; border-color: #c7d2fe; color: #3730a3; }
     .main { display: grid; gap: 22px; }
     .section { scroll-margin-top: 120px; }
     .section-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
@@ -281,6 +283,64 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       background: #f8fbfa;
       padding: 12px;
     }
+    .relationship-card.needs-review {
+      border-color: #fed7aa;
+      background: #fffaf0;
+    }
+    .relationship-catalog-toolbar {
+      display: grid;
+      grid-template-columns: minmax(220px, 1fr) repeat(3, minmax(150px, 190px));
+      gap: 10px;
+      margin-bottom: 12px;
+    }
+    .relationship-catalog-toolbar input,
+    .relationship-catalog-toolbar select {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 10px 12px;
+      background: #fff;
+      color: var(--ink);
+      width: 100%;
+    }
+    .relationship-catalog { display: grid; gap: 12px; }
+    .relationship-catalog-card {
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      background: rgba(255,255,255,0.96);
+      padding: 14px;
+      box-shadow: var(--shadow);
+    }
+    .relationship-catalog-card.needs-review {
+      border-color: #fed7aa;
+      background: #fffaf0;
+    }
+    .relationship-catalog-card.selected {
+      border-color: rgba(15, 118, 110, 0.5);
+      box-shadow: 0 24px 60px rgba(15, 118, 110, 0.12);
+    }
+    .relationship-route {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      font-size: 13px;
+      font-weight: 800;
+    }
+    .relationship-route code { overflow-wrap: anywhere; }
+    .relationship-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
+    .link-button {
+      border: 1px solid var(--line);
+      background: #f7faf8;
+      border-radius: 999px;
+      padding: 5px 9px;
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--muted);
+    }
+    .link-button:hover {
+      border-color: rgba(15, 118, 110, 0.35);
+      color: var(--ink);
+    }
     .relationship-title {
       display: flex;
       justify-content: space-between;
@@ -352,11 +412,14 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       .sidebar { position: static; }
       .stats-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .overview-grid { grid-template-columns: 1fr; }
+      .relationship-catalog-toolbar { grid-template-columns: 1fr 1fr; }
     }
     @media (max-width: 720px) {
       .hero { padding: 24px 18px 18px; }
       .layout { padding: 18px; }
       .stats-grid { grid-template-columns: 1fr; }
+      .relationship-catalog-toolbar { grid-template-columns: 1fr; }
+      .relationship-route { grid-template-columns: 1fr; }
     }
   </style>
 </head>
@@ -381,6 +444,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           <a href=\"#overview\">Overview</a>
           <a href=\"#diagram\">Diagram</a>
           <a href=\"#groups\">Logical Groups</a>
+          <a href=\"#relationships\">Relationships</a>
           <a href=\"#catalog\">Table Catalog</a>
         </div>
       </div>
@@ -397,6 +461,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           </select>
           <label><input id=\"only-flagged\" type=\"checkbox\" /> only flagged</label>
           <label><input id=\"only-nested\" type=\"checkbox\" /> nested only</label>
+          <label><input id=\"only-needs-review\" type=\"checkbox\" /> needs review</label>
           <label><input id=\"only-relation-warnings\" type=\"checkbox\" /> relation warnings</label>
           <label><input id=\"only-disconnected\" type=\"checkbox\" /> disconnected</label>
         </div>
@@ -449,6 +514,37 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
         <div id=\"group-grid\" class=\"group-grid\"></div>
       </section>
 
+      <section id=\"relationships\" class=\"section\">
+        <div class=\"section-head\">
+          <div>
+            <h2>Relationship Catalog</h2>
+            <p>관계 후보를 parent-child, join key, review priority, evidence 기준으로 검토합니다.</p>
+          </div>
+          <div class=\"muted\" id=\"relationship-count\"></div>
+        </div>
+        <div class=\"relationship-catalog-toolbar\">
+          <input id=\"relationship-search\" type=\"search\" placeholder=\"Search relationships, keys, warnings…\" />
+          <select id=\"relationship-priority\">
+            <option value=\"all\">Priority: all</option>
+            <option value=\"needs_review\">Needs review</option>
+            <option value=\"accept_hint\">Accept hints</option>
+            <option value=\"review\">Review</option>
+            <option value=\"high_risk\">High risk</option>
+            <option value=\"structural\">Structural only</option>
+          </select>
+          <select id=\"relationship-key-source\">
+            <option value=\"all\">Key source: all</option>
+          </select>
+          <select id=\"relationship-sort\">
+            <option value=\"priority\">Sort: priority</option>
+            <option value=\"confidence\">Sort: confidence</option>
+            <option value=\"warnings\">Sort: warnings</option>
+            <option value=\"parent\">Sort: parent</option>
+          </select>
+        </div>
+        <div id=\"relationship-catalog\" class=\"relationship-catalog\"></div>
+      </section>
+
       <section id=\"catalog\" class=\"section\">
         <div class=\"section-head\">
           <div>
@@ -464,10 +560,17 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
   <script>
     const PAYLOAD = __PAYLOAD__;
     const tables = Array.isArray(PAYLOAD.tables) ? PAYLOAD.tables.slice() : [];
+    const edges = Array.isArray(PAYLOAD.edges) ? PAYLOAD.edges.slice() : [];
     const groups = Array.isArray(PAYLOAD.groups) ? PAYLOAD.groups.slice() : [];
     const statsGrid = document.getElementById('stats-grid');
     const relationalOverview = document.getElementById('relational-overview');
     const groupGrid = document.getElementById('group-grid');
+    const relationshipCatalog = document.getElementById('relationship-catalog');
+    const relationshipCount = document.getElementById('relationship-count');
+    const relationshipSearch = document.getElementById('relationship-search');
+    const relationshipPriority = document.getElementById('relationship-priority');
+    const relationshipKeySource = document.getElementById('relationship-key-source');
+    const relationshipSort = document.getElementById('relationship-sort');
     const tableList = document.getElementById('table-list');
     const catalogGrid = document.getElementById('catalog-grid');
     const tableCount = document.getElementById('table-count');
@@ -475,6 +578,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     const sortSelect = document.getElementById('table-sort');
     const onlyFlagged = document.getElementById('only-flagged');
     const onlyNested = document.getElementById('only-nested');
+    const onlyNeedsReview = document.getElementById('only-needs-review');
     const onlyRelationWarnings = document.getElementById('only-relation-warnings');
     const onlyDisconnected = document.getElementById('only-disconnected');
     const diagramStatus = document.getElementById('diagram-status');
@@ -517,6 +621,74 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       return (table.issue_error_count || 0) > 0 || (table.issue_warning_count || 0) > 0 || (table.quarantine_count || 0) > 0;
     }
 
+    function reviewPriorityClass(value) {
+      const priority = String(value || '');
+      if (priority === 'high_risk') return 'risk';
+      if (priority === 'review') return 'warn';
+      if (priority === 'accept_hint') return 'good';
+      return '';
+    }
+
+    function reviewPriorityRank(value) {
+      const priority = String(value || '');
+      if (priority === 'high_risk') return 0;
+      if (priority === 'review') return 1;
+      if (priority === 'accept_hint') return 2;
+      if (priority === 'structural') return 3;
+      return 4;
+    }
+
+    function reviewPriorityLabel(value) {
+      const priority = String(value || '').replace(/_/g, ' ');
+      return priority || 'unreviewed';
+    }
+
+    function relationshipDecisionClass(value) {
+      const decision = String(value || '');
+      if (decision === 'accepted') return 'good';
+      if (decision === 'rejected') return 'risk';
+      if (decision === 'needs_review' || decision === 'deferred') return 'warn';
+      return '';
+    }
+
+    function relationshipDecisionLabel(value) {
+      const decision = String(value || '').replace(/_/g, ' ');
+      return decision || 'undecided';
+    }
+
+    function edgePriority(edge) {
+      const priority = String(edge.relationship_review_priority || '');
+      if (priority) return priority;
+      if (Number(edge.relationship_candidate_count || 0) > 0) return 'candidate';
+      return 'structural';
+    }
+
+    function edgeKeySources(edge) {
+      return Array.isArray(edge.relationship_key_match_sources)
+        ? edge.relationship_key_match_sources.map((item) => String(item || '').trim()).filter(Boolean)
+        : [];
+    }
+
+    function edgeNeedsReview(edge) {
+      const priority = edgePriority(edge);
+      return priority === 'review' || priority === 'high_risk' || Boolean(edge.relationship_needs_review);
+    }
+
+    function tableNeedsReview(table) {
+      return Number(table.relationship_needs_review_count || 0) > 0;
+    }
+
+    function summarizeValues(values) {
+      const counts = {};
+      for (const raw of values || []) {
+        const value = String(raw || '').trim();
+        if (!value) continue;
+        counts[value] = Number(counts[value] || 0) + 1;
+      }
+      const entries = Object.keys(counts).sort().map((key) => key + ' ' + formatInt(counts[key]));
+      return entries.length ? entries.join(', ') : 'n/a';
+    }
+
     function badgeHtml(table) {
       const items = [];
       items.push('<span class="badge ' + escHtml(table.role) + '">' + escHtml(table.role_label) + '</span>');
@@ -531,6 +703,28 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       }
       if ((table.relationship_candidate_count || 0) > 0) {
         items.push('<span class="badge">candidate ' + formatInt(table.relationship_candidate_count) + '</span>');
+      }
+      const priorityCounts = table.relationship_review_priority_counts && typeof table.relationship_review_priority_counts === 'object'
+        ? table.relationship_review_priority_counts
+        : {};
+      if (Number(priorityCounts.high_risk || 0) > 0) {
+        items.push('<span class="badge error">high risk ' + formatInt(priorityCounts.high_risk) + '</span>');
+      }
+      if (Number(priorityCounts.review || 0) > 0) {
+        items.push('<span class="badge warn">review ' + formatInt(priorityCounts.review) + '</span>');
+      }
+      if (Number(priorityCounts.accept_hint || 0) > 0 && Number(table.relationship_needs_review_count || 0) === 0) {
+        items.push('<span class="badge base">accepted hints ' + formatInt(priorityCounts.accept_hint) + '</span>');
+      }
+      if (Array.isArray(table.relationship_key_match_sources) && table.relationship_key_match_sources.length) {
+        items.push('<span class="badge">key ' + escHtml(table.relationship_key_match_sources.join(', ')) + '</span>');
+      }
+      const decisionCounts = table.relationship_decision_counts && typeof table.relationship_decision_counts === 'object'
+        ? table.relationship_decision_counts
+        : {};
+      if (Number(table.relationship_decision_count || 0) > 0) {
+        const decisionBits = Object.keys(decisionCounts).sort().map((key) => key.replace(/_/g, ' ') + ' ' + formatInt(decisionCounts[key]));
+        items.push('<span class="badge">decision ' + escHtml(decisionBits.join(', ')) + '</span>');
       }
       if ((table.relationship_warning_count || 0) > 0) {
         items.push('<span class="badge warn">relation warning ' + formatInt(table.relationship_warning_count) + '</span>');
@@ -555,6 +749,9 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       if (onlyNested.checked) {
         filtered = filtered.filter((table) => String(table.role) !== 'base');
       }
+      if (onlyNeedsReview.checked) {
+        filtered = filtered.filter((table) => tableNeedsReview(table));
+      }
       if (onlyRelationWarnings.checked) {
         filtered = filtered.filter((table) => Number(table.relationship_warning_count || 0) > 0);
       }
@@ -576,6 +773,99 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           return String(a.name_sql).localeCompare(String(b.name_sql));
         }
         return (Number(a.depth || 0) - Number(b.depth || 0)) || String(a.name_sql).localeCompare(String(b.name_sql));
+      });
+      return filtered;
+    }
+
+    function relationshipSearchBlob(edge) {
+      const candidates = Array.isArray(edge.relationship_candidates) ? edge.relationship_candidates : [];
+      const candidateBits = [];
+      for (const candidate of candidates) {
+        if (!candidate || typeof candidate !== 'object') continue;
+        const evidence = candidate.evidence && typeof candidate.evidence === 'object' ? candidate.evidence : {};
+        candidateBits.push(
+          candidate.relationship_type,
+          candidate.review_priority,
+          candidate.confidence_bucket,
+          candidate.parent_column_sql,
+          candidate.child_column_sql,
+          Array.isArray(candidate.warnings) ? candidate.warnings.join(' ') : candidate.warnings,
+          evidence.source,
+          evidence.key_match_source
+        );
+      }
+      const decisions = Array.isArray(edge.relationship_decisions) ? edge.relationship_decisions : [];
+      for (const decision of decisions) {
+        if (!decision || typeof decision !== 'object') continue;
+        candidateBits.push(
+          decision.decision,
+          decision.reason,
+          decision.reviewed_by,
+          decision.reviewed_at,
+          decision.parent_column_sql,
+          decision.child_column_sql
+        );
+      }
+      return [
+        edge.parent_sql,
+        edge.child_sql,
+        edge.parent_display,
+        edge.child_display,
+        edge.label,
+        edge.relationship_source,
+        edge.relationship_status,
+        edge.relationship_type,
+        edge.relationship_review_priority,
+        edge.relationship_decision_status,
+        edge.parent_column_sql,
+        edge.child_column_sql,
+        edge.join_sql,
+        edgeKeySources(edge).join(' '),
+        candidateBits.join(' '),
+      ].map((item) => String(item || '')).join(' ').toLowerCase();
+    }
+
+    function currentRelationships(filteredTables) {
+      const visible = new Set(filteredTables.map((table) => String(table.name_sql)));
+      const query = String(relationshipSearch.value || '').trim().toLowerCase();
+      const priority = String(relationshipPriority.value || 'all');
+      const keySource = String(relationshipKeySource.value || 'all');
+      let filtered = edges.filter((edge) => edgeTouchesVisible(edge, visible));
+      if (query) {
+        filtered = filtered.filter((edge) => relationshipSearchBlob(edge).includes(query));
+      }
+      if (priority === 'needs_review') {
+        filtered = filtered.filter((edge) => edgeNeedsReview(edge));
+      } else if (priority === 'structural') {
+        filtered = filtered.filter((edge) => Number(edge.relationship_candidate_count || 0) === 0);
+      } else if (priority !== 'all') {
+        filtered = filtered.filter((edge) => edgePriority(edge) === priority);
+      }
+      if (keySource === 'none') {
+        filtered = filtered.filter((edge) => edgeKeySources(edge).length === 0);
+      } else if (keySource !== 'all') {
+        filtered = filtered.filter((edge) => edgeKeySources(edge).includes(keySource));
+      }
+      const sortKey = String(relationshipSort.value || 'priority');
+      filtered.sort((a, b) => {
+        if (sortKey === 'confidence') {
+          return (Number(b.relationship_confidence_max || 0) - Number(a.relationship_confidence_max || 0))
+            || String(a.parent_sql).localeCompare(String(b.parent_sql))
+            || String(a.child_sql).localeCompare(String(b.child_sql));
+        }
+        if (sortKey === 'warnings') {
+          return (Number(b.relationship_warning_count || 0) - Number(a.relationship_warning_count || 0))
+            || reviewPriorityRank(edgePriority(a)) - reviewPriorityRank(edgePriority(b))
+            || String(a.parent_sql).localeCompare(String(b.parent_sql));
+        }
+        if (sortKey === 'parent') {
+          return String(a.parent_sql).localeCompare(String(b.parent_sql))
+            || String(a.child_sql).localeCompare(String(b.child_sql));
+        }
+        return reviewPriorityRank(edgePriority(a)) - reviewPriorityRank(edgePriority(b))
+          || Number(b.relationship_warning_count || 0) - Number(a.relationship_warning_count || 0)
+          || String(a.parent_sql).localeCompare(String(b.parent_sql))
+          || String(a.child_sql).localeCompare(String(b.child_sql));
       });
       return filtered;
     }
@@ -642,27 +932,57 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       }, {});
       const candidateEdges = visibleEdges.filter((edge) => Number(edge.relationship_candidate_count || 0) > 0);
       const relationWarnings = visibleEdges.reduce((acc, edge) => acc + Number(edge.relationship_warning_count || 0), 0);
+      const keySources = [];
+      for (const edge of visibleEdges) {
+        if (Array.isArray(edge.relationship_key_match_sources)) {
+          keySources.push(...edge.relationship_key_match_sources);
+        }
+      }
       const disconnected = filtered.filter((table) => table.is_disconnected && String(table.role) !== 'base');
       const datasetProfile = PAYLOAD.dataset_profile && typeof PAYLOAD.dataset_profile === 'object' ? PAYLOAD.dataset_profile : null;
+      const relationshipDecisions = PAYLOAD.relationship_decisions && typeof PAYLOAD.relationship_decisions === 'object' ? PAYLOAD.relationship_decisions : null;
+      const audit = datasetProfile && datasetProfile.audit && typeof datasetProfile.audit === 'object' ? datasetProfile.audit : null;
+      const reviewPriorityCounts = audit && audit.review_priority_counts && typeof audit.review_priority_counts === 'object'
+        ? audit.review_priority_counts
+        : {};
+      const needsReview = Number(reviewPriorityCounts.review || 0) + Number(reviewPriorityCounts.high_risk || 0);
       const unmatchedCandidates = datasetProfile
         ? Number((datasetProfile.unmatched_relationship_candidates || []).length || 0)
         : 0;
+      const relationshipRows = [
+        { label: 'Visible relationships', value: formatInt(visibleEdges.length) },
+        { label: 'Candidate-backed', value: formatInt(candidateEdges.length) },
+        { label: 'Relation warnings', value: formatInt(relationWarnings) },
+      ];
+      if (audit) {
+        relationshipRows.push({ label: 'Accept hints', value: formatInt(reviewPriorityCounts.accept_hint || 0) });
+        relationshipRows.push({ label: 'Needs review', value: formatInt(needsReview) });
+        relationshipRows.push({ label: 'Key sources', value: summarizeValues(keySources) });
+      }
+      if (relationshipDecisions) {
+        const decisionCounts = relationshipDecisions.decision_counts && typeof relationshipDecisions.decision_counts === 'object'
+          ? relationshipDecisions.decision_counts
+          : {};
+        const decisionValues = Object.keys(decisionCounts).flatMap((key) => Array(Number(decisionCounts[key] || 0)).fill(key));
+        relationshipRows.push({ label: 'Operator decisions', value: formatInt(relationshipDecisions.decision_count || 0) });
+        relationshipRows.push({ label: 'Decision status', value: summarizeValues(decisionValues) });
+      }
+      const coverageRows = [
+        { label: 'Disconnected non-base tables', value: formatInt(disconnected.length) },
+        { label: 'Unmatched candidates', value: formatInt(unmatchedCandidates) },
+        { label: 'Dataset overlay', value: datasetProfile ? 'on' : 'off' },
+      ];
+      if (audit) {
+        coverageRows.push({ label: 'Skipped hints', value: formatInt(audit.skipped_candidate_count || 0) });
+      }
       relationalOverview.innerHTML = [
         renderOverviewPanel('Table Roles', [
           { label: 'Base tables', value: formatInt(roleCounts.base || 0) },
           { label: 'Sub tables', value: formatInt(roleCounts.sub || 0) },
           { label: 'Nested tables', value: formatInt(roleCounts.nested || 0) },
         ]),
-        renderOverviewPanel('Relationship Evidence', [
-          { label: 'Visible relationships', value: formatInt(visibleEdges.length) },
-          { label: 'Candidate-backed', value: formatInt(candidateEdges.length) },
-          { label: 'Relation warnings', value: formatInt(relationWarnings) },
-        ]),
-        renderOverviewPanel('Coverage Gaps', [
-          { label: 'Disconnected non-base tables', value: formatInt(disconnected.length) },
-          { label: 'Unmatched candidates', value: formatInt(unmatchedCandidates) },
-          { label: 'Dataset overlay', value: datasetProfile ? 'on' : 'off' },
-        ]),
+        renderOverviewPanel('Relationship Evidence', relationshipRows),
+        renderOverviewPanel('Coverage Gaps', coverageRows),
       ].join('');
     }
 
@@ -784,13 +1104,26 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       const warnings = Array.isArray(candidate.warnings)
         ? candidate.warnings.filter(Boolean).join(', ')
         : String(candidate.warnings || '');
+      const keyMatchSource = evidence.key_match_source ? String(evidence.key_match_source) : '';
+      const priority = candidate.review_priority ? String(candidate.review_priority) : '';
       const badges = [
         '<span class="mini-badge good">' + escHtml(candidate.status || 'candidate') + '</span>',
         '<span class="mini-badge">confidence ' + escHtml(ratioLabel(candidate.confidence)) + '</span>',
+        '<span class="mini-badge ' + reviewPriorityClass(priority) + '">' + escHtml(reviewPriorityLabel(priority)) + '</span>',
         '<span class="mini-badge">' + escHtml(candidate.relationship_type || 'relationship') + '</span>'
       ];
+      if (candidate.confidence_bucket) {
+        badges.push('<span class="mini-badge">' + escHtml(candidate.confidence_bucket) + '</span>');
+      }
+      if (keyMatchSource) {
+        badges.push('<span class="mini-badge key">key ' + escHtml(keyMatchSource) + '</span>');
+      }
+      if (candidate.risk_score !== undefined && candidate.risk_score !== null) {
+        badges.push('<span class="mini-badge">risk ' + escHtml(ratioLabel(candidate.risk_score)) + '</span>');
+      }
       const evidenceRows = [
         ['source', evidence.source],
+        ['key match', evidence.key_match_source],
         ['parent uniq', ratioLabel(evidence.parent_unique_ratio)],
         ['child null', ratioLabel(evidence.child_null_ratio)],
         ['parent col', candidate.parent_column_sql],
@@ -808,6 +1141,36 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       );
     }
 
+    function renderRelationshipDecision(decision) {
+      if (!decision || typeof decision !== 'object') return '';
+      const status = String(decision.decision || 'undecided');
+      const badges = [
+        '<span class="mini-badge ' + relationshipDecisionClass(status) + '">operator ' + escHtml(relationshipDecisionLabel(status)) + '</span>'
+      ];
+      if (decision.reviewed_by) {
+        badges.push('<span class="mini-badge">by ' + escHtml(decision.reviewed_by) + '</span>');
+      }
+      if (decision.reviewed_at) {
+        badges.push('<span class="mini-badge">' + escHtml(decision.reviewed_at) + '</span>');
+      }
+      const rows = [
+        ['parent col', decision.parent_column_sql],
+        ['child col', decision.child_column_sql],
+        ['reason', decision.reason],
+        ['notes', decision.notes],
+        ['source', decision.source],
+      ].filter((item) => item[1] !== undefined && item[1] !== null && String(item[1]) !== '');
+      const rowHtml = rows.map((item) => (
+        '<div><span class="muted">' + escHtml(item[0]) + '</span> <code>' + escHtml(item[1]) + '</code></div>'
+      )).join('');
+      return (
+        '<div class="relationship-evidence">' +
+          '<div class="relationship-evidence-title">' + badges.join('') + '</div>' +
+          (rowHtml ? '<div class="evidence-grid">' + rowHtml + '</div>' : '') +
+        '</div>'
+      );
+    }
+
     function renderRelationshipEdges(edges, direction) {
       if (!Array.isArray(edges) || !edges.length) return '';
       return edges.map((edge) => {
@@ -816,16 +1179,33 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
         const prefix = direction === 'parent' ? 'Parent' : 'Child';
         const candidates = Array.isArray(edge.relationship_candidates) ? edge.relationship_candidates : [];
         const candidateHtml = candidates.map(renderRelationshipCandidate).join('');
+        const edgePriority = String(edge.relationship_review_priority || '');
+        const edgeKeySources = Array.isArray(edge.relationship_key_match_sources) ? edge.relationship_key_match_sources : [];
         const edgeBadges = [
           '<span class="mini-badge">' + escHtml(edge.relationship_source || 'structural_naming') + '</span>',
           '<span class="mini-badge">' + escHtml(edge.relationship_status || 'structural') + '</span>',
           '<span class="mini-badge">' + escHtml(edge.relationship_type || 'relationship') + '</span>'
         ];
+        if (Number(edge.relationship_candidate_count || 0) > 0) {
+          edgeBadges.push('<span class="mini-badge">candidates ' + formatInt(edge.relationship_candidate_count) + '</span>');
+        }
+        if (edgePriority) {
+          edgeBadges.push('<span class="mini-badge ' + reviewPriorityClass(edgePriority) + '">' + escHtml(reviewPriorityLabel(edgePriority)) + '</span>');
+        }
+        if (edgeKeySources.length) {
+          edgeBadges.push('<span class="mini-badge key">key ' + escHtml(edgeKeySources.join(', ')) + '</span>');
+        }
+        if (edge.relationship_decision_status) {
+          edgeBadges.push('<span class="mini-badge ' + relationshipDecisionClass(edge.relationship_decision_status) + '">operator ' + escHtml(relationshipDecisionLabel(edge.relationship_decision_status)) + '</span>');
+        }
+        if (edge.parent_column_sql || edge.child_column_sql) {
+          edgeBadges.push('<span class="mini-badge">' + escHtml(edge.parent_column_sql || 'id') + ' -> ' + escHtml(edge.child_column_sql || 'id') + '</span>');
+        }
         if (Number(edge.relationship_warning_count || 0) > 0) {
           edgeBadges.push('<span class="mini-badge warn">warnings ' + formatInt(edge.relationship_warning_count) + '</span>');
         }
         return (
-          '<div class="relationship-card">' +
+          '<div class="relationship-card' + (edge.relationship_needs_review ? ' needs-review' : '') + '">' +
             '<div class="relationship-title">' +
               '<span>' + escHtml(prefix) + ': <code>' + escHtml(counterpartSql || counterpartDisplay || '') + '</code></span>' +
               '<span class="relationship-label">' + escHtml(edge.label || '') + '</span>' +
@@ -833,6 +1213,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
             '<div class="mini-badges">' + edgeBadges.join('') + '</div>' +
             '<pre class="code">' + escHtml(edge.join_sql || '') + '</pre>' +
             candidateHtml +
+            (Array.isArray(edge.relationship_decisions) && edge.relationship_decisions.length ? edge.relationship_decisions.map(renderRelationshipDecision).join('') : '') +
           '</div>'
         );
       }).join('');
@@ -846,6 +1227,70 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       if (parents.length) blocks.push(renderRelationshipEdges(parents, 'parent'));
       if (children.length) blocks.push(renderRelationshipEdges(children, 'child'));
       return '<div class="relationship-grid">' + blocks.join('') + '</div>';
+    }
+
+    function renderRelationshipCatalog(filteredEdges) {
+      relationshipCount.textContent = formatInt(filteredEdges.length) + ' / ' + formatInt(edges.length) + ' relationships';
+      relationshipCatalog.innerHTML = filteredEdges.map((edge) => {
+        const priority = edgePriority(edge);
+        const keySources = edgeKeySources(edge);
+        const warningCount = Number(edge.relationship_warning_count || 0);
+        const confidence = Number(edge.relationship_confidence_max || 0);
+        const badges = [
+          '<span class="mini-badge">' + escHtml(edge.relationship_source || 'structural_naming') + '</span>',
+          '<span class="mini-badge ' + reviewPriorityClass(priority) + '">' + escHtml(reviewPriorityLabel(priority)) + '</span>',
+        ];
+        if (Number(edge.relationship_candidate_count || 0) > 0) {
+          badges.push('<span class="mini-badge">candidates ' + formatInt(edge.relationship_candidate_count) + '</span>');
+        }
+        if (keySources.length) {
+          badges.push('<span class="mini-badge key">key ' + escHtml(keySources.join(', ')) + '</span>');
+        }
+        if (edge.relationship_decision_status) {
+          badges.push('<span class="mini-badge ' + relationshipDecisionClass(edge.relationship_decision_status) + '">operator ' + escHtml(relationshipDecisionLabel(edge.relationship_decision_status)) + '</span>');
+        }
+        if (edge.parent_column_sql || edge.child_column_sql) {
+          badges.push('<span class="mini-badge">' + escHtml(edge.parent_column_sql || 'id') + ' -> ' + escHtml(edge.child_column_sql || 'id') + '</span>');
+        }
+        if (confidence > 0) {
+          badges.push('<span class="mini-badge">confidence ' + escHtml(ratioLabel(confidence)) + '</span>');
+        }
+        if (warningCount > 0) {
+          badges.push('<span class="mini-badge warn">warnings ' + formatInt(warningCount) + '</span>');
+        }
+        const candidates = Array.isArray(edge.relationship_candidates) ? edge.relationship_candidates : [];
+        const candidatePreview = candidates.length
+          ? '<details class="block"><summary>Candidate evidence (' + formatInt(candidates.length) + ')</summary><div class="block-body">' + candidates.map(renderRelationshipCandidate).join('') + '</div></details>'
+          : '';
+        const decisions = Array.isArray(edge.relationship_decisions) ? edge.relationship_decisions : [];
+        const decisionPreview = decisions.length
+          ? '<details class="block"><summary>Operator decisions (' + formatInt(decisions.length) + ')</summary><div class="block-body">' + decisions.map(renderRelationshipDecision).join('') + '</div></details>'
+          : '';
+        return (
+          '<article class="relationship-catalog-card' + (edgeNeedsReview(edge) ? ' needs-review' : '') + '" data-parent-sql="' + escHtml(edge.parent_sql || '') + '" data-child-sql="' + escHtml(edge.child_sql || '') + '">' +
+            '<div class="relationship-route">' +
+              '<code>' + escHtml(edge.parent_sql || edge.parent_display || '') + '</code>' +
+              '<span class="muted">-></span>' +
+              '<code>' + escHtml(edge.child_sql || edge.child_display || '') + '</code>' +
+            '</div>' +
+            '<div class="badge-row">' + badges.join('') + '</div>' +
+            '<div class="relationship-actions">' +
+              '<button type="button" class="link-button" data-select-table="' + escHtml(edge.parent_sql || '') + '">Parent table</button>' +
+              '<button type="button" class="link-button" data-select-table="' + escHtml(edge.child_sql || '') + '">Child table</button>' +
+              '<span class="muted">' + escHtml(edge.label || '') + '</span>' +
+            '</div>' +
+            '<details class="block">' +
+              '<summary>Join SQL</summary>' +
+              '<div class="block-body"><pre class="code">' + escHtml(edge.join_sql || '-- no join hint available') + '</pre></div>' +
+            '</details>' +
+            candidatePreview +
+            decisionPreview +
+          '</article>'
+        );
+      }).join('') || '<div class="empty">No matching relationships.</div>';
+      for (const button of Array.from(relationshipCatalog.querySelectorAll('[data-select-table]'))) {
+        button.addEventListener('click', () => selectTable(String(button.getAttribute('data-select-table') || ''), true));
+      }
     }
 
     function renderCatalog(filtered) {
@@ -865,6 +1310,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
             '<span class="metric-pill">indexes ' + formatInt(table.index_count) + '</span>' +
             '<span class="metric-pill">relations ' + formatInt(table.relationship_count) + '</span>' +
             '<span class="metric-pill">candidates ' + formatInt(table.relationship_candidate_count || 0) + '</span>' +
+            '<span class="metric-pill">needs review ' + formatInt(table.relationship_needs_review_count || 0) + '</span>' +
             '<span class="metric-pill">size ' + escHtml(table.size_label) + '</span>' +
             '<span class="metric-pill">engine ' + escHtml(table.engine || 'n/a') + '</span>' +
           '</div>' +
@@ -904,7 +1350,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     }
 
     function syncNav() {
-      const sections = ['overview', 'diagram', 'groups', 'catalog'].map((id) => document.getElementById(id)).filter(Boolean);
+      const sections = ['overview', 'diagram', 'groups', 'relationships', 'catalog'].map((id) => document.getElementById(id)).filter(Boolean);
       let active = 'overview';
       for (const section of sections) {
         const rect = section.getBoundingClientRect();
@@ -940,6 +1386,11 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       for (const card of Array.from(document.querySelectorAll('.table-card'))) {
         card.classList.toggle('selected', String(card.getAttribute('data-table-sql') || '') === selectedTableSql);
       }
+      for (const card of Array.from(document.querySelectorAll('.relationship-catalog-card'))) {
+        const parentSql = String(card.getAttribute('data-parent-sql') || '');
+        const childSql = String(card.getAttribute('data-child-sql') || '');
+        card.classList.toggle('selected', Boolean(selectedTableSql) && (parentSql === selectedTableSql || childSql === selectedTableSql));
+      }
     }
 
     function bindSvg() {
@@ -949,6 +1400,16 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           selectTable(String(node.getAttribute('data-name-sql') || ''), true);
         });
       }
+    }
+
+    function initRelationshipKeySourceOptions() {
+      const keySources = Array.from(new Set(edges.flatMap((edge) => edgeKeySources(edge)))).sort();
+      const options = ['<option value="all">Key source: all</option>'];
+      for (const source of keySources) {
+        options.push('<option value="' + escHtml(source) + '">' + escHtml(source) + '</option>');
+      }
+      options.push('<option value="none">No key source</option>');
+      relationshipKeySource.innerHTML = options.join('');
     }
 
     function selectTable(nameSql, scrollIntoView) {
@@ -965,9 +1426,11 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
 
     function refresh() {
       const filtered = currentTables();
+      const filteredRelationships = currentRelationships(filtered);
       renderStats(filtered);
       renderGroups(filtered);
       renderTableList(filtered);
+      renderRelationshipCatalog(filteredRelationships);
       renderCatalog(filtered);
       applySvgState(filtered);
       if (selectedTableSql && !filtered.some((table) => String(table.name_sql) === selectedTableSql)) {
@@ -981,10 +1444,16 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
     sortSelect.addEventListener('change', refresh);
     onlyFlagged.addEventListener('change', refresh);
     onlyNested.addEventListener('change', refresh);
+    onlyNeedsReview.addEventListener('change', refresh);
     onlyRelationWarnings.addEventListener('change', refresh);
     onlyDisconnected.addEventListener('change', refresh);
+    relationshipSearch.addEventListener('input', refresh);
+    relationshipPriority.addEventListener('change', refresh);
+    relationshipKeySource.addEventListener('change', refresh);
+    relationshipSort.addEventListener('change', refresh);
     window.addEventListener('scroll', syncNav, { passive: true });
     bindSvg();
+    initRelationshipKeySourceOptions();
     refresh();
   </script>
 </body>

@@ -31,6 +31,7 @@ kisti-db-manager quarantine summary path/to/quarantine.jsonl --out quarantine_ou
 kisti-db-manager review pack --config path/to/config.json --report run_report.json --out review_out
 kisti-db-manager review schema-viewer --config path/to/config.json --report run_report.json --out schema_viewer_out
 kisti-db-manager review schema-viewer --config path/to/config.json --description-profile path/to/table_profile.json --out schema_viewer_out
+kisti-db-manager review schema-viewer --config path/to/config.json --dataset-profile dataset_profile.json --relationship-decisions relationship_decisions.json --out schema_viewer_out
 kisti-db-manager review diff before_review.json after_review.json --out-dir review_diff_out
 kisti-db-manager review preview --config path/to/config.json --out preview_out
 kisti-db-manager review plan --config path/to/openalex_config.json --out plan_out
@@ -58,14 +59,31 @@ and detailed evidence for review and future RDB visualization.
 `tabular profile-dataset` reads multiple per-table `*_profile.json` files and
 writes `dataset_profile.json`. The v1 output is DB-free and conservative: it
 summarizes tables and emits naming-path relationship candidates as review hints,
-not confirmed foreign keys. `review schema-viewer --dataset-profile
+not confirmed foreign keys. Candidate key matching prefers `id`-to-`id`, then
+falls back to an exact shared parent key candidate such as `UID` when `id` is
+absent. It also writes a profile-only `audit` block with confidence buckets,
+review-priority counts, warning counts, skipped naming hints, and no-scan
+value-overlap status. `review schema-viewer --dataset-profile
 dataset_profile.json` overlays those candidates on matching relationship cards;
 if omitted, the viewer auto-detects `<PATH>/dataset_profile.json` when present.
+When the dataset profile lists per-table `*_profile.json` paths, the viewer also
+loads those profiles to fill column catalogs, type hints, key/index badges, and
+column warning badges in no-DB views.
 The Schema Viewer overview summarizes table roles, candidate-backed
-relationships, unmatched candidates, relation warnings, and disconnected
-non-base tables. Candidate relationships between known tables that are not
-covered by the structural naming tree are drawn as dashed candidate edges in
-the SVG and Mermaid outputs.
+relationships, accepted hints, review-needed relationships, key sources,
+unmatched candidates, relation warnings, and disconnected non-base tables. The
+table sidebar can filter to relationships that need review. The dedicated
+Relationship Catalog can search parent/child tables, join columns, warning text,
+and evidence, then filter by review priority or key source and jump directly to
+either endpoint table. Candidate
+relationships between known tables that are not covered by the structural naming
+tree are drawn as dashed candidate edges in the SVG and Mermaid outputs.
+
+`review schema-viewer --relationship-decisions relationship_decisions.json`
+overlays operator decisions on those relationship hints without modifying the
+inferred Dataset Profile evidence. If omitted, the viewer auto-detects
+`<PATH>/relationship_decisions.json` when present. Use this for accepted or
+rejected relationship reviews that should survive future profile regeneration.
 
 ## JSON
 

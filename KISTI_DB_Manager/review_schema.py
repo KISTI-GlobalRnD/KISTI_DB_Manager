@@ -7,6 +7,7 @@ from typing import Any, Mapping
 from .config import coerce_data_config, coerce_db_config
 from ._review.schema_html import render_schema_viewer_html
 from ._review.schema_payload import build_schema_viewer_payload, prepare_schema_table_infos
+from .namemap import load_namemap
 from .naming import MYSQL_IDENTIFIER_MAX_LEN, truncate_table_name
 from .review import (
     DBIntrospector,
@@ -57,6 +58,196 @@ def _collect_table_infos_from_dataset_profile(dataset_profile: Mapping[str, Any]
             )
         )
     return sorted(out, key=lambda item: item.name_sql)
+
+
+def _dataset_profile_profile_paths(
+    *,
+    dataset_profile: Mapping[str, Any],
+    dataset_profile_path: str | None,
+) -> list[Path]:
+    source = dataset_profile.get("source") if isinstance(dataset_profile.get("source"), Mapping) else {}
+    raw_paths = source.get("profile_paths") if isinstance(source, Mapping) else None
+    base_dir = Path(dataset_profile_path).expanduser().parent if dataset_profile_path else None
+    paths: list[Path] = []
+    if isinstance(raw_paths, list):
+        for raw in raw_paths:
+            if not raw:
+                continue
+            path = Path(str(raw)).expanduser()
+            if not path.is_absolute() and base_dir is not None:
+                path = base_dir / path
+            paths.append(path)
+    elif base_dir is not None and base_dir.exists():
+        paths.extend(sorted(base_dir.glob("*_profile.json")))
+
+    deduped: dict[str, Path] = {}
+    for path in paths:
+        if path.name == "dataset_profile.json":
+            continue
+        try:
+            resolved = path.resolve()
+        except Exception:
+            resolved = path
+        deduped[str(resolved)] = resolved
+    return [deduped[key] for key in sorted(deduped)]
+
+
+def _table_sql_from_profile(profile: Mapping[str, Any], path: Path) -> str:
+    nm = load_namemap(profile.get("name_map"))
+    if nm is not None:
+        return nm.table_sql
+    source = profile.get("source") if isinstance(profile.get("source"), Mapping) else {}
+    table = str(source.get("table_name") or path.stem.removesuffix("_profile") or "").strip()
+    if not table:
+        return ""
+    return truncate_table_name(table, max_len=MYSQL_IDENTIFIER_MAX_LEN)
+
+
+def _compact_column_profile(row: Mapping[str, Any]) -> dict[str, Any]:
+    keys = [
+        "source_column",
+        "sql_column",
+        "suggested_type",
+        "type_family",
+        "type_confidence",
+        "type_reason",
+        "null_ratio",
+        "empty_string_ratio",
+        "unique_ratio",
+        "top_freq_ratio",
+        "is_key_candidate",
+        "index_recommended",
+        "warnings",
+    ]
+    return {key: row.get(key) for key in keys if key in row}
+
+
+def _boolish(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "y"}
+
+
+def _columns_from_table_profile(profile: Mapping[str, Any]) -> list[dict[str, Any]]:
+    cols: list[dict[str, Any]] = []
+    for raw in profile.get("columns") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        name = str(raw.get("sql_column") or raw.get("source_column") or "").strip()
+        if not name:
+            continue
+        suggested_type = str(raw.get("suggested_type") or raw.get("Type") or "LONGTEXT")
+        null_ratio = raw.get("null_ratio")
+        try:
+            nullable = float(null_ratio) > 0
+        except Exception:
+            nullable = True
+        column_key = str(raw.get("column_key") or "").strip().upper()
+        if column_key not in {"PRI", "UNI", "MUL"}:
+            column_key = "MUL" if _boolish(raw.get("index_recommended")) or _boolish(raw.get("is_key_candidate")) else ""
+        cols.append(
+            {
+                "name": name,
+                "data_type": suggested_type.lower(),
+                "column_type": suggested_type,
+                "is_nullable": "YES" if nullable else "NO",
+                "column_key": column_key,
+                "extra": "",
+                "description_profile": _compact_column_profile(raw),
+            }
+        )
+    return cols
+
+
+def _profile_columns_by_sql(profile: Mapping[str, Any]) -> dict[str, dict[str, Any]]:
+    out: dict[str, dict[str, Any]] = {}
+    for raw in profile.get("columns") or []:
+        if not isinstance(raw, Mapping):
+            continue
+        sql_col = str(raw.get("sql_column") or raw.get("source_column") or "").strip()
+        if sql_col:
+            out[sql_col] = _compact_column_profile(raw)
+    return out
+
+
+def _merge_table_columns_with_profile(
+    columns: list[dict[str, Any]],
+    profile: Mapping[str, Any],
+) -> list[dict[str, Any]]:
+    profile_by_sql = _profile_columns_by_sql(profile)
+    merged: list[dict[str, Any]] = []
+    for column in columns:
+        item = dict(column)
+        name = str(item.get("name") or "").strip()
+        if name in profile_by_sql:
+            item["description_profile"] = profile_by_sql[name]
+        merged.append(item)
+    return merged
+
+
+def _load_dataset_table_profiles(
+    *,
+    dataset_profile: Mapping[str, Any] | None,
+    dataset_profile_path: str | None,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(dataset_profile, Mapping):
+        return {}
+    profiles: dict[str, dict[str, Any]] = {}
+    for path in _dataset_profile_profile_paths(
+        dataset_profile=dataset_profile,
+        dataset_profile_path=dataset_profile_path,
+    ):
+        if not path.exists():
+            continue
+        try:
+            profile = _load_json(str(path))
+        except Exception:
+            continue
+        if not isinstance(profile, Mapping) or str(profile.get("schema_version") or "") != "2.0":
+            continue
+        table_sql = _table_sql_from_profile(profile, path)
+        if table_sql:
+            profiles[table_sql] = dict(profile)
+    return profiles
+
+
+def _apply_dataset_table_profiles(
+    table_infos: list[TableInfo],
+    profiles_by_sql: Mapping[str, Mapping[str, Any]],
+) -> list[TableInfo]:
+    if not profiles_by_sql:
+        return table_infos
+    out: list[TableInfo] = []
+    for ti in table_infos:
+        profile = profiles_by_sql.get(ti.name_sql)
+        if profile is None:
+            out.append(ti)
+            continue
+        profile_source = profile.get("source") if isinstance(profile.get("source"), Mapping) else {}
+        row_count = ti.row_count
+        if row_count is None:
+            row_count = _int_or_none(profile_source.get("row_count"))
+        columns = (
+            _merge_table_columns_with_profile(list(ti.columns or []), profile)
+            if ti.columns
+            else _columns_from_table_profile(profile)
+        )
+        out.append(
+            TableInfo(
+                name_sql=ti.name_sql,
+                name_original=ti.name_original,
+                row_count=row_count,
+                row_count_exact=ti.row_count_exact,
+                table_rows_estimate=ti.table_rows_estimate,
+                data_length=ti.data_length,
+                index_length=ti.index_length,
+                engine=ti.engine,
+                collation=ti.collation,
+                columns=columns,
+                indexes=ti.indexes,
+            )
+        )
+    return out
 
 
 def _dataset_relationship_candidates(dataset_profile: Mapping[str, Any] | None) -> list[dict[str, Any]]:
@@ -144,6 +335,7 @@ def generate_schema_viewer(
     sample_max_tables: int = 20,
     description_profile_path: str | None = None,
     dataset_profile_path: str | None = None,
+    relationship_decisions_path: str | None = None,
 ) -> dict[str, Any]:
     cfg = _load_json(config_path)
     data_config = coerce_data_config(cfg.get("data_config") or cfg.get("data") or {})
@@ -175,6 +367,20 @@ def generate_schema_viewer(
         if profile_path.exists():
             resolved_dataset_profile_path = str(profile_path)
             dataset_profile = _load_json(str(profile_path))
+    relationship_decisions = None
+    resolved_relationship_decisions_path = ""
+    if relationship_decisions_path:
+        resolved_relationship_decisions_path = str(Path(relationship_decisions_path).expanduser())
+        relationship_decisions = _load_json(resolved_relationship_decisions_path)
+    else:
+        decisions_path = Path(data_config["PATH"]) / "relationship_decisions.json"
+        if decisions_path.exists():
+            resolved_relationship_decisions_path = str(decisions_path)
+            relationship_decisions = _load_json(str(decisions_path))
+    dataset_table_profiles_by_sql = _load_dataset_table_profiles(
+        dataset_profile=dataset_profile if isinstance(dataset_profile, Mapping) else None,
+        dataset_profile_path=resolved_dataset_profile_path,
+    )
 
     table_infos = (
         _collect_table_infos_from_report(base_table=base_table, report=report)
@@ -219,6 +425,7 @@ def generate_schema_viewer(
         report=report if isinstance(report, Mapping) else None,
         table_infos=table_infos,
     )
+    table_infos = _apply_dataset_table_profiles(table_infos, dataset_table_profiles_by_sql)
     use_original_names = any(ti.name_original for ti in table_infos)
     base_table_graph = base_table if use_original_names else base_table_sql
     edges = build_table_edges(
@@ -265,6 +472,13 @@ def generate_schema_viewer(
         description_profile=description_profile if isinstance(description_profile, Mapping) else None,
         dataset_profile=dataset_profile if isinstance(dataset_profile, Mapping) else None,
         dataset_profile_path=resolved_dataset_profile_path,
+        relationship_decisions=relationship_decisions if isinstance(relationship_decisions, Mapping) else None,
+        relationship_decisions_path=resolved_relationship_decisions_path,
+        dataset_table_profile_count=len(dataset_table_profiles_by_sql),
+        dataset_table_profile_column_count=sum(
+            len(profile.get("columns") or [])
+            for profile in dataset_table_profiles_by_sql.values()
+        ),
     )
 
     out_path = Path(out_dir)

@@ -82,7 +82,8 @@ Relationship candidate entries should preserve evidence:
     "source": "table_name_path",
     "parent_unique_ratio": 1.0,
     "child_null_ratio": 0.0,
-    "shared_column_name": true
+    "shared_column_name": true,
+    "key_match_source": "exact_id"
   },
   "warnings": [],
   "status": "candidate"
@@ -104,7 +105,11 @@ Use conservative, explainable rules first.
 1. Naming path relationship
    - If table names follow the known flattened naming pattern, such as
      `base__child` or `base__child__nested`, create a parent-child candidate.
-   - Use `id` to `id` only when both sides expose the column.
+   - Prefer `id` to `id` when both sides expose the column.
+   - If `id` is absent, allow an exact shared column name only when the parent
+     column is a key candidate or is nearly unique/non-null in its table profile.
+     This keeps WoS-style `UID` relationships visible without scanning source
+     values.
    - Confidence starts high enough to display, but still remains a candidate.
 
 2. Explicit key-like columns
@@ -186,7 +191,16 @@ The overlay attaches Dataset Profile candidate evidence to existing structural
 relationship cards and draws dashed candidate-only edges for known table pairs
 that are not already covered by naming structure.
 
-Phase 3: bounded optional evidence
+Phase 3a: profile-only candidate audit (implemented)
+
+- score emitted candidates into confidence buckets and review priorities
+- count candidate warning types without scanning source data
+- record skipped naming-path hints such as missing parent/child `id` columns
+- write `value_overlap.status=not_computed` explicitly to avoid implying
+  sampled value evidence exists
+- surface review-priority and skipped-hint counts in the schema viewer overview
+
+Phase 3b: bounded optional evidence
 
 - add optional bounded value sketches or sampled hashes behind explicit flags
 - support low-confidence key-like column candidates only after pruning the
@@ -204,7 +218,8 @@ Default budgets should stay conservative:
 
 Phase 4: operator decisions
 
-- allow confirmed/rejected decisions as a separate overlay artifact
+- implemented for Schema Viewer overlays through `relationship_decisions.json`
+- keep confirmed/rejected decisions as a separate overlay artifact
 - never overwrite inferred evidence with operator decisions
 
 ## Non-goals for v1
