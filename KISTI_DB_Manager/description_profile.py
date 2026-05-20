@@ -10,6 +10,7 @@ from typing import Any, Mapping
 
 from .config import coerce_data_config, join_path
 from .namemap import NameMap, load_namemap
+from .naming import canonicalize_column_names
 
 
 DESCRIPTION_PROFILE_SCHEMA_VERSION = "2.0"
@@ -346,14 +347,25 @@ def build_description_profile(
     df = read_data_from_tabular(dc)
 
     key_sep = dc.get("KEY_SEP", "__")
-    source_columns = [str(column).replace(".", key_sep) for column in df.columns]
     nm = load_namemap(name_map) or load_namemap(dc.get("_name_map"))
     if nm is None:
+        source_columns = canonicalize_column_names(df.columns, key_sep=key_sep)
         nm = NameMap.build(table_name=dc["table_name"], columns=source_columns, key_sep=key_sep)
+    else:
+        source_columns = nm.canonicalize_input_columns(df.columns)
+        nm = nm.with_additional_columns(source_columns)
 
-    forced_keys = {str(key).replace(".", key_sep) for key in dc.get("KEYs", []) if str(key)}
+    raw_to_source: dict[str, str] = {}
+    for original_column, source_column in zip(df.columns, source_columns):
+        raw_to_source.setdefault(str(original_column), source_column)
+
+    def resolve_forced_key(key: Any) -> str:
+        key_s = str(key)
+        return raw_to_source.get(key_s) or key_s.replace(".", key_sep)
+
+    forced_keys = {resolve_forced_key(key) for key in dc.get("KEYs", []) if str(key)}
     if dc.get("KEY"):
-        forced_keys.add(str(dc["KEY"]).replace(".", key_sep))
+        forced_keys.add(resolve_forced_key(dc["KEY"]))
     rows: list[dict[str, Any]] = []
     for original_column, source_column in zip(df.columns, source_columns):
         series = df[original_column]

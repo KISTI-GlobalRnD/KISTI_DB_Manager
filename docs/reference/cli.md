@@ -45,6 +45,7 @@ key/index recommendations, and warning badges.
 
 ```bash
 kisti-db-manager tabular describe --config path/to/config.json
+kisti-db-manager tabular profile-dataset --profiles "path/to/*_profile.json" --base-table works --out dataset_profile.json
 kisti-db-manager tabular run --config path/to/config.json --report run_report.json
 ```
 
@@ -53,6 +54,11 @@ the compatibility fields used by tabular DB creation while adding type
 confidence, null/empty ratios, length statistics, uniqueness, key/index
 recommendations, and warnings. The JSON profile keeps source metadata, NameMap,
 and detailed evidence for review and future RDB visualization.
+
+`tabular profile-dataset` reads multiple per-table `*_profile.json` files and
+writes `dataset_profile.json`. The v1 output is DB-free and conservative: it
+summarizes tables and emits naming-path relationship candidates as review hints,
+not confirmed foreign keys.
 
 ## JSON
 

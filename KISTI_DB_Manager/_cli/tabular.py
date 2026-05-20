@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from ..modes import MODES as _MODES
 
@@ -34,6 +35,37 @@ def _cmd_tabular_describe(args: argparse.Namespace) -> int:
                 "profile_json": str(res.profile_json_path),
                 "row_count": res.profile.get("source", {}).get("row_count"),
                 "column_count": len(res.profile.get("columns", [])),
+                "warnings": res.profile.get("warnings", []),
+            },
+            ensure_ascii=False,
+            indent=2,
+        )
+    )
+    return 0
+
+
+def _cmd_tabular_profile_dataset(args: argparse.Namespace) -> int:
+    from ..dataset_profile import resolve_profile_paths, write_dataset_profile
+
+    profile_paths = resolve_profile_paths(args.profiles or [], profiles=args.profile or [])
+    if not profile_paths:
+        print("error: tabular profile-dataset requires at least one --profiles or --profile path", file=sys.stderr)
+        return 2
+    res = write_dataset_profile(
+        profile_paths,
+        out_path=args.out,
+        base_table=args.base_table,
+        key_sep=str(args.key_sep or "__"),
+    )
+    print(
+        json.dumps(
+            {
+                "status": "done",
+                "schema_version": res.profile.get("schema_version"),
+                "dataset_profile": str(res.dataset_profile_path),
+                "profile_count": res.profile.get("source", {}).get("profile_count"),
+                "table_count": len(res.profile.get("tables", [])),
+                "relationship_candidate_count": len(res.profile.get("relationship_candidates", [])),
                 "warnings": res.profile.get("warnings", []),
             },
             ensure_ascii=False,
@@ -133,6 +165,25 @@ def register_tabular_parser(sub) -> None:
         help="Description profiler backend (default: auto; currently resolves to python)",
     )
     p_tabular_describe.set_defaults(func=_cmd_tabular_describe)
+
+    p_profile_dataset = tabular_sub.add_parser(
+        "profile-dataset",
+        help="Build a dataset-level profile JSON from multiple tabular profile JSON files",
+    )
+    p_profile_dataset.add_argument(
+        "--profiles",
+        action="append",
+        help="Directory or glob pattern containing *_profile.json files; may be repeated",
+    )
+    p_profile_dataset.add_argument(
+        "--profile",
+        action="append",
+        help="Explicit *_profile.json path; may be repeated",
+    )
+    p_profile_dataset.add_argument("--base-table", help="Base table name for dataset relationship inference")
+    p_profile_dataset.add_argument("--key-sep", default="__", help="Flattened table/key separator (default: __)")
+    p_profile_dataset.add_argument("--out", required=True, help="Output dataset_profile.json path")
+    p_profile_dataset.set_defaults(func=_cmd_tabular_profile_dataset)
 
     p_tabular_run = tabular_sub.add_parser("run", help="Run create/load/index/optimize for a tabular file")
     p_tabular_run.add_argument("--config", required=True, help="JSON config file containing data_config and db_config")

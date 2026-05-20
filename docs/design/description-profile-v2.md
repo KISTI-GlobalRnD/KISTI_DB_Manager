@@ -11,7 +11,7 @@ fields needed by existing create/index code while adding the small set of
 signals needed to judge column type, nullability, key candidacy, and index risk.
 
 The richer evidence lives in `*_profile.json`. Multi-table relationship
-inference belongs in a future `dataset_profile.json`, because foreign-key and
+inference belongs in `dataset_profile.json`, because foreign-key and
 normalization hints are unsafe to infer from one table in isolation.
 
 ## Artifact Boundary
@@ -20,7 +20,7 @@ normalization hints are unsafe to infer from one table in isolation.
 | --- | --- |
 | `*_Desc.csv` | Human-readable and DB-loader-compatible column design table. |
 | `*_profile.json` | Detailed evidence, source metadata, profile backend, warnings, and NameMap. |
-| `dataset_profile.json` | Future multi-table relationship candidates for RDB/schema visualization. |
+| `dataset_profile.json` | Multi-table relationship candidates for RDB/schema visualization. |
 
 ## v2 CSV Columns
 
@@ -50,8 +50,8 @@ The RDB/schema viewer should consume the artifacts in stages:
    null ratio, unique ratio, key/index recommendation, and warning state.
 2. Read `*_profile.json` for inspector details when an operator selects a
    column.
-3. Later, read `dataset_profile.json` to draw relationship-candidate edges and
-   expose value-overlap evidence.
+3. Next, read `dataset_profile.json` to draw relationship-candidate edges and
+   expose bounded candidate evidence when it is available.
 
 The current schema viewer can already overlay one table-level `*_profile.json`
 through `--description-profile`, and it auto-detects
@@ -61,6 +61,11 @@ cross-table relationships.
 
 Relationship candidates must be rendered as candidates, not confirmed foreign
 keys, unless a DB constraint or operator-provided rule confirms them.
+
+The dataset-level contract is tracked separately in
+[Dataset Profile v1](dataset-profile-v1.md). That document defines the first
+artifact shape, conservative candidate rules, and schema viewer integration
+phases.
 
 ## Rust Boundary
 

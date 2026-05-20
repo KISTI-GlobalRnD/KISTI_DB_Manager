@@ -32,7 +32,13 @@ fill_table_from_file(f, table_name, db_config)
 
 from dataclasses import dataclass
 
-from .naming import make_index_name, truncate_column_names, truncate_table_name
+from .naming import (
+    canonicalize_column_names,
+    make_index_name,
+    quote_mysql_identifier,
+    truncate_column_names,
+    truncate_table_name,
+)
 from .config import coerce_data_config, coerce_db_config, join_path
 # Re-export selected LOAD DATA helpers for compatibility. New code should
 # import KISTI_DB_Manager.load_data directly.
@@ -132,6 +138,37 @@ def _json_dumps_best_effort(obj) -> str:
         import json
 
         return json.dumps(obj, ensure_ascii=False)
+
+
+def _rename_row_keys(
+    rows: list[dict],
+    *,
+    original_columns: list[str],
+    canonical_columns: list[str],
+    key_sep: str,
+) -> list[dict]:
+    rename_map = {
+        str(original): str(canonical)
+        for original, canonical in zip(original_columns, canonical_columns)
+        if str(original) != str(canonical)
+    }
+    if not rename_map:
+        return rows
+
+    out: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            out.append(row)
+            continue
+        renamed: dict = {}
+        for key, value in row.items():
+            key_s = str(key)
+            renamed_key = rename_map.get(key_s)
+            if renamed_key is None:
+                renamed_key = key_s.replace(".", key_sep)
+            renamed[renamed_key] = value
+        out.append(renamed)
+    return out
 
 
 def _mysql_comment_sql(text_value: str | None) -> str:
@@ -457,9 +494,13 @@ def _get_or_build_name_map(
 ) -> NameMap:
     key_sep = data_config.get("KEY_SEP", "__")
     table_name = data_config["table_name"]
-    columns_norm = [str(c).replace(".", key_sep) for c in columns]
 
     nm = load_namemap(name_map) or load_namemap(data_config.get("_name_map"))
+    columns_norm = (
+        nm.canonicalize_input_columns(columns)
+        if nm and nm.table_original == str(table_name) and nm.key_sep == str(key_sep)
+        else canonicalize_column_names(columns, key_sep=key_sep)
+    )
     if nm and nm.table_original == str(table_name) and nm.key_sep == str(key_sep):
         # Perfect match
         if is_compatible(nm, table_name=table_name, key_sep=key_sep, columns=tuple(columns_norm)):
@@ -489,7 +530,7 @@ def _prepare_desc_and_namemap(
 
     key_sep = data_config.get("KEY_SEP", "__")
     df_desc = df_desc.copy()
-    df_desc.index = [str(i).replace(".", key_sep) for i in df_desc.index]
+    df_desc.index = canonicalize_column_names(df_desc.index, key_sep=key_sep)
     df_desc = df_desc[df_desc.Type.notnull() & (df_desc.Type != "Unknown")]
 
     nm = _get_or_build_name_map(data_config, columns=list(df_desc.index), name_map=name_map)
@@ -563,8 +604,9 @@ def _coerce_to_sql_method(method):
 
 def is_Null(_type, _null_ratio, forced_null=False):
     """Return about Null part for SQL query """
+    _type = str(_type)
     if forced_null==False:
-        if _null_ratio == 0:
+        if _null_ratio == 0 and "NOT NULL" not in _type.upper():
             _type += ' NOT NULL'
     return _type
 
@@ -578,7 +620,7 @@ def read_Description(data_config):
     desc_file = join_path(PATH, f'{".".join(f.split(".")[:-1])}_Desc.csv')
     df_res = pd.read_csv(desc_file, index_col=0)
     key_sep = data_config.get("KEY_SEP", "__")
-    df_res.index = [str(i).replace(".", key_sep) for i in df_res.index]
+    df_res.index = canonicalize_column_names(df_res.index, key_sep=key_sep)
     return df_res
 
 
@@ -639,8 +681,8 @@ def generate_create_table_sql(data_config, df_desc=None, name_map: NameMap | dic
     sql_column_types = optimize_column_types(sql_column_types)
 
     ordered_cols = [c for c in nm.columns_sql if c in sql_column_types]
-    columns = [f"`{col}` {sql_column_types[col]}" for col in ordered_cols]
-    return f"CREATE TABLE `{nm.table_sql}` ({', '.join(columns)});"
+    columns = [f"{quote_mysql_identifier(col)} {sql_column_types[col]}" for col in ordered_cols]
+    return f"CREATE TABLE {quote_mysql_identifier(nm.table_sql)} ({', '.join(columns)});"
 
 
 # def create_table(data_config, db_config):
@@ -874,7 +916,7 @@ def fill_table_from_file(
                 if not header:
                     raise ValueError("Empty header row; cannot fast-load tabular file")
                 header[0] = str(header[0]).lstrip("\ufeff")
-                file_cols = [str(c).strip().replace(".", sep) for c in header]
+                file_cols = nm.canonicalize_input_columns([str(c).strip() for c in header])
 
                 cols_canonical_known = [col for col in df_desc.index if col in file_cols]
                 cols_canonical = list(cols_canonical_known)
@@ -996,7 +1038,7 @@ def fill_table_from_file(
     df = read_data_from_tabular(data_config)
     
     # dot to underscore
-    df.columns = [x.replace(".", sep) for x in df.columns]
+    df.columns = nm.canonicalize_input_columns(df.columns)
 
     
     # DateTime Convert
@@ -1301,7 +1343,7 @@ def fill_table_from_dataframe(
     extra_canon = None
     extra_sql = None
     if extra_column_name:
-        extra_canon = str(extra_column_name).replace(".", nm.key_sep)
+        extra_canon = nm.canonicalize_input_columns([extra_column_name])[0]
         nm = nm.with_additional_columns([extra_canon], max_len=64)
         extra_sql = nm.map_column(extra_canon)
 
@@ -1319,11 +1361,14 @@ def fill_table_from_dataframe(
         engine = create_engine(url)
 
     # Normalize column names to canonical form first.
-    canonical_cols = [str(c).replace(".", nm.key_sep) for c in list(getattr(df, "columns", []))]
+    canonical_cols = nm.canonicalize_input_columns(list(getattr(df, "columns", [])))
     if list(getattr(df, "columns", [])) != canonical_cols:
         df = df.copy()
         df.columns = canonical_cols
 
+    nm = nm.with_additional_columns(canonical_cols, max_len=64)
+    if extra_canon:
+        extra_sql = nm.map_column(extra_canon)
     df = df.rename(columns=nm.changed_columns())
     cols_sql = list(getattr(df, "columns", []))
     desc_by_sql = _column_descriptions_by_sql(nm, column_descriptions)
@@ -1620,14 +1665,19 @@ def fill_table_from_rows(
         columns_original = list(nm.columns_original)
 
     # Normalize to canonical naming (dots -> key_sep).
-    canonical_cols = [str(c).replace(".", nm.key_sep) for c in columns_original]
-    if canonical_cols != list(columns_original):
-        columns_original = canonical_cols
+    raw_columns_original = list(columns_original)
+    columns_original = nm.canonicalize_input_columns(raw_columns_original)
+    rows = _rename_row_keys(
+        rows,
+        original_columns=raw_columns_original,
+        canonical_columns=columns_original,
+        key_sep=nm.key_sep,
+    )
 
     extra_canon = None
     extra_sql = None
     if extra_column_name:
-        extra_canon = str(extra_column_name).replace(".", nm.key_sep)
+        extra_canon = nm.canonicalize_input_columns([extra_column_name])[0]
         if extra_canon not in set(columns_original):
             columns_original = list(columns_original) + [extra_canon]
 
@@ -1849,14 +1899,12 @@ def fill_table_from_tsv_file(
         return nm
 
     # Normalize to canonical naming (dots -> key_sep).
-    canonical_cols = [str(c).replace(".", nm.key_sep) for c in columns_original]
-    if canonical_cols != list(columns_original):
-        columns_original = canonical_cols
+    columns_original = nm.canonicalize_input_columns(columns_original)
 
     extra_canon = None
     extra_sql = None
     if extra_column_name:
-        extra_canon = str(extra_column_name).replace(".", nm.key_sep)
+        extra_canon = nm.canonicalize_input_columns([extra_column_name])[0]
         if extra_canon not in set(columns_original):
             columns_original = list(columns_original) + [extra_canon]
 
@@ -2155,7 +2203,10 @@ def set_index(db_config, data_config, df_desc=None, name_map: NameMap | dict | N
                 if "is_key" in df_desc.columns and bool(df_desc.loc[col, "is_key"]):
                     col_sql = nm.map_column(col)
                     idx_name = make_index_name(table_name, col_sql, max_len=64)
-                    _sql = f"CREATE INDEX `{idx_name}` ON `{table_name}` (`{col_sql}`);"
+                    _sql = (
+                        f"CREATE INDEX {quote_mysql_identifier(idx_name)} "
+                        f"ON {quote_mysql_identifier(table_name)} ({quote_mysql_identifier(col_sql)});"
+                    )
                     # Execute the CREATE INDEX SQL statement
                     cursor.execute(_sql)
                     print(f"Set Index the `{col}` on `{table_name}` successfully.")
@@ -2168,7 +2219,11 @@ def set_index(db_config, data_config, df_desc=None, name_map: NameMap | dict | N
                     # BLOB/TEXT needs a prefix length
                     prefix_len = int(data_config.get("index_prefix_len", 191))
                     try:
-                        _sql = f"CREATE INDEX `{idx_name}` ON `{table_name}` (`{col_sql}`({prefix_len}));"
+                        _sql = (
+                            f"CREATE INDEX {quote_mysql_identifier(idx_name)} "
+                            f"ON {quote_mysql_identifier(table_name)} "
+                            f"({quote_mysql_identifier(col_sql)}({prefix_len}));"
+                        )
                         cursor.execute(_sql)
                         print(f"Set Index the `{col}` on `{table_name}` successfully (prefix={prefix_len}).")
                         continue
@@ -2217,9 +2272,16 @@ def set_index_simple(
         col_sql = nm.map_column(column)
         idx_name = make_index_name(nm.table_sql, col_sql, max_len=64)
         if prefix_len:
-            _sql = f"CREATE INDEX `{idx_name}` ON `{nm.table_sql}` (`{col_sql}`({int(prefix_len)}));"
+            _sql = (
+                f"CREATE INDEX {quote_mysql_identifier(idx_name)} "
+                f"ON {quote_mysql_identifier(nm.table_sql)} "
+                f"({quote_mysql_identifier(col_sql)}({int(prefix_len)}));"
+            )
         else:
-            _sql = f"CREATE INDEX `{idx_name}` ON `{nm.table_sql}` (`{col_sql}`);"
+            _sql = (
+                f"CREATE INDEX {quote_mysql_identifier(idx_name)} "
+                f"ON {quote_mysql_identifier(nm.table_sql)} ({quote_mysql_identifier(col_sql)});"
+            )
         cursor.execute(_sql)
         conn.commit()
         print(f"Set Index `{idx_name}` on `{nm.table_sql}` successfully.")

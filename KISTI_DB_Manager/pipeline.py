@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from .config import coerce_data_config, coerce_db_config
 from .namemap import NameMap, load_namemap
+from .naming import canonicalize_column_names
 from .quarantine import NullQuarantineWriter, QuarantineWriter
 from .report import RunReport
 from ._pipeline.json_sources import (
@@ -724,11 +725,12 @@ def run_json_pipeline(
             report.add_time_s(f"json.db.{stage}", time.perf_counter() - t0)
 
     def ensure_name_map(table_original: str, columns: list[str]) -> NameMap:
-        columns_norm = [str(c).replace(".", key_sep) for c in columns]
         nm = name_maps.get(table_original)
         if nm is None:
+            columns_norm = canonicalize_column_names(columns, key_sep=key_sep)
             nm = NameMap.build(table_name=table_original, columns=columns_norm, key_sep=key_sep, max_len=64)
         else:
+            columns_norm = nm.canonicalize_input_columns(columns)
             nm = nm.with_additional_columns(columns_norm, max_len=64)
         name_maps[table_original] = nm
         if isinstance(data_config, dict):

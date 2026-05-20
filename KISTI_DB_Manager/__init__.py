@@ -15,6 +15,7 @@ __all__ = [
     "__version__",
     "cli",
     "config",
+    "dataset_profile",
     "description_profile",
     "id_compaction",
     "load_data",
@@ -45,6 +46,7 @@ def __getattr__(name: str) -> Any:
     if name in {
         "cli",
         "config",
+        "dataset_profile",
         "description_profile",
         "id_compaction",
         "load_data",

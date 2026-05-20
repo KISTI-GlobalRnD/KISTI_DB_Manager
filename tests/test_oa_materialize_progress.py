@@ -158,6 +158,31 @@ class TestOaMaterializeProgress(unittest.TestCase):
         self.assertEqual(table["schema_variant_count"], 2)
         self.assertEqual(table["union_columns"], ["id", "title", "doi", "__extra__"])
 
+    def test_parquet_preflight_flags_dot_normalized_column_collisions(self):
+        try:
+            import pyarrow as pa
+            import pyarrow.parquet as pq
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"pyarrow is required: {exc}")
+
+        with TemporaryDirectory() as td:
+            root = Path(td)
+            works_dir = root / "works"
+            works_dir.mkdir()
+            table = pa.Table.from_arrays(
+                [pa.array(["1"]), pa.array(["2"])],
+                names=["a.b", "a__b"],
+            )
+            pq.write_table(table, works_dir / "part-0.parquet")
+
+            result = oa_materialize._inspect_parquet_tables({"works": [works_dir / "part-0.parquet"]})
+
+        table_result = result["tables"]["works"]
+        self.assertEqual(result["status"], "error")
+        self.assertEqual(table_result["status"], "error")
+        self.assertEqual(table_result["duplicate_column_files_sample"][0]["columns"], ["a__b"])
+        self.assertEqual(table_result["union_columns"], ["a__b__dot", "a__b__raw"])
+
     def test_materialize_table_creates_union_schema_from_preflight(self):
         with TemporaryDirectory() as td:
             root = Path(td)

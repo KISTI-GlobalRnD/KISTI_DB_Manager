@@ -43,6 +43,25 @@ each table's `*_Desc.csv`.
 `review schema-viewer` can overlay this profile through `--description-profile`
 or auto-detect `<PATH>/<table_name>_profile.json` when that file exists.
 
+## Dataset Profiles
+
+`dataset_profile.json` is the multi-table companion to per-table profiles. It
+summarizes the table profiles that belong to one dataset and stores conservative
+relationship candidates with their evidence.
+
+```bash
+kisti-db-manager tabular profile-dataset \
+  --profiles "path/to/*_profile.json" \
+  --base-table works \
+  --out path/to/dataset_profile.json
+```
+
+Candidate relationships are not confirmed foreign keys. Operators should treat
+them as review hints until they are backed by a DB constraint or an explicit
+operator decision. v1 uses profile metadata and table naming paths only; bounded
+value-overlap evidence is intentionally left for a later opt-in phase. The v1
+design contract is documented in [Dataset Profile v1](../design/dataset-profile-v1.md).
+
 ## Parquet Artifacts
 
 Parquet-first runs produce table directories under a run-specific parquet root.

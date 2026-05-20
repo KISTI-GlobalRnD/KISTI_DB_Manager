@@ -31,6 +31,7 @@ from typing import Any
 from KISTI_DB_Manager import load_data, manage
 from KISTI_DB_Manager.config import coerce_data_config, coerce_db_config
 from KISTI_DB_Manager.namemap import NameMap
+from KISTI_DB_Manager.naming import canonicalize_column_names
 from KISTI_DB_Manager.report import RunReport
 
 
@@ -132,10 +133,12 @@ def _inspect_parquet_tables(
 
             file_count += 1
             rows_total += int(rows)
-            canonical_columns = [str(column).replace(".", key_sep) for column in columns]
+            normalized_columns = [str(column).replace(".", key_sep) for column in columns]
+            canonical_columns = canonicalize_column_names(columns, key_sep=key_sep)
             counts: dict[str, int] = {}
-            for column in canonical_columns:
+            for column in normalized_columns:
                 counts[column] = int(counts.get(column, 0) or 0) + 1
+            for column in canonical_columns:
                 if column not in seen_columns:
                     seen_columns.add(column)
                     union_columns.append(column)
