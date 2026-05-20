@@ -20,6 +20,9 @@
 - Added optional `relationship_decisions.json` overlays for Schema Viewer so
   operator accepted/rejected relationship decisions stay separate from inferred
   Dataset Profile evidence.
+- Added opt-in sampled value-overlap validation for `tabular profile-dataset`
+  relationship candidates, with overlap/orphan ratios attached as bounded
+  review evidence.
 - Added Schema Viewer auto-loading of per-table `*_profile.json` files
   referenced by `dataset_profile.json`, so no-DB Dataset Profile views can show
   column catalogs, type hints, and key/index badges.

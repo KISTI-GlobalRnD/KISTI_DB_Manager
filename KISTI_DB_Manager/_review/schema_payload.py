@@ -221,6 +221,7 @@ def _compact_relationship_candidate(candidate: Mapping[str, Any]) -> dict[str, A
         "status",
         "warnings",
         "evidence",
+        "value_overlap",
     ]
     return {key: candidate.get(key) for key in keys if key in candidate}
 

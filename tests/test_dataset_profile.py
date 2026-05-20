@@ -7,7 +7,13 @@ from KISTI_DB_Manager.dataset_profile import build_dataset_profile, resolve_prof
 from KISTI_DB_Manager.namemap import NameMap
 
 
-def _profile_payload(table_name: str, *, row_count: int = 10, include_id: bool = True) -> dict:
+def _profile_payload(
+    table_name: str,
+    *,
+    row_count: int = 10,
+    include_id: bool = True,
+    source_file: str | None = None,
+) -> dict:
     columns = []
     column_names = ["id", "value"] if include_id else ["value"]
     nm = NameMap.build(table_name=table_name, columns=column_names, key_sep="__")
@@ -28,7 +34,11 @@ def _profile_payload(table_name: str, *, row_count: int = 10, include_id: bool =
     return {
         "schema_version": "2.0",
         "backend": "python",
-        "source": {"file": f"/tmp/{table_name}.csv", "row_count": row_count, "table_name": table_name},
+        "source": {
+            "file": source_file or f"/tmp/{table_name}.csv",
+            "row_count": row_count,
+            "table_name": table_name,
+        },
         "name_map": nm.to_dict(),
         "columns": columns,
         "warnings": [],
@@ -154,6 +164,56 @@ class TestDatasetProfile(unittest.TestCase):
             self.assertEqual(candidate["evidence"]["key_match_source"], "shared_parent_key")
             self.assertEqual(profile["audit"]["review_priority_counts"], {"accept_hint": 1})
             self.assertEqual(profile["audit"]["skipped_candidate_count"], 0)
+
+    def test_build_dataset_profile_can_sample_value_overlap_for_candidates(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / "works.csv").write_text("id,value\n1,a\n2,b\n3,c\n", encoding="utf-8")
+            (root / "works__authorships.csv").write_text("id,value\n1,a1\n2,a2\n2,a3\n", encoding="utf-8")
+            (root / "works__bad.csv").write_text("id,value\n9,x\n10,y\n", encoding="utf-8")
+            paths = [
+                _write_profile(root, "works", row_count=3, source_file=str(root / "works.csv")),
+                _write_profile(
+                    root,
+                    "works__authorships",
+                    row_count=3,
+                    source_file=str(root / "works__authorships.csv"),
+                ),
+                _write_profile(root, "works__bad", row_count=2, source_file=str(root / "works__bad.csv")),
+            ]
+
+            profile = build_dataset_profile(
+                paths,
+                base_table="works",
+                key_sep="__",
+                generated_at="fixed",
+                validate_relationships=True,
+                validation_max_rows=100,
+            )
+
+            self.assertEqual(profile["audit"]["data_scan"], "sampled")
+            self.assertEqual(profile["audit"]["value_overlap"]["status"], "computed")
+            self.assertEqual(profile["audit"]["value_overlap"]["computed_candidate_count"], 2)
+            self.assertEqual(
+                profile["audit"]["value_overlap"]["status_counts"],
+                {"sampled_needs_review": 1, "sampled_passed_hint": 1},
+            )
+            passed = next(
+                candidate
+                for candidate in profile["relationship_candidates"]
+                if candidate["child_table_sql"] == "works__authorships"
+            )
+            self.assertEqual(passed["value_overlap"]["status"], "sampled_passed_hint")
+            self.assertEqual(passed["value_overlap"]["orphan_ratio"], 0.0)
+            flagged = next(
+                candidate
+                for candidate in profile["relationship_candidates"]
+                if candidate["child_table_sql"] == "works__bad"
+            )
+            self.assertEqual(flagged["value_overlap"]["status"], "sampled_needs_review")
+            self.assertEqual(flagged["value_overlap"]["orphan_ratio"], 1.0)
+            self.assertIn("value_overlap_sampled_needs_review", flagged["warnings"])
+            self.assertEqual(flagged["review_priority"], "review")
 
     def test_resolve_profile_paths_accepts_directory_and_glob(self):
         with tempfile.TemporaryDirectory() as td:

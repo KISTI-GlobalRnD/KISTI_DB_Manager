@@ -47,6 +47,8 @@ def _cmd_tabular_describe(args: argparse.Namespace) -> int:
 def _cmd_tabular_profile_dataset(args: argparse.Namespace) -> int:
     from ..dataset_profile import resolve_profile_paths, write_dataset_profile
 
+    if bool(args.validate_relationships):
+        _ensure_optional_deps("tabular profile-dataset relationship validation", ["pandas"], extras=["tabular"])
     profile_paths = resolve_profile_paths(args.profiles or [], profiles=args.profile or [])
     if not profile_paths:
         print("error: tabular profile-dataset requires at least one --profiles or --profile path", file=sys.stderr)
@@ -56,6 +58,9 @@ def _cmd_tabular_profile_dataset(args: argparse.Namespace) -> int:
         out_path=args.out,
         base_table=args.base_table,
         key_sep=str(args.key_sep or "__"),
+        validate_relationships=bool(args.validate_relationships),
+        validation_max_rows=int(args.validation_max_rows),
+        validation_max_candidates=int(args.validation_max_candidates),
     )
     print(
         json.dumps(
@@ -74,6 +79,7 @@ def _cmd_tabular_profile_dataset(args: argparse.Namespace) -> int:
                     "skipped_candidate_count",
                     0,
                 ),
+                "value_overlap": (res.profile.get("audit") or {}).get("value_overlap", {}),
                 "warnings": res.profile.get("warnings", []),
             },
             ensure_ascii=False,
@@ -190,6 +196,23 @@ def register_tabular_parser(sub) -> None:
     )
     p_profile_dataset.add_argument("--base-table", help="Base table name for dataset relationship inference")
     p_profile_dataset.add_argument("--key-sep", default="__", help="Flattened table/key separator (default: __)")
+    p_profile_dataset.add_argument(
+        "--validate-relationships",
+        action="store_true",
+        help="Sample candidate parent/child key values and attach bounded overlap evidence",
+    )
+    p_profile_dataset.add_argument(
+        "--validation-max-rows",
+        type=int,
+        default=100000,
+        help="Maximum rows per table key column to sample when validating relationships (default: 100000)",
+    )
+    p_profile_dataset.add_argument(
+        "--validation-max-candidates",
+        type=int,
+        default=100,
+        help="Maximum relationship candidates to validate before marking the rest skipped (default: 100)",
+    )
     p_profile_dataset.add_argument("--out", required=True, help="Output dataset_profile.json path")
     p_profile_dataset.set_defaults(func=_cmd_tabular_profile_dataset)
 

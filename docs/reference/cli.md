@@ -47,6 +47,7 @@ key/index recommendations, and warning badges.
 ```bash
 kisti-db-manager tabular describe --config path/to/config.json
 kisti-db-manager tabular profile-dataset --profiles "path/to/*_profile.json" --base-table works --out dataset_profile.json
+kisti-db-manager tabular profile-dataset --profiles "path/to/*_profile.json" --base-table works --validate-relationships --validation-max-rows 100000 --out dataset_profile.json
 kisti-db-manager tabular run --config path/to/config.json --report run_report.json
 ```
 
@@ -78,6 +79,13 @@ and evidence, then filter by review priority or key source and jump directly to
 either endpoint table. Candidate
 relationships between known tables that are not covered by the structural naming
 tree are drawn as dashed candidate edges in the SVG and Mermaid outputs.
+
+Use `--validate-relationships` when you want bounded value evidence for inferred
+candidates. This samples only candidate parent/child key columns, up to
+`--validation-max-rows` per endpoint table, and records overlap/orphan ratios in
+`candidate.value_overlap` plus `audit.value_overlap`. It is disabled by default
+because sampled evidence can be misleading if parent and child samples are not
+representative.
 
 `review schema-viewer --relationship-decisions relationship_decisions.json`
 overlays operator decisions on those relationship hints without modifying the

@@ -464,6 +464,66 @@ class TestReviewSchemaArtifactContracts(unittest.TestCase):
             self.assertIn("Parent table", html)
             self.assertIn("institution__id", html)
 
+    def test_schema_viewer_surfaces_dataset_profile_value_overlap(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            config_path = self._write_config(root)
+            out_dir = root / "out"
+            dataset_profile_path = self._write_dataset_profile(root)
+            dataset_profile = json.loads(dataset_profile_path.read_text(encoding="utf-8"))
+            dataset_profile["relationship_candidates"][0]["value_overlap"] = {
+                "status": "sampled_passed_hint",
+                "sampled_max_rows": 1000,
+                "parent_sampled_rows": 3,
+                "child_sampled_rows": 5,
+                "parent_distinct_count": 3,
+                "child_non_null_count": 5,
+                "child_distinct_count": 3,
+                "overlap_distinct_count": 3,
+                "orphan_distinct_count": 0,
+                "overlap_ratio": 1.0,
+                "orphan_ratio": 0.0,
+                "parent_coverage_ratio": 1.0,
+            }
+            dataset_profile["audit"]["data_scan"] = "sampled"
+            dataset_profile["audit"]["value_overlap"] = {
+                "status": "computed",
+                "mode": "candidate_key_sample",
+                "candidate_count": 2,
+                "computed_candidate_count": 1,
+                "skipped_candidate_count": 1,
+                "error_count": 0,
+                "sampled_max_rows": 1000,
+                "max_candidates": 1,
+                "status_counts": {"sampled_passed_hint": 1},
+            }
+            dataset_profile_path.write_text(json.dumps(dataset_profile, ensure_ascii=False), encoding="utf-8")
+
+            generate_schema_viewer(
+                config_path=str(config_path),
+                report_path=str(FIXTURE_DIR / "report.json"),
+                out_dir=str(out_dir),
+                db_enabled=False,
+            )
+
+            payload = json.loads((out_dir / "schema_viewer.json").read_text(encoding="utf-8"))
+            edge = next(
+                item
+                for item in payload["edges"]
+                if item["parent_sql"] == "works" and item["child_sql"] == "works__authorships"
+            )
+            value_overlap = edge["relationship_candidates"][0]["value_overlap"]
+            self.assertEqual(value_overlap["status"], "sampled_passed_hint")
+            self.assertEqual(value_overlap["overlap_ratio"], 1.0)
+            self.assertEqual(value_overlap["orphan_ratio"], 0.0)
+            self.assertEqual(payload["dataset_profile"]["audit"]["data_scan"], "sampled")
+            self.assertEqual(payload["dataset_profile"]["audit"]["value_overlap"]["status"], "computed")
+            html = (out_dir / "schema_viewer.html").read_text(encoding="utf-8")
+            self.assertIn('"value_overlap": {', html)
+            self.assertIn("sampled_passed_hint", html)
+            self.assertIn("overlap ratio", html)
+            self.assertIn("orphan ratio", html)
+
     def test_schema_viewer_uses_dataset_profile_as_no_db_table_source(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td)

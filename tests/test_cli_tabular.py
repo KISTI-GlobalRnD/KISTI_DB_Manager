@@ -227,6 +227,7 @@ class TestCLITabular(unittest.TestCase):
             self.assertEqual(summary["relationship_candidate_count"], 1)
             self.assertEqual(summary["relationship_review_priority_counts"], {"accept_hint": 1})
             self.assertEqual(summary["skipped_relationship_hint_count"], 0)
+            self.assertEqual(summary["value_overlap"]["status"], "not_computed")
 
     def test_tabular_run_writes_report(self):
         with tempfile.TemporaryDirectory() as td:

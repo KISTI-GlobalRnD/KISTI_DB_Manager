@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import glob
 import json
+import math
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -44,6 +45,12 @@ def _json_safe(value: Any) -> Any:
         except Exception:
             pass
     return str(value)
+
+
+def _round_ratio(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(float(numerator) / float(denominator), 6)
 
 
 def resolve_profile_paths(
@@ -205,6 +212,13 @@ def _find_column(table: _TableProfile, column_name: str) -> dict[str, Any] | Non
     return None
 
 
+def _source_column_for_sql(table: _TableProfile, column_sql: str) -> str:
+    column = _find_column(table, column_sql)
+    if column is None:
+        return column_sql
+    return str(column.get("source_column") or column.get("sql_column") or column_sql)
+
+
 def _column_identity_names(column: Mapping[str, Any]) -> tuple[str, ...]:
     names = {
         str(column.get("sql_column") or "").strip(),
@@ -344,6 +358,227 @@ def _annotate_candidate(candidate: Mapping[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _source_path_for_table(table: _TableProfile) -> Path | None:
+    raw = str(table.table.get("source_file") or "").strip()
+    if not raw:
+        return None
+    path = Path(raw).expanduser()
+    if not path.is_absolute():
+        path = table.path.parent / path
+    return path
+
+
+def _read_source_column_values(path: Path, column: str, *, max_rows: int) -> list[Any]:
+    suffix = path.suffix.lower()
+    limit = max(1, int(max_rows or 1))
+    if suffix == ".parquet":
+        try:
+            import pyarrow.parquet as pq  # type: ignore
+
+            pf = pq.ParquetFile(path)
+            out: list[Any] = []
+            remaining = limit
+            for idx in range(pf.num_row_groups):
+                if remaining <= 0:
+                    break
+                table = pf.read_row_group(idx, columns=[column])
+                values = table.column(column).to_pylist()
+                out.extend(values[:remaining])
+                remaining = limit - len(out)
+            return out
+        except ImportError:
+            pass
+
+    import pandas as pd  # type: ignore
+
+    if suffix in {".csv", ".tsv"}:
+        sep = "\t" if suffix == ".tsv" else ","
+        frame = pd.read_csv(path, usecols=[column], nrows=limit, sep=sep)
+        return frame[column].tolist()
+    if suffix in {".feather", ".ftr"}:
+        frame = pd.read_feather(path, columns=[column])
+        return frame[column].head(limit).tolist()
+    if suffix == ".parquet":
+        frame = pd.read_parquet(path, columns=[column])
+        return frame[column].head(limit).tolist()
+    raise ValueError(f"unsupported_profile_source_file:{path.name}")
+
+
+def _normalize_key_value(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, float) and math.isnan(value):
+        return ""
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except Exception:
+            value = value.hex()
+    if isinstance(value, (list, tuple, dict)):
+        value = json.dumps(value, ensure_ascii=False, sort_keys=True, default=_json_safe)
+    text = str(value).strip()
+    if not text or text.lower() in {"nan", "none", "null"}:
+        return ""
+    return text
+
+
+def _value_set(values: Iterable[Any]) -> set[str]:
+    return {text for text in (_normalize_key_value(value) for value in values) if text}
+
+
+def _relationship_value_overlap(
+    *,
+    parent: _TableProfile,
+    child: _TableProfile,
+    parent_column_sql: str,
+    child_column_sql: str,
+    max_rows: int,
+) -> dict[str, Any]:
+    parent_path = _source_path_for_table(parent)
+    child_path = _source_path_for_table(child)
+    if parent_path is None or child_path is None:
+        return {
+            "status": "error",
+            "reason": "missing_source_file",
+            "sampled_max_rows": int(max_rows),
+        }
+    if not parent_path.exists() or not child_path.exists():
+        return {
+            "status": "error",
+            "reason": "source_file_not_found",
+            "parent_source_file": str(parent_path),
+            "child_source_file": str(child_path),
+            "sampled_max_rows": int(max_rows),
+        }
+
+    parent_source_column = _source_column_for_sql(parent, parent_column_sql)
+    child_source_column = _source_column_for_sql(child, child_column_sql)
+    try:
+        parent_values = _read_source_column_values(parent_path, parent_source_column, max_rows=max_rows)
+        child_values = _read_source_column_values(child_path, child_source_column, max_rows=max_rows)
+    except Exception as exc:
+        return {
+            "status": "error",
+            "reason": str(exc),
+            "parent_source_file": str(parent_path),
+            "child_source_file": str(child_path),
+            "parent_source_column": parent_source_column,
+            "child_source_column": child_source_column,
+            "sampled_max_rows": int(max_rows),
+        }
+
+    parent_set = _value_set(parent_values)
+    child_set = _value_set(child_values)
+    overlap = parent_set & child_set
+    orphan = child_set - parent_set
+    child_distinct = len(child_set)
+    parent_distinct = len(parent_set)
+    orphan_ratio = _round_ratio(len(orphan), child_distinct)
+    overlap_ratio = _round_ratio(len(overlap), child_distinct)
+    parent_coverage_ratio = _round_ratio(len(overlap), parent_distinct)
+    if child_distinct == 0:
+        status = "sampled_no_child_values"
+    elif orphan_ratio is not None and orphan_ratio <= 0.01:
+        status = "sampled_passed_hint"
+    elif overlap_ratio is not None and overlap_ratio >= 0.5:
+        status = "sampled_partial_overlap"
+    else:
+        status = "sampled_needs_review"
+    return {
+        "status": status,
+        "sampled_max_rows": int(max_rows),
+        "parent_source_file": str(parent_path),
+        "child_source_file": str(child_path),
+        "parent_source_column": parent_source_column,
+        "child_source_column": child_source_column,
+        "parent_sampled_rows": len(parent_values),
+        "child_sampled_rows": len(child_values),
+        "parent_distinct_count": parent_distinct,
+        "child_non_null_count": len([value for value in child_values if _normalize_key_value(value)]),
+        "child_distinct_count": child_distinct,
+        "overlap_distinct_count": len(overlap),
+        "orphan_distinct_count": len(orphan),
+        "overlap_ratio": overlap_ratio,
+        "orphan_ratio": orphan_ratio,
+        "parent_coverage_ratio": parent_coverage_ratio,
+    }
+
+
+def _apply_value_overlap_validation(
+    candidates: Sequence[Mapping[str, Any]],
+    *,
+    tables_by_sql: Mapping[str, _TableProfile],
+    enabled: bool,
+    max_rows: int,
+    max_candidates: int,
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if not enabled:
+        return [dict(candidate) for candidate in candidates], {
+            "status": "not_computed",
+            "reason": "disabled_by_default",
+        }
+
+    out: list[dict[str, Any]] = []
+    computed = 0
+    skipped = 0
+    error_count = 0
+    status_counts: list[str] = []
+    limit = max(0, int(max_candidates or 0))
+    for idx, candidate in enumerate(candidates):
+        item = dict(candidate)
+        if limit and idx >= limit:
+            skipped += 1
+            item["value_overlap"] = {
+                "status": "skipped",
+                "reason": "candidate_limit_reached",
+                "sampled_max_rows": int(max_rows),
+            }
+            out.append(item)
+            continue
+        parent_sql = str(item.get("parent_table_sql") or "")
+        child_sql = str(item.get("child_table_sql") or "")
+        parent = tables_by_sql.get(parent_sql)
+        child = tables_by_sql.get(child_sql)
+        if parent is None or child is None:
+            result = {
+                "status": "error",
+                "reason": "table_profile_not_found",
+                "sampled_max_rows": int(max_rows),
+            }
+        else:
+            result = _relationship_value_overlap(
+                parent=parent,
+                child=child,
+                parent_column_sql=str(item.get("parent_column_sql") or "id"),
+                child_column_sql=str(item.get("child_column_sql") or "id"),
+                max_rows=max_rows,
+            )
+        item["value_overlap"] = result
+        status = str(result.get("status") or "")
+        status_counts.append(status)
+        if status == "error":
+            error_count += 1
+        if status in {"sampled_needs_review", "sampled_partial_overlap", "error"}:
+            warnings = _warning_flags(item.get("warnings"))
+            warnings.append(f"value_overlap_{status}")
+            item["warnings"] = sorted(set(warnings))
+            item = _annotate_candidate(item)
+        computed += 1
+        out.append(item)
+
+    return out, {
+        "status": "computed",
+        "mode": "candidate_key_sample",
+        "candidate_count": len(candidates),
+        "computed_candidate_count": computed,
+        "skipped_candidate_count": skipped,
+        "error_count": error_count,
+        "sampled_max_rows": int(max_rows),
+        "max_candidates": int(max_candidates or 0),
+        "status_counts": _count_values(status_counts),
+    }
+
+
 def _skipped_candidate(
     *,
     child: _TableProfile,
@@ -456,6 +691,7 @@ def _build_dataset_audit(
     tables: Sequence[_TableProfile],
     candidates: Sequence[Mapping[str, Any]],
     skipped_candidates: Sequence[Mapping[str, Any]],
+    value_overlap: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     candidate_warnings = [
         warning
@@ -474,9 +710,10 @@ def _build_dataset_audit(
         for warning in _warning_flags(column.get("warnings"))
     ]
     review_counts = _count_values(str(candidate.get("review_priority") or "") for candidate in candidates)
+    value_overlap_payload = dict(value_overlap or {"status": "not_computed", "reason": "disabled_by_default"})
     return {
         "mode": "profile_only",
-        "data_scan": "not_performed",
+        "data_scan": "sampled" if value_overlap_payload.get("status") == "computed" else "not_performed",
         "candidate_count": len(candidates),
         "confidence_buckets": _count_values(str(candidate.get("confidence_bucket") or "") for candidate in candidates),
         "review_priority_counts": review_counts,
@@ -487,10 +724,7 @@ def _build_dataset_audit(
         "skipped_candidates": list(skipped_candidates),
         "table_warning_counts": _count_values(table_warnings),
         "column_warning_counts": _count_values(column_warnings),
-        "value_overlap": {
-            "status": "not_computed",
-            "reason": "disabled_by_default",
-        },
+        "value_overlap": value_overlap_payload,
     }
 
 
@@ -500,6 +734,9 @@ def build_dataset_profile(
     base_table: str | None = None,
     key_sep: str = "__",
     generated_at: str | None = None,
+    validate_relationships: bool = False,
+    validation_max_rows: int = 100000,
+    validation_max_candidates: int = 100,
 ) -> dict[str, Any]:
     paths = [Path(path).expanduser().resolve() for path in profile_paths]
     if not paths:
@@ -527,10 +764,19 @@ def build_dataset_profile(
         base_table=base,
         key_sep=key_sep,
     )
+    tables_by_sql = {str(table.table.get("table_sql") or ""): table for table in tables}
+    candidates, value_overlap_summary = _apply_value_overlap_validation(
+        candidates,
+        tables_by_sql=tables_by_sql,
+        enabled=bool(validate_relationships),
+        max_rows=int(validation_max_rows or 100000),
+        max_candidates=int(validation_max_candidates or 100),
+    )
     audit = _build_dataset_audit(
         tables=tables,
         candidates=candidates,
         skipped_candidates=skipped_candidates,
+        value_overlap=value_overlap_summary,
     )
 
     return {
@@ -559,8 +805,18 @@ def write_dataset_profile(
     out_path: str | Path,
     base_table: str | None = None,
     key_sep: str = "__",
+    validate_relationships: bool = False,
+    validation_max_rows: int = 100000,
+    validation_max_candidates: int = 100,
 ) -> DatasetProfileResult:
-    profile = build_dataset_profile(profile_paths, base_table=base_table, key_sep=key_sep)
+    profile = build_dataset_profile(
+        profile_paths,
+        base_table=base_table,
+        key_sep=key_sep,
+        validate_relationships=validate_relationships,
+        validation_max_rows=validation_max_rows,
+        validation_max_candidates=validation_max_candidates,
+    )
     path = Path(out_path).expanduser().resolve()
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(profile, ensure_ascii=False, indent=2, default=_json_safe) + "\n", encoding="utf-8")

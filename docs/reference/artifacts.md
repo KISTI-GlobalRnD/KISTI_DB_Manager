@@ -61,11 +61,15 @@ them as review hints until they are backed by a DB constraint or an explicit
 operator decision. v1 uses profile metadata and table naming paths only: it
 prefers `id`-to-`id`, then falls back to an exact shared parent key candidate
 such as WoS-style `UID`. Bounded value-overlap evidence is intentionally left
-for a later opt-in phase. The v1 design contract is documented in
+for the opt-in `--validate-relationships` path. The v1 design contract is documented in
 [Dataset Profile v1](../design/dataset-profile-v1.md).
 The artifact includes a profile-only `audit` block with confidence buckets,
 review-priority counts, warning counts, skipped naming hints, and an explicit
-`value_overlap.status=not_computed` marker. This audit does not read source data.
+`value_overlap.status=not_computed` marker by default. When relationship
+validation is enabled, the audit switches to `data_scan=sampled` and records a
+bounded `candidate_key_sample` summary. Each validated relationship candidate
+receives `value_overlap` evidence with sampled parent/child rows, distinct key
+counts, overlap ratio, orphan ratio, and validation status.
 
 `review schema-viewer` can overlay this artifact through `--dataset-profile` or
 auto-detect `<PATH>/dataset_profile.json`. When the dataset profile references
@@ -78,8 +82,8 @@ relationships, accepted hints, review-needed relationships, key sources,
 unmatched candidates, relation warnings, and disconnected non-base tables.
 Tables can be filtered to review-needed relationship hints. The Relationship
 Catalog lists parent-child routes, join-column hints, review priority, key
-source, warnings, candidate evidence, and join SQL in one searchable review
-surface. When both endpoint
+source, warnings, sampled value-overlap evidence, candidate evidence, and join
+SQL in one searchable review surface. When both endpoint
 tables exist but no structural naming edge covers a candidate, the SVG and
 Mermaid outputs draw it as a dashed candidate edge.
 

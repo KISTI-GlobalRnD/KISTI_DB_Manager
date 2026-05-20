@@ -783,6 +783,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       for (const candidate of candidates) {
         if (!candidate || typeof candidate !== 'object') continue;
         const evidence = candidate.evidence && typeof candidate.evidence === 'object' ? candidate.evidence : {};
+        const valueOverlap = candidate.value_overlap && typeof candidate.value_overlap === 'object' ? candidate.value_overlap : {};
         candidateBits.push(
           candidate.relationship_type,
           candidate.review_priority,
@@ -791,7 +792,10 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
           candidate.child_column_sql,
           Array.isArray(candidate.warnings) ? candidate.warnings.join(' ') : candidate.warnings,
           evidence.source,
-          evidence.key_match_source
+          evidence.key_match_source,
+          valueOverlap.status,
+          valueOverlap.overlap_ratio,
+          valueOverlap.orphan_ratio
         );
       }
       const decisions = Array.isArray(edge.relationship_decisions) ? edge.relationship_decisions : [];
@@ -1105,6 +1109,7 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
         ? candidate.warnings.filter(Boolean).join(', ')
         : String(candidate.warnings || '');
       const keyMatchSource = evidence.key_match_source ? String(evidence.key_match_source) : '';
+      const valueOverlap = candidate.value_overlap && typeof candidate.value_overlap === 'object' ? candidate.value_overlap : null;
       const priority = candidate.review_priority ? String(candidate.review_priority) : '';
       const badges = [
         '<span class="mini-badge good">' + escHtml(candidate.status || 'candidate') + '</span>',
@@ -1121,6 +1126,10 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
       if (candidate.risk_score !== undefined && candidate.risk_score !== null) {
         badges.push('<span class="mini-badge">risk ' + escHtml(ratioLabel(candidate.risk_score)) + '</span>');
       }
+      if (valueOverlap && valueOverlap.status) {
+        const overlapClass = valueOverlap.status === 'sampled_passed_hint' ? 'good' : (valueOverlap.status === 'sampled_needs_review' || valueOverlap.status === 'sampled_partial_overlap' || valueOverlap.status === 'error' ? 'warn' : '');
+        badges.push('<span class="mini-badge ' + overlapClass + '">overlap ' + escHtml(valueOverlap.status) + '</span>');
+      }
       const evidenceRows = [
         ['source', evidence.source],
         ['key match', evidence.key_match_source],
@@ -1129,6 +1138,14 @@ SCHEMA_VIEWER_TEMPLATE = """<!doctype html>
         ['parent col', candidate.parent_column_sql],
         ['child col', candidate.child_column_sql],
       ].filter((item) => item[1] !== undefined && item[1] !== null && String(item[1]) !== '');
+      if (valueOverlap) {
+        evidenceRows.push(...[
+          ['overlap ratio', ratioLabel(valueOverlap.overlap_ratio)],
+          ['orphan ratio', ratioLabel(valueOverlap.orphan_ratio)],
+          ['parent distinct', valueOverlap.parent_distinct_count],
+          ['child distinct', valueOverlap.child_distinct_count]
+        ].filter((item) => item[1] !== undefined && item[1] !== null && String(item[1]) !== ''));
+      }
       const evidenceHtml = evidenceRows.map((item) => (
         '<div><span class="muted">' + escHtml(item[0]) + '</span> <code>' + escHtml(item[1]) + '</code></div>'
       )).join('');

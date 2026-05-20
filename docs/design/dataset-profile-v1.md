@@ -119,17 +119,17 @@ Use conservative, explainable rules first.
    - Do not create a candidate when null ratio is high or type families differ.
 
 3. Value-overlap candidates
-   - Keep this out of v1.
-   - Only revisit it as an explicit opt-in feature with hard budgets for rows,
-     columns, candidate pairs, and output size.
+   - Keep this out of the default v1 path.
+   - Allow it only through the explicit `--validate-relationships` path with
+     hard budgets for rows, candidate pairs, and output size.
    - The current `*_profile.json` contains top values but not enough
-     distribution evidence to safely infer overlap.
+     distribution evidence to safely infer overlap, so validation reads bounded
+     source-column samples for already inferred candidates only.
 
 ## Viewer Integration
 
-The schema viewer should consume `dataset_profile.json` in addition to the
-existing one-table `*_profile.json` overlay. This is the next phase after the
-v1 artifact builder.
+The schema viewer consumes `dataset_profile.json` in addition to the existing
+one-table `*_profile.json` overlay.
 
 Initial viewer behavior:
 
@@ -200,12 +200,15 @@ Phase 3a: profile-only candidate audit (implemented)
   sampled value evidence exists
 - surface review-priority and skipped-hint counts in the schema viewer overview
 
-Phase 3b: bounded optional evidence
+Phase 3b: bounded optional evidence (partly implemented)
 
-- add optional bounded value sketches or sampled hashes behind explicit flags
+- implemented sampled candidate-key overlap validation through
+  `tabular profile-dataset --validate-relationships`
+- attach `candidate.value_overlap` with overlap/orphan ratios and sampled row
+  counts
 - support low-confidence key-like column candidates only after pruning the
   candidate-pair search space
-- expose candidate filtering in the viewer
+- expose sampled overlap evidence in the viewer
 
 Default budgets should stay conservative:
 
